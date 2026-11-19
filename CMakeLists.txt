@@ -54,6 +54,7 @@ target_compile_options(Deepwater PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /bigob
 target_compile_definitions(Deepwater PRIVATE $<$<CXX_COMPILER_ID:MSVC>:NOMINMAX _USE_MATH_DEFINES>)
 if(WIN32)
   set_target_properties(Deepwater PROPERTIES WIN32_EXECUTABLE TRUE)
+  target_link_libraries(Deepwater PRIVATE opengl32)   # Macro data's Landscape calls glClear / glClearColor directly
 endif()
 # Hardening (audit 2026-11-18, B1; user's choice 2026-11-19): out-of-range accesses in the standard containers
 # (std::vector, std::span, std::string, std::optional…) and in Qt's (QList, QString…) stop the app at the faulty line
