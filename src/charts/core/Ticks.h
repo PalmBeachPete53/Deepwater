@@ -9,8 +9,17 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <__msvc_int128.hpp>   // MSVC has no __int128; its standard library's 128-bit integer does the same sums
+#endif
 
 namespace charts::flow {
+
+#if defined(_MSC_VER) && !defined(__clang__)
+using Int128 = std::_Signed128;
+#else
+using Int128 = __int128;
+#endif
 
 // value = mant × 10^exp, with exp <= 0 and trailing fraction zeros dropped ("63981.93000000" → 6398193, -2).
 struct Decimal {
@@ -85,15 +94,15 @@ struct TickScale {
     if (!price.ok || !valid()) return std::nullopt;
     const int e = price.exp - tick.exp;          // price = pm·10^pe, tick = tm·10^te → pm·10^(pe-te) / tm
     if (e > 18 || e < -18) return std::nullopt;
-    __int128 num = price.mant, den = tick.mant;
+    Int128 num = price.mant, den = tick.mant;
     for (int k = 0; k < e; ++k) num *= 10;
     for (int k = 0; k < -e; ++k) den *= 10;
-    __int128 q = num / den, r = num % den;
+    Int128 q = num / den, r = num % den;
     if (r != 0) {
-      const __int128 twice = (r < 0 ? -r : r) * 2;
+      const Int128 twice = (r < 0 ? -r : r) * 2;
       if (twice >= den) q += num < 0 ? -1 : 1;
     }
-    constexpr __int128 kLim = __int128(1) << 62;
+    const Int128 kLim = Int128(1) << 62;
     if (q > kLim || q < -kLim) return std::nullopt;
     return int64_t(q);
   }
