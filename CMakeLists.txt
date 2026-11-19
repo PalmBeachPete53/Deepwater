@@ -9,6 +9,12 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
+# MSVC, for every target (llama.cpp included): sources are UTF-8, and __cplusplus must give the real standard
+# (llama-chat.cpp picks its u8 literal form from it; MSVC reports 199711 without /Zc:__cplusplus).
+if(MSVC)
+  add_compile_options(/utf-8 $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Svg Concurrent Xml Sql OpenGL OpenGLWidgets LinguistTools WebSockets HttpServer)   # HttpServer: Charts local API (src/charts/data/ApiServer)
 enable_language(C)
 if(APPLE)
