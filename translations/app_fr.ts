@@ -1,0 +1,489 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE TS>
+<TS version="2.1" language="fr_FR">
+<context>
+    <name>nav</name>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="12"/>
+        <source>Global</source>
+        <translation>Global</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="13"/>
+        <source>Overview</source>
+        <translation>Vue d&apos;ensemble</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="13"/>
+        <source>The command post: market tape, Squawk wire, risk appetite, currency strength, central banks and world map.</source>
+        <translation>Le poste de commandement : bandeau des marchés, fil Squawk, appétit pour le risque, force des devises, banques centrales et carte du monde.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="14"/>
+        <source>Session Recap</source>
+        <translation>Récap des sessions</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="14"/>
+        <source>The recap of each session (Tokyo, London, New York): key moves, top headlines and data released.</source>
+        <translation>Le récap de chaque session (Tokyo, Londres, New York) : mouvements clés, titres principaux et données publiées.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="15"/>
+        <source>Market Hours</source>
+        <translation>Heures de marché</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="15"/>
+        <source>The four FX sessions live on your own clock, their overlaps and a countdown to every open.</source>
+        <translation>Les quatre sessions du forex en direct à votre heure, leurs chevauchements et un compte à rebours avant chaque ouverture.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="16"/>
+        <source>News</source>
+        <translation>Actualités</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="17"/>
+        <source>Calendar</source>
+        <translation>Calendrier</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="17"/>
+        <source>The economic calendar: actual, forecast, previous, impact and the range of bank forecasts.</source>
+        <translation>Le calendrier économique : publié, prévision, précédent, impact et fourchette des prévisions des banques.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="18"/>
+        <source>News Feed</source>
+        <translation>Fil d&apos;actualités</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="18"/>
+        <source>Financial news as a visual feed, with the lead story, latest headlines and macro, inflation and earnings filters.</source>
+        <translation>L&apos;actualité financière en fil visuel : article principal, derniers titres et filtres macro, inflation et résultats.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="19"/>
+        <source>Bank Research</source>
+        <translation>Recherche bancaire</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="19"/>
+        <source>Notes and forecasts from the major investment banks, gathered and sorted by institution.</source>
+        <translation>Notes et prévisions des grandes banques d&apos;investissement, rassemblées et triées par établissement.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="20"/>
+        <source>Squawk</source>
+        <translation>Squawk</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="20"/>
+        <source>The real-time wire: headlines, data releases and price moves, timestamped to the second.</source>
+        <translation>Le fil en temps réel : titres, publications de données et mouvements de prix, horodatés à la seconde.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="21"/>
+        <source>Economy</source>
+        <translation>Économie</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="22"/>
+        <source>Macro</source>
+        <translation>Macro</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="22"/>
+        <source>The macro globe: rates, inflation, growth and unemployment for each economy with history back to 2001.</source>
+        <translation>Le globe macro : taux, inflation, croissance et chômage de chaque économie, avec un historique depuis 2001.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="23"/>
+        <source>Rates</source>
+        <translation>Taux</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="23"/>
+        <source>Central bank rate probabilities, meeting by meeting, and the implied path.</source>
+        <translation>Probabilités sur les taux des banques centrales, réunion par réunion, et trajectoire implicite.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="24"/>
+        <source>Positioning</source>
+        <translation>Positionnement</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="25"/>
+        <source>Retail Sentiment</source>
+        <translation>Sentiment retail</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="25"/>
+        <source>Retail traders&apos; long / short positioning on every pair, and how it moves.</source>
+        <translation>Le positionnement acheteur / vendeur des traders particuliers sur chaque paire, et son évolution.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="26"/>
+        <source>COT</source>
+        <translation>COT</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="26"/>
+        <source>The Commitment of Traders report by trader category, as charts and tables.</source>
+        <translation>Le rapport Commitment of Traders par catégorie de traders, en graphiques et tableaux.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="27"/>
+        <source>Bank Positioning</source>
+        <translation>Positionnement bancaire</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="27"/>
+        <source>Banks&apos; bias and positioning, currency by currency and asset class by asset class.</source>
+        <translation>Biais et positionnement des banques, devise par devise et classe d&apos;actifs par classe d&apos;actifs.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="28"/>
+        <source>Risk Sentiment</source>
+        <translation>Sentiment de risque</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="28"/>
+        <source>The risk-on / risk-off gauge and its drivers: volatility, credit, equities, safe havens.</source>
+        <translation>La jauge risk-on / risk-off et ses moteurs : volatilité, crédit, actions, valeurs refuges.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="29"/>
+        <source>Market</source>
+        <translation>Marchés</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="30"/>
+        <source>Markets Watch</source>
+        <translation>Vue des marchés</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="30"/>
+        <source>More than 100 live markets: currencies, indices, commodities, stocks and crypto.</source>
+        <translation>Plus de 100 marchés en direct : devises, indices, matières premières, actions et crypto.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="31"/>
+        <source>Seasonality</source>
+        <translation>Saisonnalité</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="31"/>
+        <source>Seasonal behaviour over up to 20 years: average path, win rate, weekday and month effects.</source>
+        <translation>Comportement saisonnier sur 20 ans maximum : trajectoire moyenne, taux de réussite, effets du jour et du mois.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="32"/>
+        <source>Fundamental Heatmap</source>
+        <translation>Heatmap fondamentale</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="32"/>
+        <source>Currencies scored on their fundamentals: growth, inflation, rates, employment.</source>
+        <translation>Les devises notées sur leurs fondamentaux : croissance, inflation, taux, emploi.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="33"/>
+        <source>Technical Heatmap</source>
+        <translation>Heatmap technique</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="33"/>
+        <source>Every market&apos;s technical signals at a glance: trend, momentum, volatility.</source>
+        <translation>Les signaux techniques de chaque marché d&apos;un coup d&apos;œil : tendance, momentum, volatilité.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="34"/>
+        <source>Liquidity</source>
+        <translation>Liquidité</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="34"/>
+        <source>Liquidity zones and key levels for each instrument, with the market&apos;s current state.</source>
+        <translation>Zones de liquidité et niveaux clés de chaque instrument, avec l&apos;état actuel du marché.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="35"/>
+        <location filename="../src/app/Pages.cpp" line="36"/>
+        <source>Charts</source>
+        <translation>Graphiques</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="36"/>
+        <source>Charts with 88 indicators, drawings, alerts, screener, heatmap, strategy tester, bar replay and paper trading.</source>
+        <translation>Graphiques avec 88 indicateurs, dessins, alertes, screener, heatmap, testeur de stratégie, replay de barres et paper trading.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="37"/>
+        <source>Account</source>
+        <translation>Compte</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="38"/>
+        <source>Track Record</source>
+        <translation>Track record</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="38"/>
+        <source>Your trading journal: statistics, drawdown, streaks, an MT4, MT5 and cTrader sync.</source>
+        <translation>Votre journal de trading : statistiques, drawdown, séries, synchronisation MT4, MT5 et cTrader.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="39"/>
+        <source>Risk Calculator</source>
+        <translation>Calculateur de risque</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="39"/>
+        <source>Position size, risk in currency and risk / reward computed before you enter.</source>
+        <translation>Taille de position, risque en devise et ratio risque / rendement calculés avant d&apos;entrer.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="42"/>
+        <source>Technical data</source>
+        <translation>Technical data</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="42"/>
+        <source>Market bars of the pairs you record, on the timeframes and from the day you choose, with their indicators, for machine learning.</source>
+        <translation>Les bougies des paires que vous enregistrez, sur les unités de temps et depuis le jour de votre choix, avec leurs indicateurs, pour le machine learning.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="49"/>
+        <source>Sources graph</source>
+        <translation>Sources graph</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="41"/>
+        <source>Every economic fact Deepwater records, real or forecast, linked in chains per indicator.</source>
+        <translation>Chaque fait économique enregistré par Deepwater, réel ou prévu, relié en chaînes par indicateur.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="41"/>
+        <source>Macro data</source>
+        <translation>Macro data</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="43"/>
+        <source>AI</source>
+        <translation>IA</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="44"/>
+        <source>LLM</source>
+        <translation>LLM</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="44"/>
+        <source>Language models: local models from the Hugging Face Hub, and integrations such as Claude Code, to load into the cubes.</source>
+        <translation>Modèles de langage : modèles locaux du Hugging Face Hub et intégrations comme Claude Code, à charger dans les cubes.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="45"/>
+        <source>Agents</source>
+        <translation>Agents</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="45"/>
+        <source>Four isolated environments: drag a downloaded model onto a cube to load it.</source>
+        <translation>Quatre environnements isolés : glissez un modèle téléchargé sur un cube pour le charger.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="47"/>
+        <source>Sources</source>
+        <translation>Sources</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="48"/>
+        <source>Data Sources</source>
+        <translation>Sources de données</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="48"/>
+        <source>Every source Deepwater reads: status, keys and passwords, and a switch to turn each one off.</source>
+        <translation>Toutes les sources lues par Deepwater : statut, clés et mots de passe, et un interrupteur pour couper chacune.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="40"/>
+        <source>Data</source>
+        <translation>Data</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="49"/>
+        <source>Where Deepwater&apos;s data comes from, and which tabs use it.</source>
+        <translation>D&apos;où viennent les données de Deepwater, et quels onglets les utilisent.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="46"/>
+        <source>ML</source>
+        <translation>ML</translation>
+    </message>
+    <message>
+        <location filename="../src/app/Pages.cpp" line="46"/>
+        <source>Machine learning: build and train supervised, unsupervised, semi-supervised, self-supervised and reinforcement models on Deepwater&apos;s data or your CSV files.</source>
+        <translation>Apprentissage automatique : créer et entraîner des modèles supervisés, non supervisés, semi-supervisés, auto-supervisés et par renforcement sur les données de Deepwater ou vos fichiers CSV.</translation>
+    </message>
+</context>
+<context>
+    <name>options</name>
+    <message>
+        <location filename="../src/app/MainWindow.cpp" line="36"/>
+        <source>Settings…</source>
+        <translation>Réglages…</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="54"/>
+        <source>OPTIONS</source>
+        <translation>OPTIONS</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="70"/>
+        <source>LANGUAGE</source>
+        <translation>LANGUE</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="70"/>
+        <source>Interface language. Numbers keep the 1,234.56 format.</source>
+        <translation>Langue de l&apos;interface. Les nombres gardent le format 1,234.56.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="85"/>
+        <source>THEME</source>
+        <translation>THÈME</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="85"/>
+        <source>Colours of the whole application. Hover a theme for its description.</source>
+        <translation>Couleurs de toute l&apos;application. Survolez un thème pour sa description.</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="107"/>
+        <source>DEFAULT</source>
+        <translation>PAR DÉFAUT</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="108"/>
+        <source>DARK</source>
+        <translation>SOMBRE</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="108"/>
+        <source>LIGHT</source>
+        <translation>CLAIR</translation>
+    </message>
+    <message>
+        <location filename="../src/app/OptionsDialog.cpp" line="120"/>
+        <source>Changes apply immediately and are saved.  Esc closes.</source>
+        <translation>Les changements s&apos;appliquent tout de suite et sont enregistrés.  Échap ferme.</translation>
+    </message>
+</context>
+<context>
+    <name>theme</name>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="24"/>
+        <source>Deepwater</source>
+        <translation>Deepwater</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="25"/>
+        <source>Default theme: warm black, amber accents, cyan up and coral down.</source>
+        <translation>Thème par défaut : noir chaud, accents ambrés, cyan à la hausse et corail à la baisse.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="32"/>
+        <source>Ember</source>
+        <translation>Braise</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="32"/>
+        <source>Warm charcoal with gold accents.</source>
+        <translation>Charbon chaud aux accents dorés.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="34"/>
+        <source>Abyss</source>
+        <translation>Abysse</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="34"/>
+        <source>Deep-sea blue with aqua accents.</source>
+        <translation>Bleu des grands fonds aux accents aqua.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="36"/>
+        <source>Jade</source>
+        <translation>Jade</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="36"/>
+        <source>Dark green with jade accents.</source>
+        <translation>Vert sombre aux accents jade.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="38"/>
+        <source>Oxide</source>
+        <translation>Oxyde</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="38"/>
+        <source>Rust browns with a red-orange accent.</source>
+        <translation>Bruns rouille avec un accent rouge orangé.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="40"/>
+        <source>Nova</source>
+        <translation>Nova</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="40"/>
+        <source>Night violet with lavender accents.</source>
+        <translation>Violet nuit aux accents lavande.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="42"/>
+        <source>Bloomberg</source>
+        <translation>Bloomberg</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="42"/>
+        <source>Pure black, amber text and white accents, like a classic market terminal.</source>
+        <translation>Noir pur, texte ambré et accents blancs, comme un terminal de marché classique.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="44"/>
+        <source>Glacier</source>
+        <translation>Glacier</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="44"/>
+        <source>Light: ice white with blue accents.</source>
+        <translation>Clair : blanc glacier aux accents bleus.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="46"/>
+        <source>Dune</source>
+        <translation>Dune</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="46"/>
+        <source>Light: sand with burnt-orange accents.</source>
+        <translation>Clair : sable aux accents orange brûlé.</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="48"/>
+        <source>Sakura</source>
+        <translation>Sakura</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/Theme.cpp" line="48"/>
+        <source>Light: blush pink with rose accents.</source>
+        <translation>Clair : rose poudré aux accents rose vif.</translation>
+    </message>
+</context>
+</TS>

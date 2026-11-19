@@ -1,0 +1,6 @@
+resources/watch/crypto/*.svg — coin icons (btc eth sol xrp bnb ada doge avax dot link ltc trx)
+  Origin: cryptocurrency-icons 0.18.1 by spothq (npm package, svg/color/), fetched from
+  https://cdn.jsdelivr.net/npm/cryptocurrency-icons@0.18.1/svg/color/<coin>.svg
+  Licence: CC0-1.0 (public domain dedication, see the package's package.json "license": "CC0-1.0").
+Other row icons (commodity glyphs, stock monograms) are drawn in code (src/pages/market/watch/WatchIcons.cpp);
+no company logo is bundled (trademarks).

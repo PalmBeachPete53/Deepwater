@@ -1,0 +1,111 @@
+#include "ai/Slots.h"
+#include "ai/ModelHub.h"
+#include "ai/ClaudeCode.h"
+#include <QFileInfo>
+#include "core/Paths.h"
+#include "core/Settings.h"
+#include <QStringList>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
+#include <QFile>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
+
+namespace ai {
+
+bool Slot::isIntegration() const { return repo == claudecode::kRepo; }
+QString Slot::displayName() const {
+  if (claudecode::isKey(repo, file)) return QStringLiteral("Claude Code");
+  return QFileInfo(file).completeBaseName();
+}
+
+Slots& Slots::instance() { static Slots* s = new Slots; return *s; }
+
+Slots::Slots() {
+  m_slots.resize(kCount);
+  m_skills.resize(kCount);
+  const QStringList sk = settings::value("ai.skills").toStringList();
+  for (int i = 0; i < kCount && i < sk.size(); ++i) m_skills[i] = sk[i].split(',', Qt::SkipEmptyParts);
+  const QStringList saved = settings::value("ai.slots").toStringList();
+  for (int i = 0; i < kCount; ++i) {
+    m_slots[i].index = i;
+    const QString k = i < saved.size() ? saved[i] : QString();
+    if (k == QString(claudecode::kRepo) + "/" + claudecode::kFile) {   // "integration/claude-code": one "/" only
+      m_slots[i].repo = claudecode::kRepo; m_slots[i].file = claudecode::kFile;
+      continue;
+    }
+    const int cut = int(k.indexOf('/', k.indexOf('/') + 1));     // "owner/repo/file…"
+    if (cut <= 0) continue;
+    const QString repo = k.left(cut), file = k.mid(cut + 1);
+    if (ModelHub::instance().isInstalled(repo, file)) { m_slots[i].repo = repo; m_slots[i].file = file; }
+  }
+  // a model deleted in AI › LLM leaves its cube (EJECT stops the process that held it)
+  connect(&ModelHub::instance(), &ModelHub::installedChanged, this, [this] {
+    for (int i = 0; i < kCount; ++i) {
+      const Slot& s = m_slots[i];
+      if (!s.isEmpty() && !claudecode::isKey(s.repo, s.file) && !ModelHub::instance().isInstalled(s.repo, s.file)) eject(i);
+    }
+  });
+}
+
+QString Slots::folder(int i) const { return paths::data(QString("ai/env-%1").arg(i + 1)); }
+
+void Slots::save() {
+  QStringList l;
+  for (const auto& s : m_slots) l << s.key();
+  settings::setValue("ai.slots", l);
+}
+
+void Slots::load(int i, const QString& repo, const QString& file) {
+  if (i < 0 || i >= kCount) return;
+  Slot& s = m_slots[i];
+  if (s.repo == repo && s.file == file) return;
+  s.repo = repo; s.file = file; s.loadedAt = QDateTime::currentDateTimeUtc();
+  // the environment's own record of what it holds (its folder is private to it)
+  paths::dropLink(folder(i) + "/environment.json");   // QSaveFile writes through a link
+  QSaveFile f(folder(i) + "/environment.json");
+  if (f.open(QIODevice::WriteOnly)) {
+    f.write(QJsonDocument(QJsonObject{{"environment", i + 1}, {"repo", repo}, {"file", file},
+                                      {"loadedAt", s.loadedAt.toString(Qt::ISODate)}}).toJson());
+    f.commit();
+  }
+  save();
+  emit changed(i);
+}
+
+void Slots::eject(int i) {
+  if (i < 0 || i >= kCount || m_slots[i].isEmpty()) return;
+  m_slots[i].repo.clear(); m_slots[i].file.clear(); m_slots[i].loadedAt = {};
+  QFile::remove(folder(i) + "/environment.json");
+  save();
+  emit changed(i);
+}
+
+QStringList Slots::skills(int i) const { return i >= 0 && i < kCount ? m_skills[i] : QStringList(); }
+
+void Slots::setSkill(int i, const QString& id, bool on) {
+  if (i < 0 || i >= kCount || m_skills[i].contains(id) == on) return;
+  if (on) m_skills[i] << id; else m_skills[i].removeAll(id);
+  QStringList l;
+  for (const auto& k : m_skills) l << k.join(',');
+  settings::setValue("ai.skills", l);
+  emit skillsChanged(i);
+}
+
+qint64 Slots::memoryTotal() const {
+#ifdef __APPLE__
+  qint64 mem = 0; size_t len = sizeof(mem);
+  if (sysctlbyname("hw.memsize", &mem, &len, nullptr, 0) == 0) return mem;
+#endif
+  return 0;
+}
+qint64 Slots::memoryLoaded() const {
+  qint64 sum = 0;
+  const auto inst = ModelHub::instance().installed();
+  for (const auto& s : m_slots)
+    for (const auto& m : inst) if (!s.isEmpty() && m.repo == s.repo && m.file == s.file) sum += m.size;
+  return sum;
+}
+}  // namespace ai

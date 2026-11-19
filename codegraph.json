@@ -1,0 +1,4 @@
+{
+  "exclude": ["translations/"],
+  "deprioritize": ["third_party/"]
+}

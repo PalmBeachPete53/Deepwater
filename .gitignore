@@ -1,0 +1,16 @@
+# Build outputs (cmake -B build, the test and sanitizer builds)
+/build/
+/build-*/
+
+# Local tooling and caches
+/.cache/
+/.codegraph/
+/.claude/
+.DS_Store
+__pycache__/
+*.pyc
+
+# Reference material kept on this machine only (not published, 2026-11-19): the reference app's recordings and the
+# AI tab's visual reference image
+/Reference/
+/complex-metallic-cube-showing-futuristic-artificial-intelligence.webp

@@ -1,0 +1,11 @@
+countries.json — Natural Earth 1:110m Admin 0 countries (ne_110m_admin_0_countries.geojson), public domain
+  (https://www.naturalearthdata.com/about/terms-of-use/), from https://github.com/nvkelso/natural-earth-vector.
+  Reduced to outer rings per country, coordinates rounded to 0.01°. Used for the globe's
+  hover/click hit-tests, highlight outlines and tints (the globe itself is ui::DotGlobe, see resources/banks).
+
+flags/*.svg — flag-icons by Panayiotis Lipiridis (https://github.com/lipis/flag-icons), MIT licence (same as
+  resources/flags/SOURCES.txt), 4x3 SVGs for economies not covered by resources/flags.
+
+meetings.json — central-bank meeting dates copied by hand from each bank's official schedule page (URLs inside),
+  checked 2026-11-14; dates marked "unverified" come from secondary sources because the bank's site refuses programs
+  (RBA, RBNZ) or the past date is no longer listed (ECB, SNB). Heads of the committees: verify yearly.

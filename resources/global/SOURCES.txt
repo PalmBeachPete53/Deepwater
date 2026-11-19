@@ -1,0 +1,2 @@
+No bundled image: the Overview globe is the dot-matrix globe of Bank Research (ui::DotGlobe), drawn from
+resources/banks/land.pbm (Natural Earth, public domain; see resources/banks/SOURCES.txt).

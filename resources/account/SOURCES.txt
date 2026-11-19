@@ -1,0 +1,7 @@
+resources/account/
+
+demo-trades.json — 60 invented sample trades for the "Demo account · sample trades" (created only from the
+  account menu). Written for Deepwater from the figures visible in the reference video; not real results.
+  Licence: CC0 (Deepwater project).
+bridge/DeepwaterBridge.mq4, .mq5, .cs, README.txt — journal bridge sources written for Deepwater.
+  Licence: same as Deepwater. Not compiled here (no MetaEditor / cTrader on the build machine).

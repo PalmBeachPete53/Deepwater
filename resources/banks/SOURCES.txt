@@ -1,0 +1,6 @@
+land.pbm — 720x360 equirectangular land mask (1 = land), rasterised from Natural Earth 1:50m land polygons
+(ne_50m_land.geojson, https://github.com/nvkelso/natural-earth-vector, naturalearthdata.com).
+Licence: Natural Earth is public domain ("Made with Natural Earth. Free vector and raster map data").
+Generated 2026-11-14 with an even-odd scanline fill (0.5 degree cells).
+
+Bank logos are not bundled: the pages paint plain monogram tiles (initials on a colour tile), no trademarks copied.
