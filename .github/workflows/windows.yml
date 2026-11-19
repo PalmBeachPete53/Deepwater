@@ -89,14 +89,17 @@ jobs:
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: |
-          $dir = (Get-ChildItem build/dist/_CPack_Packages/win64/ZIP -Directory | Select-Object -First 1).FullName
+          # The .zip a user would download, unpacked: the same folder the installer puts under Program Files.
+          $zip = (Get-ChildItem build/dist/*.zip | Select-Object -First 1).FullName
+          Expand-Archive $zip -DestinationPath smoke-app -Force
+          $dir = (Get-ChildItem smoke-app -Directory | Select-Object -First 1).FullName
           Get-ChildItem $dir | Format-Table -AutoSize Mode, Length, Name | Out-String -Width 200
           foreach ($f in 'Deepwater.exe', 'deepwater-llm.exe', 'Qt6Core.dll', 'Qt6HttpServer.dll', 'Qt6WebSockets.dll', 'qt.conf', 'msvcp140.dll') {
             if (-not (Test-Path "$dir\$f")) { throw "$f isn't at the top of the packed folder" }
           }
           $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
           Remove-Item Env:QT_PLUGIN_PATH, Env:QML2_IMPORT_PATH, Env:QT_ROOT_DIR -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory smoke | Out-Null
+          New-Item -ItemType Directory smoke -Force | Out-Null
           $env:DW_PROFILE = "$PWD\smoke\profile"
           $env:DW_CACHE_DIR = "$PWD\smoke\cache"
           $env:QT_FORCE_STDERR_LOGGING = '1'
@@ -137,6 +140,7 @@ jobs:
           $home_ = Get-ChildItem "$env:ProgramFiles" -Directory -Filter 'Deepwater*' | Select-Object -First 1
           if (-not $home_) { throw "nothing installed under Program Files" }
           "Installed in $($home_.FullName)"
+          Get-ChildItem $home_.FullName | Format-Table -AutoSize Mode, Length, Name | Out-String -Width 200
           foreach ($f in 'Deepwater.exe', 'deepwater-llm.exe', 'Qt6Core.dll', 'Uninstall.exe') {
             if (-not (Test-Path "$($home_.FullName)\$f")) { throw "$f wasn't installed" }
           }

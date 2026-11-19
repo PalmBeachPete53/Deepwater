@@ -154,6 +154,9 @@ if(WIN32)
   include(GNUInstallDirs)
   install(TARGETS Deepwater deepwater-llm RUNTIME DESTINATION .)
   qt_generate_deploy_app_script(TARGET Deepwater OUTPUT_SCRIPT DW_DEPLOY_SCRIPT NO_TRANSLATIONS)
+  # Qt's deploy script puts the DLLs in QT_DEPLOY_BIN_DIR, which defaults to the CMAKE_INSTALL_BINDIR seen by
+  # find_package(Qt6) ("bin"), where Windows wouldn't look for them: next to the exe instead.
+  install(CODE "set(QT_DEPLOY_BIN_DIR .)")
   install(SCRIPT ${DW_DEPLOY_SCRIPT})
   set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION .)
   set(CMAKE_INSTALL_UCRT_LIBRARIES TRUE)
