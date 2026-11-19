@@ -166,7 +166,11 @@ void Engine::start() {
   // the model stopped before is still freeing its memory: load this one once it is gone (two models at once could
   // exceed the memory; stop() used to block the app until then)
   if (!m_exiting.isEmpty()) { m_startWhenFree = true; setState(State::Starting); return; }
+#ifdef _WIN32
+  const QString helper = QFileInfo(QCoreApplication::applicationDirPath() + "/deepwater-llm.exe").canonicalFilePath();
+#else
   const QString helper = QFileInfo(QCoreApplication::applicationDirPath() + "/deepwater-llm").canonicalFilePath();
+#endif
   if (helper.isEmpty()) { setState(State::Failed, QCoreApplication::translate("ai", "The model runner (deepwater-llm) is missing from the app.")); return; }
   QDir().mkpath(Slots::instance().folder(m_index));
 

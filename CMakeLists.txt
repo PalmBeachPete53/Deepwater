@@ -42,6 +42,13 @@ if(NOT MSVC)
   set_source_files_properties(${DW_CHARTS_SOURCES} PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 target_include_directories(Deepwater PRIVATE src)
+# MSVC: sources are UTF-8 (labels hold "→", "·", "€"…), some translation units exceed the default section count, and Qt
+# wants the real __cplusplus. On Windows the app is a GUI program (no console window behind it).
+target_compile_options(Deepwater PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /bigobj /Zc:__cplusplus /permissive->)
+target_compile_definitions(Deepwater PRIVATE $<$<CXX_COMPILER_ID:MSVC>:NOMINMAX _USE_MATH_DEFINES>)
+if(WIN32)
+  set_target_properties(Deepwater PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 # Hardening (audit 2026-11-18, B1; user's choice 2026-11-19): out-of-range accesses in the standard containers
 # (std::vector, std::span, std::string, std::optional…) and in Qt's (QList, QString…) stop the app at the faulty line
 # instead of reading or writing memory at random — a clean crash report instead of silent corruption or a crash
@@ -129,4 +136,39 @@ if(DW_TS_FILES)
   set_source_files_properties(${DW_TS_FILES} PROPERTIES OUTPUT_LOCATION ${CMAKE_BINARY_DIR}/i18n)
   qt_add_lrelease(TS_FILES ${DW_TS_FILES} QM_FILES_OUTPUT_VARIABLE DW_QM_FILES)
   qt_add_resources(Deepwater dw_i18n PREFIX "/i18n" BASE ${CMAKE_BINARY_DIR}/i18n FILES ${DW_QM_FILES})
+endif()
+
+# ---- Windows package: the app, the model runner, Qt's DLLs and plugins (windeployqt), the VC++ runtime beside them, and
+# an NSIS installer (cpack -G NSIS, or the `dist` target). Everything at the top of the install folder: Qt's deploy
+# script would otherwise put the DLLs in bin/ apart from the executable.
+if(WIN32)
+  target_compile_options(deepwater-llm PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+  set(CMAKE_INSTALL_BINDIR ".")
+  include(GNUInstallDirs)
+  install(TARGETS Deepwater deepwater-llm RUNTIME DESTINATION .)
+  qt_generate_deploy_app_script(TARGET Deepwater OUTPUT_SCRIPT DW_DEPLOY_SCRIPT NO_TRANSLATIONS)
+  install(SCRIPT ${DW_DEPLOY_SCRIPT})
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION .)
+  set(CMAKE_INSTALL_UCRT_LIBRARIES TRUE)
+  include(InstallRequiredSystemLibraries)
+
+  set(CPACK_GENERATOR "NSIS;ZIP")
+  set(CPACK_PACKAGE_NAME "Deepwater")
+  set(CPACK_PACKAGE_VENDOR "Deepwater")
+  set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Deepwater market terminal")
+  set(CPACK_PACKAGE_INSTALL_DIRECTORY "Deepwater")
+  set(CPACK_PACKAGE_EXECUTABLES "Deepwater;Deepwater")         # Start menu shortcut
+  set(CPACK_CREATE_DESKTOP_LINKS "Deepwater")
+  set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+  set(CPACK_NSIS_DISPLAY_NAME "Deepwater")
+  set(CPACK_NSIS_PACKAGE_NAME "Deepwater")
+  set(CPACK_NSIS_INSTALLED_ICON_NAME "Deepwater.exe")
+  set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+  set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+  set(CPACK_NSIS_MUI_FINISHPAGE_RUN "Deepwater.exe")
+  set(CPACK_OUTPUT_FILE_PREFIX "${CMAKE_BINARY_DIR}/dist")
+  include(CPack)
+  add_custom_target(dist COMMAND ${CMAKE_CPACK_COMMAND} --config ${CMAKE_BINARY_DIR}/CPackConfig.cmake
+                    WORKING_DIRECTORY ${CMAKE_BINARY_DIR} DEPENDS Deepwater deepwater-llm VERBATIM)
 endif()
