@@ -1,5 +1,6 @@
 #include "charts/core/OrderBook.h"
 #include <algorithm>
+#include <iterator>
 
 namespace charts::flow {
 

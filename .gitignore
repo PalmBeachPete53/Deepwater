@@ -14,3 +14,6 @@ __pycache__/
 # AI tab's visual reference image
 /Reference/
 /complex-metallic-cube-showing-futuristic-artificial-intelligence.webp
+
+# Logs of tools run in the source folder
+aqtinstall.log
