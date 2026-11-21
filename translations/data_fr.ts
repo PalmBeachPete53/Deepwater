@@ -1290,5 +1290,396 @@ Il faudrait les retélécharger pour les retrouver.</translation>
         <source>no answer</source>
         <translation>pas de réponse</translation>
     </message>
+    <message>
+        <source>FOOTPRINT</source>
+        <translation>FOOTPRINT</translation>
+    </message>
+    <message>
+        <source>DAYS</source>
+        <translation>JOURS</translation>
+    </message>
+    <message>
+        <source>MISSING</source>
+        <translation>ABSENTS</translation>
+    </message>
+    <message>
+        <source>SIZE</source>
+        <translation>TAILLE</translation>
+    </message>
+    <message>
+        <source>%1 M trades</source>
+        <translation>%1 M transactions</translation>
+    </message>
+    <message>
+        <source>of %1</source>
+        <translation>sur %1</translation>
+    </message>
+    <message>
+        <source>%1 KB a day</source>
+        <translation>%1 Ko par jour</translation>
+    </message>
+    <message>
+        <source>Footprint</source>
+        <translation>Footprint</translation>
+    </message>
+    <message>
+        <source>Buyers and sellers at every price level, minute by minute, as technical-data.sqlite keeps them: built from Binance&apos;s daily trade archives (every trade of the day), on levels of one basis point (0.01 % of the price). Pick a minute to see its levels. Imbalances compare buyers at a level with sellers one level below (and the reverse), ratio 3, as the Charts footprint.</source>
+        <translation>Acheteurs et vendeurs à chaque niveau de prix, minute par minute, tels que technical-data.sqlite les garde : construits à partir des archives quotidiennes de transactions de Binance (toutes les transactions du jour), sur des niveaux d’un point de base (0,01 % du prix). Choisissez une minute pour voir ses niveaux. Les déséquilibres comparent les acheteurs d’un niveau aux vendeurs du niveau en dessous (et l’inverse), ratio 3, comme le footprint de Graphiques.</translation>
+    </message>
+    <message>
+        <source>The day before</source>
+        <translation>Le jour d’avant</translation>
+    </message>
+    <message>
+        <source>The day after</source>
+        <translation>Le jour d’après</translation>
+    </message>
+    <message>
+        <source>No day stored yet for this market: the collection downloads the newest days first.</source>
+        <translation>Aucun jour stocké pour ce marché : la collecte télécharge d’abord les jours les plus récents.</translation>
+    </message>
+    <message>
+        <source>%1 · %2 minutes · %3 trades · bought %4 · sold %5 · delta %6   —   %7 days stored (%8)</source>
+        <translation>%1 · %2 minutes · %3 transactions · acheté %4 · vendu %5 · delta %6   —   %7 jours stockés (%8)</translation>
+    </message>
+    <message>
+        <source>LEVELS AT %1 · %2 bp from %3 to %4</source>
+        <translation>NIVEAUX À %1 · %2 pb de %3 à %4</translation>
+    </message>
+    <message>
+        <source>Spot</source>
+        <translation>Spot</translation>
+    </message>
+    <message>
+        <source>Perpetual USD-M</source>
+        <translation>Perpétuel USD-M</translation>
+    </message>
+    <message>
+        <source>reading %1</source>
+        <translation>lecture du %1</translation>
+    </message>
+    <message>
+        <source>error: %1 (asked again later)</source>
+        <translation>erreur : %1 (redemandé plus tard)</translation>
+    </message>
+    <message>
+        <source>complete, a new day each morning</source>
+        <translation>complet, un nouveau jour chaque matin</translation>
+    </message>
+    <message>
+        <source>Volume of the market orders that bought (lifted the ask)</source>
+        <translation>Volume des ordres au marché qui ont acheté (pris l’offre)</translation>
+    </message>
+    <message>
+        <source>Volume of the market orders that sold (hit the bid)</source>
+        <translation>Volume des ordres au marché qui ont vendu (frappé la demande)</translation>
+    </message>
+    <message>
+        <source>Bought − sold</source>
+        <translation>Acheté − vendu</translation>
+    </message>
+    <message>
+        <source>Basis-point levels from the lowest traded price to the highest (one level = 0.01 % of the price)</source>
+        <translation>Niveaux d’un point de base du prix échangé le plus bas au plus haut (un niveau = 0,01 % du prix)</translation>
+    </message>
+    <message>
+        <source>Point of control: the level with the most volume</source>
+        <translation>Point de contrôle : le niveau qui a le plus de volume</translation>
+    </message>
+    <message>
+        <source>Value area: 70 % of the minute&apos;s volume around the POC</source>
+        <translation>Zone de valeur : 70 % du volume de la minute autour du POC</translation>
+    </message>
+    <message>
+        <source>Levels where buyers took at least 3 × what sellers gave one level below (diagonal)</source>
+        <translation>Niveaux où les acheteurs ont pris au moins 3 × ce que les vendeurs ont donné un niveau en dessous (diagonale)</translation>
+    </message>
+    <message>
+        <source>Levels where sellers gave at least 3 × what buyers took one level above (diagonal)</source>
+        <translation>Niveaux où les vendeurs ont donné au moins 3 × ce que les acheteurs ont pris un niveau au-dessus (diagonale)</translation>
+    </message>
+    <message>
+        <source>Runs of 3 or more imbalances of one side: buy / sell</source>
+        <translation>Suites d’au moins 3 déséquilibres du même côté : achat / vente</translation>
+    </message>
+    <message>
+        <source>bought</source>
+        <translation>acheté</translation>
+    </message>
+    <message>
+        <source>sold</source>
+        <translation>vendu</translation>
+    </message>
+    <message>
+        <source>delta</source>
+        <translation>delta</translation>
+    </message>
+    <message>
+        <source>levels</source>
+        <translation>niveaux</translation>
+    </message>
+    <message>
+        <source>POC</source>
+        <translation>POC</translation>
+    </message>
+    <message>
+        <source>VA low</source>
+        <translation>ZV basse</translation>
+    </message>
+    <message>
+        <source>VA high</source>
+        <translation>ZV haute</translation>
+    </message>
+    <message>
+        <source>imb. buy</source>
+        <translation>déséq. achat</translation>
+    </message>
+    <message>
+        <source>imb. sell</source>
+        <translation>déséq. vente</translation>
+    </message>
+    <message>
+        <source>stacks</source>
+        <translation>piles</translation>
+    </message>
+    <message>
+        <source>price</source>
+        <translation>prix</translation>
+    </message>
+    <message>
+        <source>sold (bid)</source>
+        <translation>vendu (demande)</translation>
+    </message>
+    <message>
+        <source>bought (ask)</source>
+        <translation>acheté (offre)</translation>
+    </message>
+    <message>
+        <source>Buyers and sellers at every price level, minute by minute, from Binance&apos;s daily trade archives (data.binance.vision, no key): every trade of the day, read once. Levels of one basis point (0.01 % of the price), the same grid in every year. About 130 KB a day per market.</source>
+        <translation>Acheteurs et vendeurs à chaque niveau de prix, minute par minute, à partir des archives quotidiennes de transactions de Binance (data.binance.vision, sans clé) : toutes les transactions du jour, lues une fois. Niveaux d’un point de base (0,01 % du prix), la même grille chaque année. Environ 130 Ko par jour et par marché.</translation>
+    </message>
+    <message>
+        <source>From the first archive (spot 2017-08-17, perpetual 2019-12-31)</source>
+        <translation>Depuis la première archive (spot 2017-08-17, perpétuel 2019-12-31)</translation>
+    </message>
+    <message>
+        <source>spot</source>
+        <translation>spot</translation>
+    </message>
+    <message>
+        <source>perpetual</source>
+        <translation>perpétuel</translation>
+    </message>
+    <message numerus="yes">
+        <source>footprint %n day(s)</source>
+        <translation>
+            <numerusform>footprint %n jour</numerusform>
+            <numerusform>footprint %n jours</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>footprint %1: its %n day(s)</source>
+        <translation>
+            <numerusform>footprint %1 : son %n jour</numerusform>
+            <numerusform>footprint %1 : ses %n jours</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>footprint %1: %n day(s) before %2</source>
+        <translation>
+            <numerusform>footprint %1 : %n jour avant le %2</numerusform>
+            <numerusform>footprint %1 : %n jours avant le %2</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>up to date to %1</source>
+        <translation>à jour au %1</translation>
+    </message>
+    <message>
+        <source>open interest</source>
+        <translation>open interest</translation>
+    </message>
+    <message>
+        <source>value (M$)</source>
+        <translation>valeur (M$)</translation>
+    </message>
+    <message>
+        <source>change</source>
+        <translation>variation</translation>
+    </message>
+    <message>
+        <source>top accounts L/S</source>
+        <translation>top comptes L/S</translation>
+    </message>
+    <message>
+        <source>top positions L/S</source>
+        <translation>top positions L/S</translation>
+    </message>
+    <message>
+        <source>accounts L/S</source>
+        <translation>comptes L/S</translation>
+    </message>
+    <message>
+        <source>takers buy/sell</source>
+        <translation>agressifs achat/vente</translation>
+    </message>
+    <message>
+        <source>Order book and positions</source>
+        <translation>Carnet d’ordres et positions</translation>
+    </message>
+    <message>
+        <source>From Binance&apos;s daily archives of the USD-M perpetual, each from its first day: the order book&apos;s depth out to ±0.2, 1, 2, 3, 4 and 5 % of the price every 30 seconds (from 2023), and the open interest with the long/short ratios every 5 minutes (from 2020). The live book is kept in memory while Deepwater runs (spot and perpetual, for live trading): never written to disk, gone when Deepwater closes.</source>
+        <translation>D’après les archives quotidiennes de Binance du perpétuel USD-M, chacune depuis son premier jour : la profondeur du carnet jusqu’à ±0,2, 1, 2, 3, 4 et 5 % du prix toutes les 30 secondes (depuis 2023), et l’open interest avec les ratios long/short toutes les 5 minutes (depuis 2020). Le carnet en direct est gardé en mémoire tant que Deepwater tourne (spot et perpétuel, pour le trading en direct) : jamais écrit sur le disque, effacé à la fermeture de Deepwater.</translation>
+    </message>
+    <message>
+        <source>Book depth</source>
+        <translation>Profondeur du carnet</translation>
+    </message>
+    <message>
+        <source>Live book (memory)</source>
+        <translation>Carnet en direct (mémoire)</translation>
+    </message>
+    <message>
+        <source>The order book and the trades of the spot market and the perpetual, kept in memory while Deepwater runs, never written to disk: the agents read the live book and today's footprint from them</source>
+        <translation>Le carnet d'ordres et les transactions du marché spot et du perpétuel, gardés en mémoire tant que Deepwater tourne, jamais écrits sur disque : les agents y lisent le carnet en direct et le footprint du jour</translation>
+    </message>
+    <message>
+        <source>Footprint spot</source>
+        <translation>Footprint spot</translation>
+    </message>
+    <message>
+        <source>Footprint perp.</source>
+        <translation>Footprint perp.</translation>
+    </message>
+    <message>
+        <source>ARCHIVES</source>
+        <translation>ARCHIVES</translation>
+    </message>
+    <message>
+        <source>%1 snapshots</source>
+        <translation>%1 instantanés</translation>
+    </message>
+    <message>
+        <source>%1 rows</source>
+        <translation>%1 lignes</translation>
+    </message>
+    <message>
+        <source>Bids&apos; share of the depth on both sides out to that distance from the price (50 % = balanced)</source>
+        <translation>Part des acheteurs dans la profondeur des deux côtés jusqu’à cette distance du prix (50 % = équilibré)</translation>
+    </message>
+    <message>
+        <source>Cumulative depth from the price out to that distance (base asset): bids below (−), asks above (+)</source>
+        <translation>Profondeur cumulée du prix jusqu’à cette distance (actif de base) : acheteurs en dessous (−), vendeurs au-dessus (+)</translation>
+    </message>
+    <message>
+        <source>Mid price</source>
+        <translation>Prix médian</translation>
+    </message>
+    <message>
+        <source>How far from the price the order book snapshot reached (below / above): bands further out count only the levels updated since</source>
+        <translation>Jusqu’où l’instantané du carnet allait depuis le prix (en dessous / au-dessus) : au-delà, les tranches ne comptent que les niveaux mis à jour depuis</translation>
+    </message>
+    <message>
+        <source>bids %1</source>
+        <translation>acheteurs %1</translation>
+    </message>
+    <message>
+        <source>mid</source>
+        <translation>médian</translation>
+    </message>
+    <message>
+        <source>snapshot reach</source>
+        <translation>portée de l’instantané</translation>
+    </message>
+    <message>
+        <source>Contracts open on the perpetual, in the base asset</source>
+        <translation>Contrats ouverts sur le perpétuel, en actif de base</translation>
+    </message>
+    <message>
+        <source>Open interest added (+) or closed (−) since the row before</source>
+        <translation>Open interest ajouté (+) ou fermé (−) depuis la ligne précédente</translation>
+    </message>
+    <message>
+        <source>Long / short ratio of the top 20 % traders by margin, counted by accounts</source>
+        <translation>Ratio long / short des 20 % de traders aux plus fortes marges, compté en comptes</translation>
+    </message>
+    <message>
+        <source>Long / short ratio of the top 20 % traders by margin, counted by position size</source>
+        <translation>Ratio long / short des 20 % de traders aux plus fortes marges, compté en taille de position</translation>
+    </message>
+    <message>
+        <source>Long / short ratio of all accounts</source>
+        <translation>Ratio long / short de tous les comptes</translation>
+    </message>
+    <message>
+        <source>Volume bought by market orders / volume sold by market orders</source>
+        <translation>Volume acheté par ordres au marché / volume vendu par ordres au marché</translation>
+    </message>
+    <message>
+        <source>Order flow</source>
+        <translation>Flux d’ordres</translation>
+    </message>
+    <message>
+        <source>What the pair records besides its bars, as technical-data.sqlite keeps it, one tab each. Footprint: buyers and sellers at every price level, minute by minute, from Binance&apos;s daily trade archives, on levels of one basis point (0.01 % of the price); pick a minute to see its levels (imbalances: ratio 3, as the Charts footprint). Book depth: the perpetual&apos;s order book out to ±0.2 … ±5 % of the price, every ~30 s. Open interest: the perpetual&apos;s open contracts and long/short ratios, every 5 minutes. Live book: the same bands from the order book kept in memory, every second, never on disk.</source>
+        <translation>Ce que la paire enregistre en plus de ses bougies, tel que technical-data.sqlite le garde, un onglet chacun. Footprint : acheteurs et vendeurs à chaque niveau de prix, minute par minute, d’après les archives quotidiennes de transactions de Binance, sur des niveaux d’un point de base (0,01 % du prix) ; choisissez une minute pour voir ses niveaux (déséquilibres : ratio 3, comme le footprint de Graphiques). Profondeur du carnet : le carnet du perpétuel jusqu’à ±0,2 … ±5 % du prix, toutes les ~30 s. Open interest : les contrats ouverts du perpétuel et les ratios long/short, toutes les 5 minutes. Carnet en direct : les mêmes tranches calculées sur le carnet gardé en mémoire, chaque seconde, jamais sur le disque.</translation>
+    </message>
+    <message>
+        <source>Live book</source>
+        <translation>Carnet en direct</translation>
+    </message>
+    <message>
+        <source>No day stored yet: the collection downloads the newest days first.</source>
+        <translation>Aucun jour stocké pour l’instant : la collecte télécharge d’abord les jours les plus récents.</translation>
+    </message>
+    <message>
+        <source>Perpetual · %1 snapshots · cumulative depth (base asset) from the price out to each distance   —   %2 days stored (%3)</source>
+        <translation>Perpétuel · %1 instantanés · profondeur cumulée (actif de base) du prix jusqu’à chaque distance   —   %2 jours stockés (%3)</translation>
+    </message>
+    <message>
+        <source>Perpetual · open interest and long/short ratios every 5 minutes   —   %1 days stored</source>
+        <translation>Perpétuel · open interest et ratios long/short toutes les 5 minutes   —   %1 jours stockés</translation>
+    </message>
+    <message>
+        <source>The live book of this market is not kept now (the pair is paused).</source>
+        <translation>Le carnet en direct de ce marché n’est pas tenu en ce moment (la paire est en pause).</translation>
+    </message>
+    <message>
+        <source>The live book starts with the collection, 20 s after Deepwater opens (never in a test profile).</source>
+        <translation>Le carnet en direct démarre avec la collecte, 20 s après l’ouverture de Deepwater (jamais dans un profil de test).</translation>
+    </message>
+    <message>
+        <source>synced</source>
+        <translation>synchronisé</translation>
+    </message>
+    <message>
+        <source>syncing</source>
+        <translation>synchronisation</translation>
+    </message>
+    <message>
+        <source>connecting</source>
+        <translation>connexion</translation>
+    </message>
+    <message>
+        <source>%1 · %2 · %3 levels in the book · bid %4 / ask %5 · %6 seconds of bands in memory (24 h kept), never on disk</source>
+        <translation>%1 · %2 · %3 niveaux dans le carnet · achat %4 / vente %5 · %6 secondes de tranches en mémoire (24 h gardées), jamais sur le disque</translation>
+    </message>
+    <message numerus="yes">
+        <source>the book depth: its %n day(s)</source>
+        <translation>
+            <numerusform>la profondeur du carnet : son %n jour</numerusform>
+            <numerusform>la profondeur du carnet : ses %n jours</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>the open interest: its %n day(s)</source>
+        <translation>
+            <numerusform>l’open interest : son %n jour</numerusform>
+            <numerusform>l’open interest : ses %n jours</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Depth perp.</source>
+        <translation>Profondeur perp.</translation>
+    </message>
 </context>
 </TS>

@@ -1,4 +1,5 @@
 #include "macrodata/Importer.h"
+#include "core/Startup.h"
 #include "macrodata/MacroDataStore.h"
 #include "banks/Forecasts.h"
 #include "banks/Registry.h"
@@ -537,4 +538,4 @@ static void startMacroDataAtLaunch() {
     if (!macrodata::Store::instance().meta("deep.rates").isEmpty()) macrodata::Importer::instance().start();
   });
 }
-Q_COREAPP_STARTUP_FUNCTION(startMacroDataAtLaunch)
+DW_STARTUP_FUNCTION(startMacroDataAtLaunch)

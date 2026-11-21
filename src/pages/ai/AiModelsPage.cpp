@@ -2,12 +2,16 @@
 // files, download the files (resumable, checked against the Hub's SHA-256), and manage the models on disk.
 // Test hooks: DW_AI_SEARCH=<query> (search at start), DW_AI_OPEN=<owner/repo> (open that model's files),
 // DW_AI_DOWNLOAD=<file> (with DW_AI_OPEN: start downloading that file once its details arrive).
+// Phones (pages/ai/PhoneScroll.h): one column — search and results, the model's files, then downloads and installed
+// models — at fixed heights, the page scrolling; the sort choice in a combo box. Downloads work on iOS, but no model
+// can run there (no child process): AI › Agents says so when a cube is started.
 #include <QPointer>
 #include <QHash>
 #include "app/Pages.h"
 #include "pages/ai/LlmParts.h"
 #include "ai/ModelHub.h"
 #include "pages/ai/Fit.h"
+#include "pages/ai/PhoneScroll.h"
 #include "ui/Kit.h"
 #include "ui/Theme.h"
 #include "ui/Format.h"
@@ -142,10 +146,11 @@ private:
 // ---------------------------------------------------------------------------------------------- page
 class AiModelsPage : public QWidget {
 public:
-  explicit AiModelsPage(QWidget* parent) : QWidget(parent) {
+  explicit AiModelsPage(QWidget* parent) : QWidget(parent), m_scroll(this) {
     const auto& c = theme::pal();
     auto& hub = ai::ModelHub::instance();
     auto* root = new QVBoxLayout(this);
+    m_root = root;
     root->setContentsMargins(16, 12, 16, 12); root->setSpacing(10);
 
     // header: title, disk, token
@@ -159,6 +164,7 @@ public:
     connect(finder, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl::fromLocalFile(ai::ModelHub::instance().modelsDir())); });
     head->addWidget(finder);
     root->addLayout(head);
+    m_head = head; m_finder = finder;
 
     auto* tokenRow = new QHBoxLayout; tokenRow->setSpacing(8);
     m_token = new QLineEdit(this);
@@ -174,10 +180,12 @@ public:
     tokenRow->addWidget(text(QCoreApplication::translate("ai", "TOKEN"), theme::microLabel(), c.textMute, this));
     tokenRow->addWidget(m_token, 1); tokenRow->addWidget(saveToken); tokenRow->addWidget(m_tokenState, 1);
     root->addLayout(tokenRow);
+    m_tokenRow = tokenRow; m_saveToken = saveToken;
 
     // body: left = search + results; right = model details, downloads, installed
     auto* body = new QHBoxLayout; body->setSpacing(12);
     root->addLayout(body, 1);
+    m_body = body;
 
     auto* left = new ui::Panel(QCoreApplication::translate("ai", "Search the Hub"), this);
     auto* sr = new QHBoxLayout; sr->setSpacing(8);
@@ -188,9 +196,13 @@ public:
     m_gguf = new ui::PillBar({QCoreApplication::translate("ai", "GGUF ONLY"), QCoreApplication::translate("ai", "ALL FORMATS")}, left);
     sr->addWidget(m_gguf);
     left->body()->addLayout(sr);
+    m_searchRow = sr;
     m_sort = new ui::PillBar({QCoreApplication::translate("ai", "MOST DOWNLOADED"), QCoreApplication::translate("ai", "MOST LIKED"),
                               QCoreApplication::translate("ai", "RECENTLY UPDATED")}, left, ui::PillBar::Underline);
     left->body()->addWidget(m_sort);
+    m_sortBox = pillCombo(m_sort, {QCoreApplication::translate("ai", "MOST DOWNLOADED"), QCoreApplication::translate("ai", "MOST LIKED"),
+                                   QCoreApplication::translate("ai", "RECENTLY UPDATED")}, left);
+    left->body()->addWidget(m_sortBox);
     m_status = text(QString(), theme::mono(10), c.textMute, left);
     left->body()->addWidget(m_status);
     m_results = new ResultList(left);
@@ -221,6 +233,7 @@ public:
     local->body()->addWidget(scrollFor(localInner, local), 1);
     right->addWidget(local, 2);
     body->addLayout(right, 6);
+    m_localPanel = local;
 
     // wiring
     m_debounce.setSingleShot(true); m_debounce.setInterval(400);
@@ -238,11 +251,21 @@ public:
     if (qEnvironmentVariableIsSet("DW_AI_SEARCH")) m_search->setText(qEnvironmentVariable("DW_AI_SEARCH"));
     runSearch();
     if (qEnvironmentVariableIsSet("DW_AI_OPEN")) openModel(qEnvironmentVariable("DW_AI_OPEN"));
+    // phones and short windows: the panels at the heights setPhone() gave them (sideways: the desktop rows at 560 px)
+    m_scroll.height = [this](int w, int vh) { return m_phone ? layoutHeight(m_root, w) : std::max(vh, 560); };
   }
 
 protected:
   void paintEvent(QPaintEvent*) override { QPainter p(this); p.fillRect(rect(), theme::pal().bg); }
+  // A page built hidden gets Qt's default 100 x 30 first: no phone arrangement for that (it would leave the desktop
+  // layouts measured differently), the real size arrives with the show.
+  void resizeEvent(QResizeEvent*) override {
+    if (!isVisible()) return;
+    setPhone(ui::compact(width()));
+    m_scroll.resize();
+  }
   void showEvent(QShowEvent*) override {
+    resizeEvent(nullptr);
     if (m_localStale) rebuildLocal();
     updateDisk(); m_search->setFocus();
   }
@@ -255,6 +278,47 @@ protected:
   }
 
 private:
+  // One column on a phone. The header's disk line and OPEN FOLDER, and the token's state, go to rows of their own;
+  // the GGUF choice under the search field; the sort choice in a combo box; the three panels at fixed heights (their
+  // lists scroll inside, the page around them).
+  void setPhone(bool on) {
+    if (on == m_phone) return;
+    m_phone = on;
+    if (on) {
+      m_head2 = new QHBoxLayout; m_head2->setSpacing(12);
+      m_head->removeWidget(m_disk); m_head->removeWidget(m_finder);
+      m_head2->addWidget(m_disk, 1); m_head2->addWidget(m_finder);
+      m_root->insertLayout(1, m_head2);
+      m_tokenRow->removeWidget(m_tokenState);
+      m_root->insertWidget(3, m_tokenState);
+    } else {
+      m_head2->removeWidget(m_disk); m_head2->removeWidget(m_finder);
+      m_root->removeItem(m_head2);
+      delete m_head2; m_head2 = nullptr;
+      m_head->addWidget(m_disk); m_head->addWidget(m_finder);
+      m_root->removeWidget(m_tokenState);
+      m_tokenRow->addWidget(m_tokenState, 1);
+    }
+    m_disk->setWordWrap(on);
+    m_tokenState->setWordWrap(on);
+    m_searchRow->setDirection(on ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_searchRow->setAlignment(m_gguf, on ? Qt::AlignLeft : Qt::Alignment());
+    m_sort->setVisible(!on); m_sortBox->setVisible(on);
+    m_body->setDirection(on ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    phoneHeight(m_left, on ? 600 : 0);
+    phoneHeight(m_detailPanel, on ? 440 : 0);
+    phoneHeight(m_localPanel, on ? 320 : 0);
+    for (auto* b : {m_finder, m_saveToken}) b->setMinimumHeight(on ? 34 : 0);
+    m_token->setMinimumHeight(on ? 34 : 0);
+    m_search->setMinimumHeight(on ? 34 : 0);
+  }
+  // a file or model name: elided on a phone (a long name would hold its row wider than the screen)
+  QLabel* nameLabel(const QString& s, QWidget* parent) {
+    const auto& c = theme::pal();
+    QLabel* l = m_phone ? static_cast<QLabel*>(fit::label(s, theme::mono(11, QFont::Medium), c.text, parent))
+                        : text(s, theme::mono(11, QFont::Medium), c.text, parent);
+    return l;
+  }
   void updateDisk() {
     auto& hub = ai::ModelHub::instance();
     qint64 used = 0; for (const auto& m : hub.installed()) used += m.size;
@@ -310,7 +374,8 @@ private:
       return;
     }
     auto* idRow = new QHBoxLayout;
-    idRow->addWidget(text(d.model.id, theme::mono(11, QFont::Medium), c.textDim, this));
+    idRow->addWidget(m_phone ? static_cast<QLabel*>(fit::label(d.model.id, theme::mono(11, QFont::Medium), c.textDim, this))
+                             : text(d.model.id, theme::mono(11, QFont::Medium), c.textDim, this), m_phone ? 1 : 0);
     idRow->addStretch(1);
     auto* web = button(QCoreApplication::translate("ai", "OPEN ON HUGGING FACE"), false, this);
     const QString repo = d.model.id;
@@ -336,7 +401,7 @@ private:
       auto* row = new QFrame(this);
       row->setStyleSheet(QString("QFrame { background: %1; border: 1px solid %2; border-radius: 3px; }").arg(c.panel.name(), c.border.name()));
       auto* h = new QHBoxLayout(row); h->setContentsMargins(10, 6, 8, 6); h->setSpacing(10);
-      auto* name = text(f.path, theme::mono(11, QFont::Medium), c.text, row);
+      auto* name = nameLabel(f.path, row);
       name->setStyleSheet(name->styleSheet() + "border:0;");
       name->setToolTip(ui::plainTip(f.sha256.isEmpty() ? f.path : f.path + "\nSHA-256 " + f.sha256));   // names from Hugging Face
       h->addWidget(name, 1);
@@ -440,7 +505,7 @@ private:
       auto* row = new QFrame(this);
       row->setStyleSheet(QString("QFrame { background: %1; border: 1px solid %2; border-radius: 3px; }").arg(c.panel.name(), c.border.name()));
       auto* g = new QGridLayout(row); g->setContentsMargins(10, 6, 8, 6); g->setHorizontalSpacing(10); g->setVerticalSpacing(4);
-      auto* name = text(d.file, theme::mono(11, QFont::Medium), c.text, row); name->setStyleSheet(name->styleSheet() + "border:0;");
+      auto* name = nameLabel(d.file, row); name->setStyleSheet(name->styleSheet() + "border:0;");
       g->addWidget(name, 0, 0);
       const QString state = downloadState(d);
       auto* st = text(state, theme::mono(10), d.state == ai::Download::State::Failed ? c.down : c.textDim, row, true);
@@ -475,11 +540,11 @@ private:
       row->setStyleSheet(QString("QFrame { background: %1; border: 1px solid %2; border-radius: 3px; }").arg(c.panel.name(), c.border.name()));
       auto* h = new QHBoxLayout(row); h->setContentsMargins(10, 6, 8, 6); h->setSpacing(10);
       auto* col = new QVBoxLayout; col->setSpacing(2);
-      auto* name = text(m.file, theme::mono(11, QFont::Medium), c.text, row); name->setStyleSheet(name->styleSheet() + "border:0;");
+      auto* name = nameLabel(m.file, row); name->setStyleSheet(name->styleSheet() + "border:0;");
       QStringList meta{m.repo, bytes(m.size)};
       if (!m.license.isEmpty()) meta << m.license;
       meta << (m.verified ? QCoreApplication::translate("ai", "SHA-256 verified") : QCoreApplication::translate("ai", "no checksum published"));
-      auto* sub = text(meta.join("  ·  "), theme::mono(10), c.textMute, row); sub->setStyleSheet(sub->styleSheet() + "border:0;");
+      auto* sub = text(meta.join("  ·  "), theme::mono(10), c.textMute, row, m_phone); sub->setStyleSheet(sub->styleSheet() + "border:0;");
       sub->setToolTip(m.path);
       col->addWidget(name); col->addWidget(sub);
       h->addLayout(col, 1);
@@ -519,6 +584,14 @@ private:
   QTimer m_debounce;
   int m_seq = 0;
   bool m_hookUsed = false;
+  PhoneScroll m_scroll;
+  QVBoxLayout* m_root;
+  QHBoxLayout *m_head, *m_tokenRow, *m_body, *m_searchRow;
+  QHBoxLayout* m_head2 = nullptr;
+  QPushButton *m_finder, *m_saveToken;
+  QComboBox* m_sortBox;
+  QWidget* m_localPanel;
+  bool m_phone = false;
 };
 }  // namespace
 }  // namespace aipage

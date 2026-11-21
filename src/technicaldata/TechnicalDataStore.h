@@ -17,8 +17,18 @@
 //        (a pair's own columns filled, the others NULL, which costs a byte); a new one is added, never rebuilt
 //   ind_sync(market, tf, last, count, version)   up to which bar they are computed, with which definitions
 //   meta(k, v)   pairs_seeded, fx_seeded; the forex collector's cursors "fx.<what>:<market>" (deleted with the pair)
+//   fp_days(market, venue, day, minutes, trades, levels, bytes, zip_bytes, built, data)   footprint history (user's
+//        request 2026-11-20, FootprintArchive.h): one UTC day of 1-minute footprint of a pair on one market ("spot",
+//        "perp"), built from Binance's archive of that day; data = fp::encodeDay (≈ 130 KB a day)
+//   fp_missing(market, venue, day, why, checked)   days the archives lack (or refused), asked again later when recent
+//   depth_days(market, day, samples, bytes, zip_bytes, built, data)   the perpetual's order book depth (PerpArchive.h):
+//        one UTC day of bookDepth snapshots (±0.2 … ±5 %, every ~30 s), data = perp::encodeDepth
+//   oi(market, t, oi, oi_value, top_acc, top_pos, accounts, taker)   the perpetual's open interest and ratios, 5 min
+//   oi_days(market, day, rows, zip_bytes, built)   the days of oi read from the archives
+//   arch_missing(market, kind, day, why, checked)  days the depth ("depth") or metrics ("oi") archives lack
 // Writes go to one worker thread in order (SQLite WAL lets reads go on meanwhile); reads are synchronous and use a
 // connection of their own per thread.
+#include "technicaldata/PerpArchive.h"
 #include <QHash>
 #include <QJsonObject>
 #include <QMutex>
@@ -37,6 +47,20 @@ struct Kline {
   double o = 0, h = 0, l = 0, c = 0, v = 0, qv = 0;
   qint64 n = 0;
   double tbv = 0, tbqv = 0;
+};
+
+struct FpDay {                           // one stored day of footprint (no data: footprintData)
+  qint64 day = 0;                        // Unix seconds UTC, midnight
+  int minutes = 0;
+  qint64 trades = 0, levels = 0;         // aggregate trades, levels stored (all minutes)
+  qint64 bytes = 0, zipBytes = 0;        // stored, and the archive's size
+  qint64 built = 0;                      // when, Unix ms
+};
+
+struct ArchDay {                         // one stored day of a perpetual archive (depth_days, oi_days)
+  qint64 day = 0;                        // Unix seconds UTC, midnight
+  int rows = 0;                          // depth snapshots, or oi rows
+  qint64 bytes = 0, zipBytes = 0, built = 0;
 };
 
 struct SyncState {
@@ -114,6 +138,7 @@ public:
   SyncState state(const QString& market, int tf) const;
   QVector<Kline> range(const QString& market, int tf, qint64 from, qint64 to, int limit = -1) const;   // t in [from, to]
   QVector<Kline> last(const QString& market, int tf, int n) const;   // the n newest, oldest first
+  qint64 count(const QString& market, int tf, qint64 from, qint64 to) const;   // bars with t in [from, to]
   QVector<Kline> before(const QString& market, int tf, qint64 t, int n) const;   // the n bars before t, oldest first
   QVector<Gap> gaps(const QString& market, int tf) const;
   QStringList markets() const;                    // every market with a row (the pairs, in the order added)
@@ -126,6 +151,25 @@ public:
   QVector<IndRow> indicators(const QString& market, int tf, qint64 from, qint64 to, int limit = -1) const;
   qint64 fileBytes() const;                       // the database and its WAL
 
+  // ---- footprint history (fp_days, fp_missing). Written only for a pair recording that market from that day on.
+  void addFootprintDay(const QString& market, const QString& venue, const FpDay& info, const QByteArray& data, QObject* ctx = nullptr,
+                       std::function<void(bool written)> done = {});
+  void setFootprintMissing(const QString& market, const QString& venue, qint64 day, const QString& why);
+  QVector<FpDay> footprintDays(const QString& market, const QString& venue) const;            // ascending day
+  QHash<qint64, QString> footprintMissing(const QString& market, const QString& venue) const;  // day → why
+  QByteArray footprintData(const QString& market, const QString& venue, qint64 day) const;   // empty if not stored
+
+  // ---- the perpetual's depth and open interest (depth_days, oi, oi_days, arch_missing); kind "depth" or "oi"
+  void addDepthDay(const QString& market, const ArchDay& info, const QByteArray& data, QObject* ctx = nullptr,
+                   std::function<void(bool written)> done = {});
+  void addOiDay(const QString& market, const ArchDay& info, const std::vector<perp::OiRow>& rows, QObject* ctx = nullptr,
+                std::function<void(bool written)> done = {});
+  void setArchiveMissing(const QString& market, const QString& kind, qint64 day, const QString& why);
+  QVector<ArchDay> archiveDays(const QString& market, const QString& kind) const;           // ascending day
+  QHash<qint64, QString> archiveMissing(const QString& market, const QString& kind) const;
+  QByteArray depthData(const QString& market, qint64 day) const;
+  std::vector<perp::OiRow> openInterest(const QString& market, qint64 from, qint64 to) const;   // t in [from, to)
+
 signals:
   // after a write that added or changed bars; from = the earliest bar added (a hole filled is in the past)
   void changed(const QString& market, int tf, qint64 from);
@@ -133,6 +177,8 @@ signals:
   void pairsChanged(const QString& market);       // added, changed or removed (its data deleted when it had to be)
   void pausedChanged(const QString& market);      // paused or resumed; "" = everything
   void backfillDone(const QString& market, int tf);   // setBackfilling(…, false) on a series that was marked
+  void footprintChanged(const QString& market, const QString& venue, qint64 day);   // a day added (or days deleted: day 0)
+  void archiveChanged(const QString& market, const QString& kind, qint64 day);      // "depth" / "oi": a day added
 
 private:
   mutable QMutex m_pauseLock;

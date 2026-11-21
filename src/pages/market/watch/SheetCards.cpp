@@ -416,9 +416,9 @@ void MeetingCard::paintHalf(QPainter& p, const QRectF& h, int side) {
 TechTilesCard::TechTilesCard(QWidget* parent) : SheetCard(QCoreApplication::translate("watch", "Technical Heatmap"), parent) { setState(Loading); }
 void TechTilesCard::setTiles(const QVector<Tile>& t) { m_tiles = t; setState(t.isEmpty() ? Message : Ready, QCoreApplication::translate("watch", "Not enough daily history")); }
 QRectF TechTilesCard::tileRect(int i) const {
-  const QRectF b = body(); const int n = std::max<int>(1, m_tiles.size());
+  const QRectF b = body(); const int n = m_cols > 0 ? m_cols : std::max<int>(1, m_tiles.size());
   const qreal gap = 4, w = (b.width() - 14 - gap * (n - 1)) / n;
-  return QRectF(b.left() + 7 + i * (w + gap), b.top() + 7, w, 49);
+  return QRectF(b.left() + 7 + (i % n) * (w + gap), b.top() + 7 + (i / n) * 53, w, 49);
 }
 void TechTilesCard::paintBody(QPainter& p, const QRectF&) {
   for (int i = 0; i < m_tiles.size(); ++i) {

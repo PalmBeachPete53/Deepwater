@@ -1,5 +1,6 @@
 #include "pages/news/feed/Reader.h"
 #include "ui/Kit.h"
+#include "ui/Touch.h"
 #include "pages/news/feed/FeedWidgets.h"
 #include "news/Translate.h"
 #include "market/QuoteHub.h"
@@ -68,7 +69,7 @@ QString ArticleWidget::trSignature() const {
 }
 
 QRectF ArticleWidget::colRect() const {
-  const double w = std::min(861.0, width() - 80.0);
+  const double w = width() < 520 ? width() - 32.0 : std::min(861.0, width() - 80.0);   // phones: 16 px margins
   return QRectF((width() - w) / 2, 0, w, height());
 }
 QRectF ArticleWidget::chipRect() const { const QRectF c = colRect(); return QRectF(c.right() - 153, 15, 59, 33); }
@@ -133,7 +134,7 @@ void ArticleWidget::retranslate() {
 void ArticleWidget::rebuild() {
   const QRectF col = colRect();
   const QString title = m_st->fr ? m_st->tx(m_s.title) : m_s.title;
-  m_titlePx = col.width() < 700 ? 38 : 46;   // narrow windows: one step smaller title
+  m_titlePx = col.width() < 480 ? 28 : col.width() < 700 ? 38 : 46;   // narrow windows: smaller titles (phones 28)
   m_titleLines = wrapLines(title, theme::sans(m_titlePx, QFont::Bold), col.width());
   double y = 54 + m_titleLines.size() * (m_titlePx + 8);
   y += 8 + 3 + 18;     // gold underline
@@ -144,6 +145,7 @@ void ArticleWidget::rebuild() {
   y += m_doc.size().height() + 6;
   m_readRect = QRectF(col.x(), y, 260, 36);
   y += 36 + 18;
+  if (width() < 520) y += 40;   // phones: the note goes under the button (beside it, it was cut after 3 words a line)
   setFixedHeight(int(y + 40));
   update();
 }
@@ -224,7 +226,9 @@ void ArticleWidget::paintEvent(QPaintEvent*) {
   const QString host = QUrl(m_s.link).host().remove(QRegularExpression("^www\\."));
   p.drawText(rr, Qt::AlignCenter, QCoreApplication::translate("news", "READ ON %1  ↗").arg(host.toUpper()));
   p.setFont(theme::mono(10)); p.setPen(theme::map("#5b5750"));
-  p.drawText(QRectF(rr.right() + 14, rr.y(), col.right() - rr.right() - 14, rr.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
+  const QRectF nr = width() < 520 ? QRectF(rr.x(), rr.bottom() + 8, col.width(), 40)
+                                  : QRectF(rr.right() + 14, rr.y(), col.right() - rr.right() - 14, rr.height());
+  p.drawText(nr, (width() < 520 ? Qt::AlignTop : Qt::AlignVCenter) | Qt::AlignLeft | Qt::TextWordWrap,
              m_s.contentHtml.isEmpty() ? QCoreApplication::translate("news", "The feed carries a summary only; the full article opens in your browser.")
                                        : QCoreApplication::translate("news", "Text as published in the source's feed."));
 }
@@ -500,8 +504,17 @@ void ReaderView::findWord(const QString& w) {
   if (n > 0 && m_article->firstMatchY() >= 0) m_scroll->verticalScrollBar()->setValue(int(m_article->firstMatchY() - 120));
 }
 
+// Phones (compact width): the article across the whole width, the automated read below it (its find box at the
+// bottom, in reach of the thumb); the side column of the desktop left the article ~110 px wide.
+int ReaderView::phonePanelH() const { return std::clamp(int(height() * 0.36), 220, 340); }
 void ReaderView::resizeEvent(QResizeEvent*) {
   const int W = width(), H = height();
+  if (ui::compact(W)) {
+    const int ph = phonePanelH();
+    m_scroll->setGeometry(0, 47, W, H - 47 - ph - 8);
+    m_panel->setGeometry(6, H - ph - 6, W - 12, ph);
+    return;
+  }
   const int pw = std::clamp(int(std::round(W * 0.2025)), 300, 420);   // 324 at the reference
   const int divider = W - pw - 17;
   m_scroll->setGeometry(0, 47, divider, H - 47);
@@ -545,7 +558,7 @@ void ReaderView::paintEvent(QPaintEvent*) {
   p.fillRect(rect(), theme::map("#000000"));
   p.fillRect(QRectF(0, 0, W, 46), theme::map("#0f0a02"));
   p.fillRect(QRectF(0, 46, W, 1), theme::map("#201f14"));
-  p.fillRect(QRectF(W - std::clamp(std::round(W * 0.2025), 300.0, 420.0) - 17, 47, 1, height() - 47), theme::map("#16140d"));
+  if (!ui::compact(int(W))) p.fillRect(QRectF(W - std::clamp(std::round(W * 0.2025), 300.0, 420.0) - 17, 47, 1, height() - 47), theme::map("#16140d"));
   const QRectF back = backRect();
   p.fillRect(back, m_hoverBack ? theme::map("#ffe44a") : theme::map("#fed90b"));
   p.setFont(theme::mono(11, QFont::Bold, 0.6)); p.setPen(theme::isDefault() ? theme::map("#1d1702") : theme::onAccent());
@@ -582,7 +595,9 @@ void ReaderView::paintEvent(QPaintEvent*) {
   }
   if (cs.isEmpty()) {
     p.setFont(theme::mono(10)); p.setPen(theme::map("#4f4b43"));
-    p.drawText(QRectF(queueX(), 8, 400, 30), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "empty — add stories with + on the cards"));
+    const double ew = std::min(400.0, W - queueX() - 8);   // phones: elided at the window edge
+    p.drawText(QRectF(queueX(), 8, ew, 30), Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetricsF(p.font()).elidedText(QCoreApplication::translate("news", "empty — add stories with + on the cards"), Qt::ElideRight, ew));
   }
 }
 void ReaderView::mouseMoveEvent(QMouseEvent* e) {

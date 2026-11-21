@@ -89,9 +89,12 @@ void StrengthPanel::resizeEvent(QResizeEvent*) { m_dirty = true; }
 void StrengthPanel::preload() { m_fx->setActive(true); m_fx->setActive(false); }
 
 // ---------------------------------------------------------------- geometry
-QRectF StrengthPanel::plotRect() const { return QRectF(4, 70, width() - 111, height() - 111); }
+// A phone upright (< 520 px): the market menu and the timeframes on a second row under the title, the rest lower.
+bool StrengthPanel::phone() const { return width() < 520; }
+qreal StrengthPanel::subY() const { return phone() ? 86 : 60; }
+QRectF StrengthPanel::plotRect() const { const qreal top = phone() ? 96 : 70; return QRectF(4, top, width() - 111, height() - top - 41); }
 // The crosshair follows the mouse over the plot and the subtitle row above it (reference t001.0, t004.0).
-QRectF StrengthPanel::hoverRect() const { const QRectF p = plotRect(); return QRectF(p.left(), 42, p.width(), p.bottom() - 42); }
+QRectF StrengthPanel::hoverRect() const { const QRectF p = plotRect(); const qreal t = subY() - 18; return QRectF(p.left(), t, p.width(), p.bottom() - t); }
 QList<QRectF> StrengthPanel::tfRects() const {
   QList<QRectF> out;
   const QFont f = theme::mono(11);
@@ -99,7 +102,7 @@ QList<QRectF> StrengthPanel::tfRects() const {
   const QStringList labels = tfLabels();
   for (int i = labels.size() - 1; i >= 0; --i) {
     const qreal w = qMax<qreal>(look::width(labels[i], f) + 12, 20);
-    out.prepend(QRectF(x - w, 10, w, 20));
+    out.prepend(QRectF(x - w, phone() ? 42 : 10, w, 20));
     x -= w + 3;
   }
   return out;
@@ -107,11 +110,12 @@ QList<QRectF> StrengthPanel::tfRects() const {
 QRectF StrengthPanel::dropdownRect() const {
   const auto t = tfRects();
   const qreal w = width() >= 700 ? 110 : 76;      // narrower on small windows so the title keeps its room
-  return QRectF(t.first().left() - 10 - w, 10, w, 20);
+  return phone() ? QRectF(11, t.first().top(), w, 20) : QRectF(t.first().left() - 10 - w, 10, w, 20);
 }
 QString StrengthPanel::title() const {
   const QString full = QCoreApplication::translate("global", "CURRENCY STRENGTH · UNWEIGHTED");
-  return 11 + look::width(full, look::titleFont()) + 24 < dropdownRect().left() ? full : QCoreApplication::translate("global", "CURRENCY STRENGTH");
+  const qreal room = phone() ? width() - 30 : dropdownRect().left();
+  return 11 + look::width(full, look::titleFont()) + 24 < room ? full : QCoreApplication::translate("global", "CURRENCY STRENGTH");
 }
 QRectF StrengthPanel::infoRect() const {
   const qreal w = look::width(title(), look::titleFont());
@@ -229,8 +233,8 @@ void StrengthPanel::rebuild() {
   // subtitle
   const QFont sf = theme::mono(10, QFont::Normal, 2.0);
   qreal sx = 11;
-  sx += look::text(p, sx, 60, QCoreApplication::translate("global", "% CHANGE SINCE "), sf, theme::map("#a9a7a0"));
-  sx += look::text(p, sx, 60, QCoreApplication::translate("global", "THE FIRST BAR ON SCREEN"), sf, theme::map("#f4d95d"));
+  sx += look::text(p, sx, subY(), QCoreApplication::translate("global", "% CHANGE SINCE "), sf, theme::map("#a9a7a0"));
+  sx += look::text(p, sx, subY(), QCoreApplication::translate("global", "THE FIRST BAR ON SCREEN"), sf, theme::map("#f4d95d"));
   m_ends.clear();
 
   if (!v.ok) {
@@ -440,7 +444,7 @@ void StrengthPanel::paintEvent(QPaintEvent* e) {
   // subtitle echo of the hovered bar
   const QFont sf = theme::mono(10, QFont::Normal, 2.0);
   const qreal sx = 11 + look::width(QCoreApplication::translate("global", "% CHANGE SINCE ") + QCoreApplication::translate("global", "THE FIRST BAR ON SCREEN"), sf);
-  look::text(p, sx + 4, 60, "· " + barTime(hb, false), sf, theme::map("#fffef9"));
+  look::text(p, sx + 4, subY(), "· " + barTime(hb, false), sf, theme::map("#fffef9"));
 }
 
 // ---------------------------------------------------------------- input

@@ -19,7 +19,8 @@ class ForecastOverlay;
 // Deepwater from the banks' published forecasts vs spot), ALL CALLS list, FX BANK FORECASTS overlay.
 // Env hooks: DW_BANKPOS_HOVER=<card 0..5> shows a card hovered, DW_BANKPOS_OVERLAY=<pair or 1> opens the overlay,
 // DW_BANKPOS_VIEW=1 opens ALL CALLS, DW_BANKPOS_BTNHOVER=1 shows the FX BANK FORECASTS button hovered,
-// DW_BANKPOS_PROGRESS=<0..1> freezes the overlay lines' draw-in animation.
+// DW_BANKPOS_PROGRESS=<0..1> freezes the overlay lines' draw-in animation, DW_BANKPOS_SCROLL=<px> scrolls the
+// DESK (or ALL CALLS) list.
 class BankPositioningPage : public QWidget {
   Q_OBJECT
 public:
@@ -36,6 +37,10 @@ protected:
   bool event(QEvent*) override;
 private:
   QString titleText() const;            // full title, or the short one on narrow windows
+  bool phone() const;                   // ui::compact(width()): header on three rows, cards in one column
+  int headerH() const;
+  QString howText() const;              // the two notes under the cards
+  QString banksText() const;
   void layoutDesk();
   void paintNotes(QPainter& p);
   QRectF forecastBtn() const;
@@ -50,6 +55,7 @@ private:
   CallsTable* m_deskCalls;               // ALL CALLS shown under the cards on wide screens (≥ 1900 px)
   QVariantAnimation* m_wheel;
   qreal m_notesTop = 0, m_notesWidth = 0;
+  qreal m_howH = 0, m_banksH = 0;        // < 1024 px: measured heights of the two notes (0 = fixed boxes)
   CallsTable* m_calls;
   QScrollArea* m_callsScroll;
   ForecastOverlay* m_overlay;

@@ -6,6 +6,7 @@
 #include "banks/Registry.h"
 #include "banks/Research.h"
 #include "app/Pages.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QCoreApplication>
 #include "core/I18n.h"
@@ -15,6 +16,7 @@
 #include <QScrollBar>
 #include <QSet>
 #include <cmath>
+#include <algorithm>
 
 DW_PAGE("news/bank-research", banks::res::BankResearchPage)
 
@@ -71,8 +73,56 @@ BankResearchPage::BankResearchPage(QWidget* parent) : QWidget(parent) {
   if (ok) m_left->setTab(tab);
 }
 
+// Moves a column between the page and the phone's scrolling body; setParent() hides, so its state is put back.
+void BankResearchPage::reparent(QWidget* w, QWidget* parent) {
+  if (w->parentWidget() == parent) return;
+  const bool shown = !w->isHidden();
+  w->setParent(parent);
+  w->setVisible(shown);
+}
+
+// Phones (compact width): the strip stays on top and one column scrolls under it: the notes (left column, a little
+// shorter than the screen so the globe peeks below and the page can be dragged by it), the globe, then the whole
+// registry (no inner scroll). An opened note covers everything under the strip, like the reader of the News Feed.
+void BankResearchPage::layoutPhone(int W, int H) {
+  if (!m_page) {
+    m_page = new QScrollArea(this);
+    m_page->setFrameShape(QFrame::NoFrame);
+    m_page->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_page->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_page->setWidgetResizable(false);
+    m_page->viewport()->setAutoFillBackground(false);   // the page's own paint (look::page) shows through, theme included
+    m_body = new QWidget;
+    m_page->setWidget(m_body);
+  }
+  m_page->show();
+  reparent(m_left, m_body); reparent(m_centre, m_body); reparent(m_right, m_body);
+  reparent(m_pdf, this);
+  m_left->setPhone(true);
+  m_strip->setGeometry(0, 0, W, 37);
+  const int vh = H - 37;
+  m_page->setGeometry(0, 37, W, vh);
+  const int leftH = std::max(480, vh - 90);
+  const int globeH = std::clamp(int(W * 0.85), 300, 420);
+  const int regH = RegistryColumn::fullHeight();
+  m_left->setGeometry(0, 0, W, leftH);
+  m_centre->setGeometry(0, leftH, W, globeH);
+  m_globe->setGeometry(m_centre->rect());
+  m_right->setGeometry(0, leftH + globeH, W, regH);
+  m_body->setFixedSize(W, leftH + globeH + regH + 12);
+  m_pdf->setGeometry(0, 37, W, vh);
+  m_pdf->raise();
+}
+
 void BankResearchPage::resizeEvent(QResizeEvent*) {
   const int W = width(), H = height();
+  if (ui::compact(W)) { layoutPhone(W, H); return; }
+  if (m_page && !m_page->isHidden()) {   // back from the phone layout
+    reparent(m_left, this); reparent(m_centre, this); reparent(m_right, this);
+    reparent(m_pdf, m_centre);
+    m_left->setPhone(false);
+    m_page->hide();
+  }
   // Side columns keep the reference widths (362 / 338) at 1600 px and scale with the window: narrower on laptops
   // (≥ 300 / 270) so the globe and the PDF keep a usable centre, wider on big screens (≤ 480 / 420).
   const int leftW = qBound(300, int(std::lround(W * 0.22625)), 480);

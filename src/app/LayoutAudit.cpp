@@ -172,6 +172,9 @@ void run(MainWindow* w, const QString& dir, const QList<QSize>& sizes, const QSt
   for (const auto& t : app::tabs())
     for (const auto& s : t.subs) ids << app::pageId(t.id, s.id);
   if (!onlyPages.isEmpty()) ids = onlyPages;
+  // phone sizes (below the window's usual minimum): the minimum is lifted, as `--size 430x932` does (ui/Touch.h)
+  for (const QSize& sz : sizes)
+    if (sz.width() < w->minimumWidth() || sz.height() < w->minimumHeight()) w->setMinimumSize(1, 1);
   QTimer::singleShot(500, w, [w, dir, sizes, ids, loadMs] {
     QFile f(dir + "/report.txt");
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { qWarning("layout audit: cannot write %s", qPrintable(f.fileName())); qApp->quit(); return; }

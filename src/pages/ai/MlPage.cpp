@@ -4,7 +4,9 @@
 // Supervised: DATA (source, target, features) | MODEL (algorithm, parameters, validation, TRAIN) | RUNS (list, results).
 // Test hooks: DW_ML_INSTALL=1 or =torch (installs without asking), DW_ML_FAMILY=<0..4>, DW_ML_LOAD="prices:EURUSD:1d" | "macro:us" | "cot:EUR" | "csv:/path.csv" (loads at once),
 // DW_ML_TRAIN="<algorithm>:<target>:<transform>:<horizon>" (after DW_ML_LOAD: trains at once), DW_ML_RUN=<row> (selects a run),
+// DW_ML_COMPARE=similar | <rows> (after DW_ML_RUN: COMPARE, the selected run's like ones or those rows ticked), DW_ML_COMPARE_SCROLL=<px>, DW_ML_COMPARE_OPEN=1,
 // DW_ML_PICK=<symbol> (switches market through the list after 3 s, tries TRAIN at once, then once loaded; logs ml-pick lines).
+// Phones (MlPage::applyMode): DW_ML_SECTION=<0..2> shows DATA, MODEL or RUNS in the one-column layout.
 #include "app/Pages.h"
 #include "core/Settings.h"
 #include "macro/Registry.h"
@@ -20,6 +22,8 @@
 #include "ui/Kit.h"
 #include "ui/Format.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
@@ -41,15 +45,24 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QTextStream>
 #include <QTimer>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <climits>
 #include <cmath>
+#include <memory>
 #include <algorithm>
+#include "pages/ai/MlCharts.h"
+#include "pages/ai/MlCompareView.h"
+#include "ml/Comparison.h"
+#include <QFutureWatcher>
+#include <QtConcurrent>
 
 namespace aipage {
 namespace {
@@ -110,14 +123,19 @@ Algo algoById(const QString& id) { return ml::algoById(id); }
 
 struct Transform { QString id, label; };
 QList<Transform> transforms() {
-  return {{"raw", QCoreApplication::translate("ai", "value")}, {"change", QCoreApplication::translate("ai", "change")}, {"pct_change", QCoreApplication::translate("ai", "% change")}, {"direction", QCoreApplication::translate("ai", "direction (up / down)")}};
+  return {{"raw", QCoreApplication::translate("ai", "value")}, {"change", QCoreApplication::translate("ai", "change")}, {"pct_change", QCoreApplication::translate("ai", "% change")}, {"direction", QCoreApplication::translate("ai", "direction (up / down)")},
+          // how much it moves, not where (2026-11-20, step 5): judged against the HAR and EWMA references
+          {"realized_vol", QCoreApplication::translate("ai", "realized volatility")}, {"range", QCoreApplication::translate("ai", "range (high − low)")},
+          {"abs_return", QCoreApplication::translate("ai", "size of the move")}, {"big_move", QCoreApplication::translate("ai", "big move (yes / no)")}};
 }
 
 // Group colours: a fixed set of hues (theme colours collapse on light themes); noise / normal rows grey.
 QColor groupColor(int label) {
-  static const char* hues[] = {"#f2c94c", "#2bd1c4", "#e46a6a", "#7a8cff", "#b37bff", "#6cc96c", "#ff9f43", "#5ec8ff", "#e98ad8", "#c9b37a"};
+  // parsed once (a map asks for thousands of dots' colours)
+  static const QColor hues[] = {QColor("#f2c94c"), QColor("#2bd1c4"), QColor("#e46a6a"), QColor("#7a8cff"), QColor("#b37bff"),
+                                QColor("#6cc96c"), QColor("#ff9f43"), QColor("#5ec8ff"), QColor("#e98ad8"), QColor("#c9b37a")};
   if (label < 0) return theme::pal().textMute;
-  return QColor(hues[label % 10]);
+  return hues[label % 10];
 }
 QString groupName(int label, const QString& kind) {
   if (kind == "anomaly") return label ? QCoreApplication::translate("ai", "UNUSUAL") : QCoreApplication::translate("ai", "NORMAL");
@@ -138,16 +156,65 @@ Assign readAssign(const QString& path) {
   return a;
 }
 
+// Every k-th index of n so that at most `most` remain, the last one always kept (the latest row is ringed on maps).
+QVector<int> thinIndex(int n, int most) {
+  QVector<int> idx;
+  if (n <= 0) return idx;
+  const double step = n > most ? double(n) / most : 1.0;
+  for (double i = 0; int(i) < n; i += step) idx << int(i);
+  if (idx.last() != n - 1) idx << n - 1;
+  return idx;
+}
+template <class V> V pick(const V& v, const QVector<int>& idx) { V out; out.reserve(idx.size()); for (int i : idx) out << v.value(i); return out; }
+Assign thinAssign(const Assign& a, int most) {
+  if (a.label.size() <= most) return a;
+  const QVector<int> idx = thinIndex(int(a.label.size()), most);
+  Assign t;
+  t.dates = pick(a.dates, idx); t.label = pick(a.label, idx); t.score = pick(a.score, idx); t.x = pick(a.x, idx); t.y = pick(a.y, idx);
+  return t;
+}
+
 QString transformLabel(const QString& id) { for (const auto& t : transforms()) if (t.id == id) return t.label; return id; }
+
+// What a run predicts, trades or groups, in words (COMPARE's group titles).
+QString runQuestion(const ml::Run& r) {
+  const QString fam = r.job.value("family").toString("supervised");
+  const QJsonObject res = r.result;
+  if (fam == "reinforcement")
+    return QCoreApplication::translate("ai", "trades %1 (%2, cost %3 bp)").arg(res.value("price").toString(r.job.value("target").toString()), res.value("positions").toString())
+        .arg(res.value("cost_bp").toDouble(), 0, 'f', 1);
+  if (fam == "unsupervised") {
+    const QString kind = res.value("kind").toString();
+    const int n = int(res.value("features").toArray().size());
+    return kind == "clustering" ? QCoreApplication::translate("ai", "groups the rows on %1 feature(s)").arg(n)
+         : kind == "anomaly" ? QCoreApplication::translate("ai", "looks for unusual rows on %1 feature(s)").arg(n)
+                             : QCoreApplication::translate("ai", "maps the rows on %1 feature(s)").arg(n);
+  }
+  if (fam == "self_supervised") {
+    const QJsonObject pr = res.value("probe").toObject();
+    return QCoreApplication::translate("ai", "embeddings; probe: %1 of %2, %3 row(s) ahead")
+        .arg(transformLabel(pr.value("transform").toString()), pr.value("target").toString()).arg(pr.value("horizon").toInt());
+  }
+  const QString q = QCoreApplication::translate("ai", "predicts the %1 of %2, %3 row(s) ahead")
+                        .arg(transformLabel(r.job.value("target_transform").toString("raw")), r.job.value("target").toString()).arg(r.job.value("horizon").toInt(1));
+  return fam == "semi_supervised" ? QCoreApplication::translate("ai", "semi-supervised") + " · " + q : q;
+}
 
 // ------------------------------------------------------------------------------------------------ run list
 class RunList : public QWidget {
 public:
   std::function<void(const QString&)> picked;
+  std::function<void()> ticksChanged;   // the box at a row's left (or ⌘/Ctrl-click): runs ticked for COMPARE
   explicit RunList(QWidget* p) : QWidget(p) { setMouseTracking(true); }
+  QStringList ticked() const { QStringList l; for (const auto& id : m_ids) if (m_ticked.contains(id)) l << id; return l; }   // list order
+  void clearTicks() { m_ticked.clear(); update(); if (ticksChanged) ticksChanged(); }
+  void setTicked(const QStringList& ids) { m_ticked = QSet<QString>(ids.cbegin(), ids.cend()); update(); if (ticksChanged) ticksChanged(); }
   void rebuild() {
     m_ids.clear();
     for (const auto& r : ml::Runs::instance().list()) m_ids << r.id;
+    const QSet<QString> was = m_ticked;
+    for (auto it = m_ticked.begin(); it != m_ticked.end();) it = m_ids.contains(*it) ? std::next(it) : m_ticked.erase(it);   // deleted runs
+    if (was != m_ticked && ticksChanged) ticksChanged();
     setMinimumHeight(int(m_ids.size()) * kRow + 2);
     updateGeometry(); update();
   }
@@ -155,6 +222,7 @@ public:
   QString selected() const { return m_sel; }
   QString idAt(int row) const { return m_ids.value(row); }
   QSize sizeHint() const override { return QSize(300, int(m_ids.size()) * kRow + 2); }
+  bool touchBox = false;   // phones: the whole strip left of the texts ticks the row (the 14 px box is too small for a finger)
 protected:
   static constexpr int kRow = 50;
   void paintEvent(QPaintEvent*) override {
@@ -169,10 +237,22 @@ protected:
       const ml::Run* r = ml::Runs::instance().find(m_ids[i]);
       if (!r) continue;
       const QRectF row(0, i * kRow + 1, width(), kRow - 4);
-      const bool sel = r->id == m_sel, hov = i == m_hover;
+      const bool sel = r->id == m_sel, hov = i == m_hover, tick = m_ticked.contains(r->id);
       p.setPen(QPen(sel ? c.accent : hov ? c.borderHi : c.border, 1));
       p.setBrush(sel ? theme::alpha(c.accent, 22) : hov ? c.panelAlt : c.panel);
       p.drawRoundedRect(row.adjusted(.5, .5, -.5, -.5), 3, 3);
+      // the tick box: a run for COMPARE
+      {
+        const QRectF b = boxRect(i);
+        const bool boxHov = hov && m_hoverBox;
+        p.setPen(QPen(tick ? c.accent : boxHov ? c.borderHi : theme::alpha(c.textMute, 160), 1));
+        p.setBrush(tick ? c.accent : Qt::NoBrush);
+        p.drawRoundedRect(b.adjusted(.5, .5, -.5, -.5), 2, 2);
+        if (tick) {
+          p.setPen(QPen(theme::onAccent(), 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+          p.drawPolyline(QPolygonF({QPointF(b.left() + 3, b.center().y()), QPointF(b.left() + 5.5, b.bottom() - 3.5), QPointF(b.right() - 3, b.top() + 3.5)}));
+        }
+      }
       // state
       const QColor sc = r->state == ml::RunState::Done ? c.up : r->state == ml::RunState::Running ? c.warn
                       : r->state == ml::RunState::Stopped ? c.textDim : c.down;
@@ -183,8 +263,8 @@ protected:
       p.setPen(QPen(theme::alpha(sc, 140), 1)); p.setBrush(theme::alpha(sc, 30)); p.drawRoundedRect(pill, 3, 3);
       p.setFont(sf); p.setPen(sc); p.drawText(pill, Qt::AlignCenter, st);
       p.setFont(theme::mono(11, QFont::Bold)); p.setPen(c.text);
-      p.drawText(QRectF(row.left() + 10, row.top() + 5, row.width() - sw - 30, 20), Qt::AlignLeft | Qt::AlignVCenter,
-                 QFontMetricsF(p.font()).elidedText(r->name, Qt::ElideRight, row.width() - sw - 30));
+      p.drawText(QRectF(row.left() + kText, row.top() + 5, row.width() - sw - kText - 20, 20), Qt::AlignLeft | Qt::AlignVCenter,
+                 QFontMetricsF(p.font()).elidedText(r->name, Qt::ElideRight, row.width() - sw - kText - 20));
       // second line: the main score against the no-skill baseline
       QString line = r->created.toString("dd MMM HH:mm");
       const QJsonObject res = r->result;
@@ -221,22 +301,46 @@ protected:
       } else if (!r->error.isEmpty()) line += "  ·  " + r->error.section('\n', 0, 0);
       else if (r->state == ml::RunState::Running) line += "  ·  " + r->stage;
       p.setFont(theme::mono(10)); p.setPen(c.textDim);
-      p.drawText(QRectF(row.left() + 10, row.top() + 25, row.width() - 20, 18), Qt::AlignLeft | Qt::AlignVCenter,
-                 QFontMetricsF(p.font()).elidedText(line, Qt::ElideRight, row.width() - 20));
+      p.drawText(QRectF(row.left() + kText, row.top() + 25, row.width() - kText - 10, 18), Qt::AlignLeft | Qt::AlignVCenter,
+                 QFontMetricsF(p.font()).elidedText(line, Qt::ElideRight, row.width() - kText - 10));
     }
   }
   int rowAt(const QPointF& pos) const { const int i = int(pos.y()) / kRow; return i >= 0 && i < m_ids.size() ? i : -1; }
-  void mouseMoveEvent(QMouseEvent* e) override { const int h = rowAt(e->position()); if (h != m_hover) { m_hover = h; setCursor(h >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor); update(); } }
-  void leaveEvent(QEvent*) override { m_hover = -1; update(); }
+  static constexpr int kText = 32;   // the texts start right of the tick box
+  QRectF boxRect(int i) const { return QRectF(10, i * kRow + 1 + 7, 14, 14); }
+  bool inBox(const QPointF& pos, int i) const {
+    if (touchBox) return i >= 0 && pos.x() < kText + 4;
+    return i >= 0 && boxRect(i).adjusted(-6, -6, 6, 6).contains(pos);
+  }
+  void mouseMoveEvent(QMouseEvent* e) override {
+    const int h = rowAt(e->position());
+    const bool box = inBox(e->position(), h);
+    if (h != m_hover || box != m_hoverBox) {
+      m_hover = h; m_hoverBox = box;
+      setCursor(h >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
+      setToolTip(box ? QCoreApplication::translate("ai", "Tick trainings to compare them (or ⌘-click a row)") : QString());
+      update();
+    }
+  }
+  void leaveEvent(QEvent*) override { m_hover = -1; m_hoverBox = false; update(); }
   void mousePressEvent(QMouseEvent* e) override {
     const int i = rowAt(e->position());
     if (i < 0) return;
+    if (inBox(e->position(), i) || (e->modifiers() & Qt::ControlModifier)) {   // ⌘ on macOS
+      const QString id = m_ids[i];
+      if (!m_ticked.remove(id)) m_ticked.insert(id);
+      update();
+      if (ticksChanged) ticksChanged();
+      return;
+    }
     m_sel = m_ids[i]; update();
     if (picked) picked(m_sel);
   }
 private:
   QStringList m_ids;
   QString m_sel;
+  QSet<QString> m_ticked;
+  bool m_hoverBox = false;
   int m_hover = -1;
 };
 
@@ -269,12 +373,42 @@ private:
   QList<QPair<QString, double>> m_items;
 };
 
+// A line through n points with far more points than pixel columns (AI › Agents' small charts): each column drawn as one
+// vertical stroke from its lowest to its highest point, joined to the column before. The same picture as the full
+// antialiased line (a noisy series fills its columns anyway) for about a tenth of the drawing.
+void denseLine(QPainter& p, int n, const std::function<QPointF(int)>& P, const QColor& col, qreal w) {
+  if (n <= 0) return;
+  p.save();
+  p.setRenderHint(QPainter::Antialiasing, false);
+  int column = INT_MIN;
+  double lo = 0, hi = 0, prevLast = NAN, last = 0;
+  auto flush = [&] {
+    if (column == INT_MIN) return;
+    double a = lo, b = hi;
+    if (std::isfinite(prevLast)) { a = std::min(a, prevLast); b = std::max(b, prevLast); }   // joined to the column before
+    p.fillRect(QRectF(column, a - w / 2, std::max<qreal>(1.0, w * 0.8), b - a + w), col);
+    prevLast = last;
+  };
+  for (int i = 0; i < n; ++i) {
+    const QPointF q = P(i);
+    if (int(q.x()) != column) { flush(); column = int(q.x()); lo = hi = q.y(); }
+    else { lo = std::min(lo, q.y()); hi = std::max(hi, q.y()); }
+    last = q.y();
+  }
+  flush();
+  p.restore();
+}
+
 // Test period: regression → actual vs predicted; classification → rolling hit rate (30 rows) against the no-skill line.
 class PredChart : public QWidget {
 public:
   explicit PredChart(QWidget* p) : QWidget(p) { setFixedHeight(184); }
-  void setData(const QString& csv, bool classification, double baseline) {
-    m_a.clear(); m_p.clear(); m_dates.clear(); m_cls = classification; m_base = baseline;
+  bool compact = false;   // AI › Agents' activity panel: no caption (the panel writes it), tighter top
+  // What the chart draws, from predictions.csv: read and computed off the window's thread when it is big (AI › Agents'
+  // panel); most > 0 keeps that many points at most (the lines computed on every row first).
+  struct Lines { QStringList dates; QVector<double> a, p, s1, s2; double lo = 0, hi = 1; };
+  static Lines lines(const QString& csv, bool classification, int most = 0) {
+    Lines L;
     QFile f(csv);
     if (f.open(QIODevice::ReadOnly)) {
       QTextStream in(&f);
@@ -282,33 +416,60 @@ public:
       while (!in.atEnd()) {
         const QStringList c = in.readLine().split(',');
         if (c.size() < 3) continue;
-        m_dates << c[0].left(10); m_a << c[1].toDouble(); m_p << c[2].toDouble();
+        L.dates << c[0].left(10); L.a << c[1].toDouble(); L.p << c[2].toDouble();
       }
     }
     // the lines and their range depend on the data only: once here, not at every paint (the rolling hit rate is 30
     // operations a test row, for up to hundreds of thousands of rows)
-    const int n = int(m_a.size());
-    m_s1.clear(); m_s2.clear();
-    if (m_cls) {
+    const int n = int(L.a.size());
+    if (classification) {
       const int w = qMin(30, n);
-      for (int i = 0; i < n; ++i) {
-        int hit = 0, cnt = 0;
-        for (int k = qMax(0, i - w + 1); k <= i; ++k) { ++cnt; if (fmt::roundInt(m_a[k]) == fmt::roundInt(m_p[k])) ++hit; }
-        m_s1 << double(hit) / cnt;
+      int hit = 0;
+      for (int i = 0; i < n; ++i) {   // a sliding window: one in, one out
+        if (fmt::roundInt(L.a[i]) == fmt::roundInt(L.p[i])) ++hit;
+        if (i >= w && fmt::roundInt(L.a[i - w]) == fmt::roundInt(L.p[i - w])) --hit;
+        L.s1 << double(hit) / qMin(i + 1, w);
       }
-    } else { m_s1 = m_a; m_s2 = m_p; }
-    m_lo = INFINITY; m_hi = -INFINITY;
-    for (double v : m_s1) { m_lo = qMin(m_lo, v); m_hi = qMax(m_hi, v); }
-    for (double v : m_s2) { m_lo = qMin(m_lo, v); m_hi = qMax(m_hi, v); }
-    if (m_cls) { m_lo = 0; m_hi = 1; }
-    if (m_hi - m_lo < 1e-12) { m_hi += 1; m_lo -= 1; }
+    } else { L.s1 = L.a; L.s2 = L.p; }
+    L.lo = INFINITY; L.hi = -INFINITY;
+    for (double v : L.s1) { L.lo = qMin(L.lo, v); L.hi = qMax(L.hi, v); }
+    for (double v : L.s2) { L.lo = qMin(L.lo, v); L.hi = qMax(L.hi, v); }
+    if (classification) { L.lo = 0; L.hi = 1; }
+    if (L.hi - L.lo < 1e-12) { L.hi += 1; L.lo -= 1; }
+    if (most > 0 && n > most) {
+      const QVector<int> idx = thinIndex(n, most);
+      L.dates = pick(L.dates, idx); L.a = pick(L.a, idx); L.p = pick(L.p, idx); L.s1 = pick(L.s1, idx);
+      if (!L.s2.isEmpty()) L.s2 = pick(L.s2, idx);
+    }
+    return L;
+  }
+  void setLines(const Lines& L, bool classification, double baseline) {
+    m_dates = L.dates; m_a = L.a; m_p = L.p; m_s1 = L.s1; m_s2 = L.s2; m_lo = L.lo; m_hi = L.hi;
+    m_cls = classification; m_base = baseline;
     update();
   }
+  void setData(const QString& csv, bool classification, double baseline) { setLines(lines(csv, classification), classification, baseline); }
 protected:
   void paintEvent(QPaintEvent*) override {
-    QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
+    // compact (AI › Agents' panel): drawn once into a picture, shown again as is (the panel repaints it while sliding
+    // tiles and twice a second while a training runs; a map holds thousands of dots)
+    if (!compact) { QPainter p(this); draw(p); return; }
+    const qreal dpr = devicePixelRatioF();
+    if (m_cache.size() != size() * dpr || m_cacheRev != theme::revision()) {
+      m_cache = QPixmap(size() * dpr);
+      m_cache.setDevicePixelRatio(dpr);
+      m_cache.fill(Qt::transparent);
+      QPainter cp(&m_cache);
+      draw(cp);
+      m_cacheRev = theme::revision();
+    }
+    QPainter p(this);
+    p.drawPixmap(0, 0, m_cache);
+  }
+  void draw(QPainter& p) {
+    p.setRenderHint(QPainter::Antialiasing);
     const auto& c = theme::pal();
-    const QRectF r = QRectF(rect()).adjusted(44, 20, -8, -20);
+    const QRectF r = QRectF(rect()).adjusted(44, compact ? 6 : 20, -8, -20);
     p.setPen(QPen(c.border, 1)); p.drawRect(r);
     const int n = int(m_a.size());
     if (n < 2) return;
@@ -325,6 +486,7 @@ protected:
     p.drawText(QRectF(r.left(), r.bottom() + 3, 120, 14), Qt::AlignLeft, m_dates.first());
     p.drawText(QRectF(r.right() - 120, r.bottom() + 3, 120, 14), Qt::AlignRight, m_dates.last());
     auto line = [&](const QVector<double>& s, const QColor& col, qreal w) {
+      if (compact && s.size() > 2 * r.width()) { denseLine(p, int(s.size()), [&](int i) { return QPointF(X(i), Y(s[i])); }, col, w); return; }
       QPainterPath path; path.moveTo(X(0), Y(s[0]));
       for (int i = 1; i < s.size(); ++i) path.lineTo(X(i), Y(s[i]));
       p.setPen(QPen(col, w)); p.setBrush(Qt::NoBrush); p.drawPath(path);
@@ -332,17 +494,21 @@ protected:
     if (m_cls) {
       if (std::isfinite(m_base)) { p.setPen(QPen(c.textMute, 1, Qt::DashLine)); p.drawLine(QPointF(r.left(), Y(m_base)), QPointF(r.right(), Y(m_base))); }
       line(s1, c.accent, 1.5);
+      if (compact) return;
       p.setPen(c.textDim); p.setFont(theme::mono(9));
       p.drawText(QRectF(r.left(), 2, r.width(), 14), Qt::AlignRight,
                  QCoreApplication::translate("ai", "hit rate over the last 30 test rows  ·  dashed: no-skill rate"));
     } else {
       line(s1, c.textDim, 1.2);
       line(s2, c.accent, 1.4);
+      if (compact) return;
       p.setFont(theme::mono(9)); p.setPen(c.textDim);
       p.drawText(QRectF(r.left(), 2, r.width(), 14), Qt::AlignRight, QCoreApplication::translate("ai", "grey: actual  ·  amber: predicted"));
     }
   }
 private:
+  QPixmap m_cache;
+  int m_cacheRev = -1;
   QVector<double> m_a, m_p;
   QVector<double> m_s1, m_s2;   // the lines drawn (setData)
   double m_lo = 0, m_hi = 1;
@@ -354,10 +520,26 @@ private:
 // Each row's group along time: one thin slice per row (regimes read left to right). Anomaly runs: unusual rows in red.
 class RegimeStrip : public QWidget {
 public:
+  bool compact = false;   // AI › Agents' panel: drawn once into a picture
   explicit RegimeStrip(const Assign& a, bool anomaly, QWidget* p) : QWidget(p), m_a(a), m_anomaly(anomaly) { setFixedHeight(46); }
 protected:
   void paintEvent(QPaintEvent*) override {
+    // compact (AI › Agents' panel): drawn once into a picture, shown again as is (the panel repaints it while sliding
+    // tiles and twice a second while a training runs; a map holds thousands of dots)
+    if (!compact) { QPainter p(this); draw(p); return; }
+    const qreal dpr = devicePixelRatioF();
+    if (m_cache.size() != size() * dpr || m_cacheRev != theme::revision()) {
+      m_cache = QPixmap(size() * dpr);
+      m_cache.setDevicePixelRatio(dpr);
+      m_cache.fill(Qt::transparent);
+      QPainter cp(&m_cache);
+      draw(cp);
+      m_cacheRev = theme::revision();
+    }
     QPainter p(this);
+    p.drawPixmap(0, 0, m_cache);
+  }
+  void draw(QPainter& p) {
     const auto& c = theme::pal();
     const int n = int(m_a.label.size());
     if (n < 2) return;
@@ -374,6 +556,8 @@ protected:
     p.drawText(QRectF(width() - 140, r.bottom() + 3, 140, 14), Qt::AlignRight, m_a.dates.last());
   }
 private:
+  QPixmap m_cache;
+  int m_cacheRev = -1;
   Assign m_a;
   bool m_anomaly;
 };
@@ -382,6 +566,7 @@ private:
 class ScatterMap : public QWidget {
 public:
   enum Mode { Groups, Anomaly, Time };
+  bool compact = false;   // AI › Agents' activity panel: no caption, the plane takes the whole height
   ScatterMap(const Assign& a, Mode m, QWidget* p) : QWidget(p), m_a(a), m_mode(m) {
     setFixedHeight(280);
     // bounds from the 0.5–99.5 % quantiles: a few extreme rows sit on the edge instead of squeezing all the others
@@ -400,9 +585,25 @@ public:
   }
 protected:
   void paintEvent(QPaintEvent*) override {
-    QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
+    // compact (AI › Agents' panel): drawn once into a picture, shown again as is (the panel repaints it while sliding
+    // tiles and twice a second while a training runs; a map holds thousands of dots)
+    if (!compact) { QPainter p(this); draw(p); return; }
+    const qreal dpr = devicePixelRatioF();
+    if (m_cache.size() != size() * dpr || m_cacheRev != theme::revision()) {
+      m_cache = QPixmap(size() * dpr);
+      m_cache.setDevicePixelRatio(dpr);
+      m_cache.fill(Qt::transparent);
+      QPainter cp(&m_cache);
+      draw(cp);
+      m_cacheRev = theme::revision();
+    }
+    QPainter p(this);
+    p.drawPixmap(0, 0, m_cache);
+  }
+  void draw(QPainter& p) {
+    p.setRenderHint(QPainter::Antialiasing);
     const auto& c = theme::pal();
-    const QRectF r = QRectF(rect()).adjusted(4, 4, -4, -18);
+    const QRectF r = QRectF(rect()).adjusted(compact ? 0 : 4, compact ? 0 : 4, compact ? -1 : -4, compact ? -1 : -18);
     p.setPen(QPen(c.border, 1)); p.setBrush(Qt::NoBrush); p.drawRect(r);
     const int n = int(m_a.x.size());
     if (n < 2) return;
@@ -411,8 +612,10 @@ protected:
     auto P = [&](int i) { return QPointF(in.left() + in.width() * qBound(0.0, (m_a.x[i] - x0) / (x1 - x0), 1.0),
                                          in.bottom() - in.height() * qBound(0.0, (m_a.y[i] - y0) / (y1 - y0), 1.0)); };
     p.setPen(Qt::NoPen);
-    const int step = qMax(1, n / 8000);
+    const int step = qMax(1, n / (compact ? 3000 : 8000));   // small, 3000 dots show the same shapes
     // normal rows first, unusual ones on top
+    // compact: the dots in their order, each with its colour and size (stamped below)
+    QVector<QPair<QPointF, QPair<QRgb, int>>> dots;
     for (int pass = 0; pass < 2; ++pass)
       for (int i = 0; i < n; i += step) {
         const bool top = m_mode == Anomaly ? m_a.label[i] == 1 : m_a.label[i] < 0;
@@ -420,18 +623,57 @@ protected:
         QColor col = m_mode == Time ? theme::mix(c.textMute, c.accent, double(i) / (n - 1))
                    : m_mode == Anomaly ? (m_a.label[i] ? c.down : theme::alpha(c.textDim, 120)) : groupColor(m_a.label[i]);
         if (m_mode == Groups) col.setAlpha(170);
-        p.setBrush(col);
         const qreal rad = m_mode == Anomaly && m_a.label[i] ? 2.6 : 1.6;
+        if (compact) {   // small: the dots of one colour and size in one call (round points), not one ellipse each
+          if (m_mode == Time) col = theme::mix(c.textMute, c.accent, std::round(double(i) / (n - 1) * 24) / 24);
+          dots.append({P(i), qMakePair(col.rgba(), int(rad * 10))});
+          continue;
+        }
+        p.setBrush(col);
         p.drawEllipse(P(i), rad, rad);
       }
+    // one small round dot per colour and size, side by side in one picture, then every row stamped from it in one call,
+    // in the rows' order (antialiased round points one by one cost ~14 ms here; the stamps under 2)
+    if (!dots.isEmpty()) {
+      const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
+      QList<QPair<QRgb, int>> kinds;
+      for (const auto& d : dots) if (!kinds.contains(d.second)) kinds << d.second;
+      int side = 0;
+      for (const auto& k : kinds) side = std::max(side, int(std::ceil(2 * k.second / 10.0 + 2)));
+      QPixmap atlas(QSize(side * int(kinds.size()), side) * dpr);
+      atlas.setDevicePixelRatio(dpr);
+      atlas.fill(Qt::transparent);
+      {
+        QPainter ap(&atlas);
+        ap.setRenderHint(QPainter::Antialiasing);
+        ap.setPen(Qt::NoPen);
+        for (int k = 0; k < kinds.size(); ++k) {
+          ap.setBrush(QColor::fromRgba(kinds[k].first));
+          const qreal rad = kinds[k].second / 10.0;
+          ap.drawEllipse(QPointF(k * side + side / 2.0, side / 2.0), rad, rad);
+        }
+      }
+      QVector<QPainter::PixmapFragment> frags;
+      frags.reserve(dots.size());
+      for (const auto& d : dots) {
+        const int k = int(kinds.indexOf(d.second));
+        // the source is in the atlas' pixels; scaled by 1 / dpr it lands at the dot's own size
+        frags << QPainter::PixmapFragment::create(d.first, QRectF(k * side * dpr, 0, side * dpr, side * dpr), 1.0 / dpr, 1.0 / dpr);
+      }
+      p.drawPixmapFragments(frags.constData(), int(frags.size()), atlas);
+    }
+    p.setPen(Qt::NoPen);
     // the latest row, ringed
     p.setBrush(Qt::NoBrush); p.setPen(QPen(c.text, 1.4)); p.drawEllipse(P(n - 1), 5, 5);
+    if (compact) return;
     p.setFont(theme::mono(9)); p.setPen(c.textMute);
     p.drawText(QRectF(r.left(), r.bottom() + 3, r.width(), 14), Qt::AlignLeft,
                m_mode == Time ? QCoreApplication::translate("ai", "colour: from the oldest rows (grey) to the latest (amber)  ·  ring: latest row")
                               : QCoreApplication::translate("ai", "each dot is a row  ·  ring: latest row"));
   }
 private:
+  QPixmap m_cache;
+  int m_cacheRev = -1;
   Assign m_a;
   Mode m_mode;
   double m_x0 = 0, m_x1 = 1, m_y0 = 0, m_y1 = 1;   // the plane's bounds (constructor)
@@ -513,23 +755,49 @@ private:
 // Reinforcement, test period: the agent's equity (amber) against buy & hold (grey), positions in a strip below.
 class EquityChart : public QWidget {
 public:
-  EquityChart(const QString& csv, QWidget* p) : QWidget(p) {
+  bool compact = false;   // AI › Agents' activity panel: no caption (the panel writes it)
+  struct Rows { QStringList d; QVector<double> pos, a, b; };
+  // equity.csv; most > 0 keeps that many rows at most (AI › Agents' panel, read off the window's thread)
+  static Rows read(const QString& csv, int most = 0) {
+    Rows R;
     QFile f(csv);
     if (f.open(QIODevice::ReadOnly)) {
       QTextStream in(&f); in.readLine();
       while (!in.atEnd()) {
         const QStringList c = in.readLine().split(',');
         if (c.size() < 5) continue;
-        m_d << c[0].left(10); m_pos << c[2].toDouble(); m_a << c[3].toDouble(); m_b << c[4].toDouble();
+        R.d << c[0].left(10); R.pos << c[2].toDouble(); R.a << c[3].toDouble(); R.b << c[4].toDouble();
       }
     }
-    setFixedHeight(200);
+    if (most > 0 && R.a.size() > most) {
+      const QVector<int> idx = thinIndex(int(R.a.size()), most);
+      R.d = pick(R.d, idx); R.pos = pick(R.pos, idx); R.a = pick(R.a, idx); R.b = pick(R.b, idx);
+    }
+    return R;
   }
+  EquityChart(const QString& csv, QWidget* p) : EquityChart(read(csv), p) {}
+  EquityChart(const Rows& R, QWidget* p) : QWidget(p), m_d(R.d), m_pos(R.pos), m_a(R.a), m_b(R.b) { setFixedHeight(200); }
 protected:
   void paintEvent(QPaintEvent*) override {
-    QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
+    // compact (AI › Agents' panel): drawn once into a picture, shown again as is (the panel repaints it while sliding
+    // tiles and twice a second while a training runs; a map holds thousands of dots)
+    if (!compact) { QPainter p(this); draw(p); return; }
+    const qreal dpr = devicePixelRatioF();
+    if (m_cache.size() != size() * dpr || m_cacheRev != theme::revision()) {
+      m_cache = QPixmap(size() * dpr);
+      m_cache.setDevicePixelRatio(dpr);
+      m_cache.fill(Qt::transparent);
+      QPainter cp(&m_cache);
+      draw(cp);
+      m_cacheRev = theme::revision();
+    }
+    QPainter p(this);
+    p.drawPixmap(0, 0, m_cache);
+  }
+  void draw(QPainter& p) {
+    p.setRenderHint(QPainter::Antialiasing);
     const auto& c = theme::pal();
-    const QRectF r = QRectF(rect()).adjusted(46, 18, -8, -40);
+    const QRectF r = QRectF(rect()).adjusted(46, compact ? 6 : 18, -8, -40);
     p.setPen(QPen(c.border, 1)); p.drawRect(r);
     const int n = int(m_a.size());
     if (n < 2) return;
@@ -540,6 +808,7 @@ protected:
     auto Y = [&](double v) { return r.bottom() - r.height() * (v - lo) / (hi - lo); };
     p.setPen(QPen(c.textMute, 1, Qt::DashLine)); p.drawLine(QPointF(r.left(), Y(1)), QPointF(r.right(), Y(1)));
     auto line = [&](const QVector<double>& s, const QColor& col, qreal w) {
+      if (compact && n > 2 * r.width()) { denseLine(p, n, [&](int i) { return QPointF(X(i), Y(s[i])); }, col, w); return; }
       QPainterPath path; path.moveTo(X(0), Y(s[0]));
       for (int i = 1; i < n; ++i) path.lineTo(X(i), Y(s[i]));
       p.setPen(QPen(col, w)); p.setBrush(Qt::NoBrush); p.drawPath(path);
@@ -558,10 +827,13 @@ protected:
     }
     p.drawText(QRectF(r.left(), strip.bottom() + 3, 120, 14), Qt::AlignLeft, m_d.first());
     p.drawText(QRectF(r.right() - 120, strip.bottom() + 3, 120, 14), Qt::AlignRight, m_d.last());
+    if (compact) return;
     p.drawText(QRectF(r.left(), 1, r.width(), 14), Qt::AlignRight,
                QCoreApplication::translate("ai", "amber: agent  ·  grey: buy & hold  ·  strip: long (green), short (red), flat (empty)"));
   }
 private:
+  QPixmap m_cache;
+  int m_cacheRev = -1;
   QStringList m_d;
   QVector<double> m_pos, m_a, m_b;
 };
@@ -658,11 +930,15 @@ public:
     setStyleSheet(formQss());
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(16, 12, 16, 12); root->setSpacing(10);
+    m_root = root;
 
     // header + environment
     auto* head = new QHBoxLayout; head->setSpacing(12);
-    head->addWidget(text("ML", theme::title(), c.accentText, this));
-    head->addWidget(fit::label(QCoreApplication::translate("ai", "machine learning on Deepwater's data or your own files"), theme::mono(11), c.textDim, this));
+    m_head = head;
+    m_mlTitle = text("ML", theme::title(), c.accentText, this);
+    head->addWidget(m_mlTitle);
+    m_mlDesc = fit::label(QCoreApplication::translate("ai", "machine learning on Deepwater's data or your own files"), theme::mono(11), c.textDim, this);
+    head->addWidget(m_mlDesc);
     head->addStretch(1);
     m_env = text(QString(), theme::mono(10), c.textDim, this);
     m_env->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -696,8 +972,9 @@ public:
 
     // families
     auto* famRow = new QHBoxLayout; famRow->setSpacing(14);
-    m_family = new ui::PillBar({QCoreApplication::translate("ai", "SUPERVISED"), QCoreApplication::translate("ai", "UNSUPERVISED"), QCoreApplication::translate("ai", "SEMI-SUPERVISED"), QCoreApplication::translate("ai", "SELF-SUPERVISED"), QCoreApplication::translate("ai", "REINFORCEMENT")},
-                               this, ui::PillBar::Boxed);
+    m_famRow = famRow;
+    m_familyNames = {QCoreApplication::translate("ai", "SUPERVISED"), QCoreApplication::translate("ai", "UNSUPERVISED"), QCoreApplication::translate("ai", "SEMI-SUPERVISED"), QCoreApplication::translate("ai", "SELF-SUPERVISED"), QCoreApplication::translate("ai", "REINFORCEMENT")};
+    m_family = new ui::PillBar(m_familyNames, this, ui::PillBar::Boxed);
     famRow->addWidget(m_family);
     m_familyDesc = text(QString(), theme::sans(12), c.textDim, this, true);
     famRow->addWidget(m_familyDesc, 1);
@@ -714,7 +991,7 @@ public:
 
     const int fam = qBound(0, qEnvironmentVariableIsSet("DW_ML_FAMILY") ? qEnvironmentVariableIntValue("DW_ML_FAMILY")
                                                                         : settings::value("ml.family", 0).toInt(), 4);
-    connect(m_family, &ui::PillBar::changed, this, [this](int i) { settings::setValue("ml.family", i); syncFamily(); });
+    connect(m_family, &ui::PillBar::changed, this, [this](int i) { settings::setValue("ml.family", i); syncFamily(); showFamilyPill(); });
     m_family->setCurrent(fam);
     syncFamily();
 
@@ -730,12 +1007,12 @@ public:
     // the result panel is rebuilt (its CSV files read again: up to a million rows) only when what it shows changed: any
     // run starting or ending, or a progress line of another run, used to rebuild the selected run's finished result
     connect(&runs, &ml::Runs::listChanged, this, [this] {
-      rebuildRuns(); syncTrain();
-      if (runSignature(m_runList->selected()) != m_shownRun) showRun(m_runList->selected());
+      rebuildRuns(); syncTrain(); syncCompare();
+      if (!m_comparing && runSignature(m_runList->selected()) != m_shownRun) showRun(m_runList->selected());
     });
     connect(&runs, &ml::Runs::runChanged, this, [this](const QString& id) {
       m_runList->update();
-      if (id == m_runList->selected() && runSignature(id) != m_shownRun) showRun(id);
+      if (!m_comparing && id == m_runList->selected() && runSignature(id) != m_shownRun) showRun(id);
       syncTrain();
     });
     syncEnv();
@@ -751,6 +1028,8 @@ protected:
   // probes again by itself. While there is no environment yet, a show looks again at most once a minute (a Python the
   // user has just installed).
   void showEvent(QShowEvent*) override {
+    if (!m_headH) m_headH = m_head->sizeHint().height();   // see unnarrow()
+    applyMode(modeFor(size()));
     auto& env = ml::Environment::instance();
     if (env.installing()) return;
     const auto& s = env.status();
@@ -760,6 +1039,12 @@ protected:
     env.refresh();
   }
   QElapsedTimer m_lastProbe;
+  bool eventFilter(QObject* o, QEvent* e) override {
+    if (o == m_famScroll && e->type() == QEvent::Resize) showFamilyPill();
+    return QWidget::eventFilter(o, e);
+  }
+  // the layout follows the page's own size once shown (before, the page may still have a default size)
+  void resizeEvent(QResizeEvent* e) override { QWidget::resizeEvent(e); if (isVisible()) applyMode(modeFor(e->size())); }
 
 private:
   // A panel's content in a vertical scroll area filling its body: the panel keeps its look when there is room and
@@ -787,6 +1072,7 @@ private:
     auto* data = new ui::Panel(QCoreApplication::translate("ai", "Data"), host);
     // its content scrolls when the window is short (1024x600); the variables list takes the spare height otherwise
     auto* dl = scrollBody(data);
+    m_dataPanel = data; m_dataBody = dl;
     m_source = new ui::PillBar({QCoreApplication::translate("ai", "PRICES"), "MACRO", "COT", "CSV", QCoreApplication::translate("ai", "TECHNICAL DATA")}, data,
                                ui::PillBar::Underline);
     dl->addWidget(m_source);
@@ -802,12 +1088,20 @@ private:
     m_marketTf = new ui::PillBar(tfs, data, ui::PillBar::Boxed);
     m_marketTf->setCurrent(qBound(0, settings::value("ml.marketTf", 3).toInt(), int(tfs.size()) - 1));
     auto* pick2 = new QHBoxLayout; pick2->setSpacing(8);   // a second row: the timeframes and the rows do not fit beside the market
+    m_pick2 = pick2;
     pick2->addWidget(m_marketTf);
     m_marketRows = new QComboBox(data);
     for (int n : {50000, 200000, 500000, 1000000})
       m_marketRows->addItem(QCoreApplication::translate("ai", "last %1 bars").arg(QLocale(QLocale::English).toString(n)), n);
     m_marketRows->setCurrentIndex(qMax(0, m_marketRows->findData(settings::value("ml.marketRows", ml::TECHNICAL_DATA_ROWS_DEFAULT).toInt())));
     pick2->addWidget(m_marketRows);
+    // the order flow's columns and only the bars they cover (Data › Technical data: footprint, book depth, open interest)
+    m_orderFlow = new QCheckBox(QCoreApplication::translate("ai", "order flow"), data);
+    m_orderFlow->setToolTip(QCoreApplication::translate("ai", "Adds the columns of what the pair records besides its bars (footprint per bar, the perpetual's "
+                                                              "book depth and open interest) and keeps only the bars they cover, so a model "
+                                                              "on the bar columns alone and one with these are trained on the same rows."));
+    m_orderFlow->setChecked(settings::value("ml.orderFlow", false).toBool());
+    pick2->addWidget(m_orderFlow);
     pick2->addStretch(1);
     m_choose = button(QCoreApplication::translate("ai", "CHOOSE FILE…"), false, data);
     pick->addWidget(m_choose);
@@ -841,6 +1135,7 @@ private:
     fh->addWidget(micro(QCoreApplication::translate("ai", "FEATURES: WHAT IT LEARNS FROM"), data), 1);
     auto* all = button(QCoreApplication::translate("ai", "ALL"), false, data), *none = button(QCoreApplication::translate("ai", "NONE"), false, data);
     fh->addWidget(all); fh->addWidget(none);
+    m_allBtn = all; m_noneBtn = none;
     dl->addLayout(fh);
     m_features = new QListWidget(data);
     m_features->setMinimumHeight(96);
@@ -861,11 +1156,13 @@ private:
 
     // MODEL
     auto* model = new ui::Panel(QCoreApplication::translate("ai", "Model"), host);
+    m_modelPanel = model;
     auto* mb = scrollBody(model);   // everything above the TRAIN button scrolls when the window is short
     mb->addWidget(micro(QCoreApplication::translate("ai", "ALGORITHM"), model));
     m_algo = new QListWidget(model);
     fillAlgos(0);
     m_algo->setFixedHeight(int(qMax(algosFor(0).size(), algosFor(1).size())) * qMax(22, m_algo->sizeHintForRow(0)) + 6);
+    m_algoH = m_algo->height();   // put back when the page is wide again (phones give the rows a finger's height)
     m_algo->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     mb->addWidget(m_algo);
     m_algoDesc = text(QString(), theme::sans(11), c.textDim, model, true);
@@ -879,14 +1176,26 @@ private:
     m_supOnly << micro(QCoreApplication::translate("ai", "VALIDATION"), model);
     mb->addWidget(m_supOnly.last());
     auto* vg = new QGridLayout; vg->setHorizontalSpacing(10); vg->setVerticalSpacing(6);
+    m_valGrid = vg;
     m_test = new QSpinBox(model); m_test->setRange(5, 50); m_test->setValue(20); m_test->setSuffix(" %");
     m_folds = new QSpinBox(model); m_folds->setRange(0, 10); m_folds->setValue(3);
     m_task = new QComboBox(model);
     m_task->addItem(QCoreApplication::translate("ai", "automatic"), "auto"); m_task->addItem(QCoreApplication::translate("ai", "classification"), "classification"); m_task->addItem(QCoreApplication::translate("ai", "regression"), "regression");
+    // how the test part is predicted: one model trained once before it, or retrained before each block of it
+    // (walk-forward, the rows whose target reaches into the block left out), as a model in use would be
+    m_validation = new QComboBox(model);
+    m_validation->addItem(QCoreApplication::translate("ai", "one cut: trained once"), 0);
+    m_validation->addItem(QCoreApplication::translate("ai", "walk-forward: retrained 5 times"), 5);
+    m_validation->addItem(QCoreApplication::translate("ai", "walk-forward: retrained 10 times"), 10);
+    m_validation->setToolTip(QCoreApplication::translate("ai", "Walk-forward cuts the test part into blocks and predicts each one with a model trained "
+                                                               "afresh on everything before it, leaving out the rows whose target reaches into the block. "
+                                                               "It is how a model retrained regularly would have done; the test rows are the same as with one cut."));
     m_supOnly << text(QCoreApplication::translate("ai", "Test part (latest rows)"), theme::sans(11), c.textDim, model, true) << m_test
               << text(QCoreApplication::translate("ai", "Time-series CV folds (0 = none)"), theme::sans(11), c.textDim, model, true) << m_folds
-              << text(QCoreApplication::translate("ai", "Task"), theme::sans(11), c.textDim, model) << m_task;
-    for (int k = 0; k < 6; ++k) vg->addWidget(m_supOnly[1 + k], k / 2, k % 2);
+              << text(QCoreApplication::translate("ai", "Task"), theme::sans(11), c.textDim, model) << m_task
+              << text(QCoreApplication::translate("ai", "Test part predicted by"), theme::sans(11), c.textDim, model, true) << m_validation;
+    for (int k = 0; k < 8; ++k) vg->addWidget(m_supOnly[1 + k], k / 2, k % 2);
+    connect(m_validation, &QComboBox::currentIndexChanged, this, [this] { m_folds->setEnabled(m_validation->currentData().toInt() == 0); });
     vg->setColumnStretch(0, 1);
     mb->addLayout(vg);
     mb->addSpacing(4);
@@ -908,8 +1217,11 @@ private:
 
     // RUNS
     auto* runs = new ui::Panel(QCoreApplication::translate("ai", "Runs"), host);
+    m_runsPanel = runs;
     m_delete = button(QCoreApplication::translate("ai", "DELETE"), false, runs);
     m_folder = button(QCoreApplication::translate("ai", "FOLDER"), false, runs);
+    m_compare = button(QCoreApplication::translate("ai", "COMPARE"), false, runs);
+    runs->headerRight()->addWidget(m_compare);
     runs->headerRight()->addWidget(m_folder);
     runs->headerRight()->addWidget(m_delete);
     m_runList = new RunList(runs);
@@ -919,6 +1231,7 @@ private:
     auto* resHost = new QWidget(runs);
     m_result = new QVBoxLayout(resHost); m_result->setContentsMargins(0, 6, 6, 0); m_result->setSpacing(6);
     auto* res = new QScrollArea(runs); res->setWidgetResizable(true); res->setFrameShape(QFrame::NoFrame); res->setWidget(resHost);
+    m_resScroll = res;
     res->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);   // everything wraps to the column's width
     runs->body()->addWidget(res, 1);
     body->addWidget(runs, 6);
@@ -929,6 +1242,7 @@ private:
     connect(m_source, &ui::PillBar::changed, this, [this] { fillKeys(); if (m_source->current() != 3) loadData(); else setDataset(ml::Dataset{}); });
     connect(m_marketTf, &ui::PillBar::changed, this, [this](int i) { settings::setValue("ml.marketTf", i); loadData(); });
     connect(m_marketRows, &QComboBox::currentIndexChanged, this, [this] { settings::setValue("ml.marketRows", m_marketRows->currentData().toInt()); loadData(); });
+    connect(m_orderFlow, &QCheckBox::toggled, this, [this](bool on) { settings::setValue("ml.orderFlow", on); loadData(); });
     connect(m_key, &QComboBox::currentIndexChanged, this, [this] { loadData(); });
     connect(m_interval, &ui::PillBar::changed, this, [this] { loadData(); });
     connect(m_choose, &QPushButton::clicked, this, [this] {
@@ -954,6 +1268,9 @@ private:
       if (ml::Runs::instance().running()) ml::Runs::instance().stop(); else train();
     });
     m_runList->picked = [this](const QString& id) { showRun(id); };
+    m_runList->ticksChanged = [this] { syncCompare(); };
+    connect(m_compare, &QPushButton::clicked, this, [this] { compare(); });
+    syncCompare();
     connect(m_delete, &QPushButton::clicked, this, [this] {
       const QString id = m_runList->selected();
       const ml::Run* r = ml::Runs::instance().find(id);
@@ -976,7 +1293,9 @@ private:
 
   void rebuildRuns() {
     m_runList->rebuild();
-    m_runScroll->setFixedHeight(qBound(52, int(ml::Runs::instance().list().size()) * 50 + 4, 4 * 50 + 4));
+    if (m_mode == Short) { m_runScroll->setMinimumHeight(0); m_runScroll->setMaximumHeight(QWIDGETSIZE_MAX); return; }   // beside the result: full height
+    const int most = m_mode == Phone ? 3 : 4;   // phones: more of the height left to the result
+    m_runScroll->setFixedHeight(qBound(52, int(ml::Runs::instance().list().size()) * 50 + 4, most * 50 + 4));
   }
 
   // ---------------------------------------------------------------- environment
@@ -1045,6 +1364,13 @@ private:
     m_algo->blockSignals(false);
     m_algo->setCurrentRow(fam == 0 ? 2 : 0);   // gradient boosting / k-means
     m_algoFamily = fam;
+    fitAlgoHeight();
+  }
+  // Phones: the algorithm list as tall as the family's own algorithms (three for reinforcement, nine for clustering), not
+  // the tallest family's: no empty box above the parameters.
+  void fitAlgoHeight() {
+    if (m_mode == Desktop || !m_algo) return;
+    m_algo->setFixedHeight(m_algo->count() * qMax(kTouch, m_algo->sizeHintForRow(0)) + 6);
   }
   void applyFamily(int fam) {
     if (fam != m_algoFamily) { fillAlgos(fam); syncEnv(); }
@@ -1107,6 +1433,7 @@ private:
     m_interval->setVisible(s == 0);
     m_marketTf->setVisible(s == 4);
     m_marketRows->setVisible(s == 4);
+    m_orderFlow->setVisible(s == 4);
     m_choose->setVisible(s == 3);
     m_load->setVisible(s != 3);
   }
@@ -1118,6 +1445,7 @@ private:
     spec.key = m_key->currentData().toString();
     spec.interval = s == 4 ? technicaldata::timeframes().value(m_marketTf->current()).name : QStringList{"1d", "1wk", "1h"}.value(m_interval->current(), "1d");
     if (s == 4) spec.rows = m_marketRows->currentData().toInt();
+    if (s == 4) spec.orderFlow = m_orderFlow->isChecked();
     if (spec.key.isEmpty()) return;
     const QString want = selectionKey();
     setDataset(ml::Dataset{});        // the previous data set is gone: TRAIN waits for this one
@@ -1143,7 +1471,8 @@ private:
   QString selectionKey() const {
     const int s = m_source->current();
     return QString::number(s) + "|" + m_key->currentData().toString() + (s == 0 ? "|" + QStringList{"1d", "1wk", "1h"}.value(m_interval->current()) : QString()) +
-           (s == 4 ? "|" + QString::number(m_marketTf->current()) + "|" + m_marketRows->currentData().toString() : QString());
+           (s == 4 ? "|" + QString::number(m_marketTf->current()) + "|" + m_marketRows->currentData().toString() +
+                         (m_orderFlow->isChecked() ? "|of" : "") : QString());
   }
 
   void setDataset(const ml::Dataset& d) {
@@ -1209,6 +1538,55 @@ private:
       it->setToolTip(answer ? QCoreApplication::translate("ai", "The target itself: left out, the model would read the answer.") : QString());
     }
   }
+  // The test predictions traded after costs (train.py trading_eval, 2026-11-20): money, not only accuracy. Supervised and
+  // semi-supervised runs (result "trading"), self-supervised probes (probe "trading").
+  void addTrading(const QJsonObject& trd, QWidget* host) {
+    const auto& c = theme::pal();
+    if (trd.isEmpty()) return;
+    {
+      m_result->addSpacing(6);
+      m_result->addWidget(micro(QCoreApplication::translate("ai", "TRADED AFTER COSTS (TEST ROWS)"), host));
+      auto* tg = new QGridLayout; tg->setHorizontalSpacing(16); tg->setVerticalSpacing(3);
+      const QStringList th{QString(), QCoreApplication::translate("ai", "NET"), QCoreApplication::translate("ai", "SHARPE"),
+                           QCoreApplication::translate("ai", "MAX DRAWDOWN"), QCoreApplication::translate("ai", "TRADES")};
+      for (int k = 0; k < th.size(); ++k) tg->addWidget(micro(th[k], host), 0, k, k ? Qt::AlignRight : Qt::AlignLeft);
+      const QJsonObject mo = trd.value("model").toObject();
+      const QList<QPair<QString, QJsonObject>> lines{
+          {QCoreApplication::translate("ai", "Model, after costs"), mo.value("x1").toObject()},
+          {QCoreApplication::translate("ai", "Model, before costs"), mo.value("x0").toObject()},
+          {QCoreApplication::translate("ai", "Model, costs × 2"), mo.value("x2").toObject()},
+          {QCoreApplication::translate("ai", "Model, costs × 3"), mo.value("x3").toObject()},
+          {QCoreApplication::translate("ai", "Buy & hold"), trd.value("buy_hold").toObject()},
+          {QCoreApplication::translate("ai", "Trend (20-row average)"), trd.value("trend").toObject()},
+          {QCoreApplication::translate("ai", "Constant exposure"), trd.value("constant").toObject()}};
+      int tr = 1;
+      for (const auto& [label, o] : lines) {
+        const double net = jnum(o.value("total_return"));
+        const QColor nc = !std::isfinite(net) ? c.textMute : net >= 0 ? c.up : c.down;
+        tg->addWidget(text(label, theme::sans(11), tr == 1 ? c.text : c.textDim, host), tr, 0);
+        tg->addWidget(text((net >= 0 ? "+" : "") + pct(net, 2), theme::mono(11, tr == 1 ? QFont::Bold : QFont::Normal), nc, host), tr, 1, Qt::AlignRight);
+        tg->addWidget(text(fixed(jnum(o.value("sharpe")), 2), theme::mono(11), c.textDim, host), tr, 2, Qt::AlignRight);
+        tg->addWidget(text(pct(-jnum(o.value("max_drawdown"))), theme::mono(11), c.textDim, host), tr, 3, Qt::AlignRight);
+        tg->addWidget(text(QString::number(o.value("trades").toInt()), theme::mono(11), c.textDim, host), tr, 4, Qt::AlignRight);
+        ++tr;
+      }
+      tg->setColumnStretch(0, 1);
+      m_result->addLayout(tg);
+      const QJsonObject vc = trd.value("vs_constant").toObject();
+      const double p = jnum(vc.value("p")), pw = jnum(vc.value("p_worse"));
+      m_result->addWidget(text(QCoreApplication::translate("ai", "%1, %2 bp a side; in the market %3 of the time. Constant exposure: that share held all along. Against it: %4 bp a row after costs, p %5: %6")
+                                   .arg(trd.value("side").toString() == "long_short" ? QCoreApplication::translate("ai", "Long when the model says up, short otherwise")
+                                                                                     : QCoreApplication::translate("ai", "Long when the model says up, flat otherwise"))
+                                   .arg(jnum(trd.value("cost_bp")), 0, 'f', 1)
+                                   .arg(pct(jnum(mo.value("x1").toObject().value("exposure")), 0))
+                                   .arg(fixed(jnum(vc.value("mean_diff_bp")), 2), fixed(p, 3),
+                                        p < 0.05 ? QCoreApplication::translate("ai", "the timing earns more than simply being in the market that much.")
+                                        : pw < 0.05 ? QCoreApplication::translate("ai", "the timing loses against simply being in the market that much, and not by chance.")
+                                                    : QCoreApplication::translate("ai", "the timing is not distinguishable from simply being in the market that much.")),
+                               theme::sans(11), c.textMute, host, true));
+    }
+  }
+
   void syncTargetHint() {
     syncTargetFeature();
     const QString tr = m_transform->currentData().toString(), col = m_target->currentData().toString();
@@ -1243,6 +1621,10 @@ private:
     else if (tr == "raw" && h == 0) t = QCoreApplication::translate("ai", "Predicts %1 of the same row from the other columns (no look ahead: for tables that are not time series).").arg(col);
     else if (tr == "raw") t = QCoreApplication::translate("ai", "Predicts the value of %1, %2 row(s) later.").arg(col).arg(h);
     else if (tr == "direction") t = QCoreApplication::translate("ai", "Predicts whether %1 is higher %2 row(s) later (1) or not (0): a classification.").arg(col).arg(h);
+    else if (tr == "realized_vol") t = QCoreApplication::translate("ai", "Predicts how much %1 will move over the next %2 row(s) (realized volatility, %), whatever the direction. Judged against HAR and EWMA, the two simple volatility models it must beat.").arg(col).arg(h);
+    else if (tr == "range") t = QCoreApplication::translate("ai", "Predicts the range (highest high − lowest low) of the next %2 row(s), in % of %1. Judged against HAR and EWMA.").arg(col).arg(h);
+    else if (tr == "abs_return") t = QCoreApplication::translate("ai", "Predicts the size of the move of %1 over the next %2 row(s), up or down (%). Judged against HAR and EWMA.").arg(col).arg(h);
+    else if (tr == "big_move") t = QCoreApplication::translate("ai", "Predicts whether %1 moves far within the next %2 row(s) (1) or not (0): beyond the 80th percentile of the training rows' moves. Judged against HAR and EWMA.").arg(col).arg(h);
     else t = QCoreApplication::translate("ai", "Predicts how much %1 moves over the next %2 row(s).").arg(col).arg(h);
     if (tr != "raw" && h == 0) t = QCoreApplication::translate("ai", "A change or a direction needs at least 1 row ahead.");
     if (family() == 2 && !col.isEmpty() && tr != "direction")
@@ -1267,6 +1649,7 @@ private:
       else if (p.type == 'c') { auto* cb = new QComboBox(m_paramsHost); cb->addItems(p.options); cb->setCurrentText(p.text); w = cb; }
       else { auto* e = new QLineEdit(p.text, m_paramsHost); w = e; }
       w->setMinimumWidth(110);
+      if (m_mode != Desktop) w->setMinimumHeight(kTouch);
       m_params->addWidget(w, r, 1);
       m_paramEdits.insert(p.key, w);
       ++r;
@@ -1335,6 +1718,11 @@ private:
                     {"algorithm", a.id}, {"params", params()}, {"test_size", m_test->value() / 100.0}, {"cv_folds", m_folds->value()},
                     {"task", m_task->currentData().toString()}, {"seed", 42}};
     if (!m_data.dateColumn.isEmpty()) job["date_column"] = m_data.dateColumn;
+    if (family() == 0 && m_validation->currentData().toInt() > 0) {
+      job["validation"] = "walk_forward";
+      job["wf_folds"] = m_validation->currentData().toInt();
+      job["cv_folds"] = 0;
+    }
     QString name = m_name->text().trimmed();
     if (name.isEmpty())
       name = a.name + " · " + m_data.title + (target.isEmpty() ? QString()
@@ -1345,6 +1733,7 @@ private:
     m_runList->select(id);
     showRun(id);
     syncTrain();
+    if (m_section && m_mode != Desktop) m_section->setCurrent(2, true);   // one column at a time: show the training going
   }
 
   // ---------------------------------------------------------------- results
@@ -1355,12 +1744,117 @@ private:
     return QStringList{id, QString::number(int(r->state)), r->stage, QString::number(r->pct), r->error, r->name,
                        QString::number(r->result.size())}.join('|');
   }
-  void showRun(const QString& id) {
-    m_shownRun = runSignature(id);
+  void clearResult() {
+    m_reportShown = false;
     while (auto* it = m_result->takeAt(0)) {
       if (it->widget()) it->widget()->deleteLater();
       else if (it->layout()) { while (auto* s = it->layout()->takeAt(0)) { if (s->widget()) s->widget()->deleteLater(); delete s; } }
       delete it;
+    }
+  }
+  // COMPARE: n ticked (two or more) → those; none ticked → the selected run and the runs like it (the same question on the
+  // same market, the same setup on other markets)
+  void syncCompare() {
+    if (!m_compare) return;
+    const int n = int(m_runList->ticked().size());
+    m_compare->setText(n ? QCoreApplication::translate("ai", "COMPARE (%1)").arg(n) : QCoreApplication::translate("ai", "COMPARE"));
+    m_compare->setEnabled(n != 1);
+    m_compare->setToolTip(n >= 2 ? QCoreApplication::translate("ai", "Compare the ticked trainings")
+                        : n == 1 ? QCoreApplication::translate("ai", "Tick at least one more training")
+                                 : QCoreApplication::translate("ai", "Compare the selected training with the ones like it: the same question on the same market, "
+                                                                     "the same setup on other markets. Tick trainings to choose them yourself."));
+  }
+  void compare() {
+    QStringList ids = m_runList->ticked();
+    const bool similar = ids.isEmpty();
+    if (similar) ids = ml::comparison::similarTo(m_runList->selected());
+    const auto& c = theme::pal();
+    QWidget* host = m_result->parentWidget();
+    if (ids.size() < 2) {
+      ++m_compareSeq;
+      clearResult();
+      m_comparing = true;
+      const ml::Run* r = ml::Runs::instance().find(m_runList->selected());
+      m_result->addWidget(text(!r ? QCoreApplication::translate("ai", "Select a training, or tick the ones to compare.")
+                               : r->state != ml::RunState::Done ? QCoreApplication::translate("ai", "This training has no result to compare.")
+                               : QCoreApplication::translate("ai", "No other training like this one: the same question on the same market, or the same setup on another market. "
+                                                                   "Tick trainings to compare them anyway."),
+                               theme::sans(12), c.textDim, host, true));
+      m_result->addStretch(1);
+      return;
+    }
+    QList<const ml::Run*> chosen;
+    for (const QString& id : ids) if (const ml::Run* r = ml::Runs::instance().find(id)) chosen << r;
+    const ml::comparison::Input in = ml::comparison::gather(chosen);
+    ++m_compareSeq;
+    clearResult();
+    m_comparing = true;
+    m_shownRun.clear();
+    if (in.items.size() < 2) {
+      m_result->addWidget(text(QCoreApplication::translate("ai", "%1 finished training(s) among these: at least two are needed.").arg(in.items.size()),
+                               theme::sans(12), c.textDim, host, true));
+      m_result->addStretch(1);
+      return;
+    }
+    m_result->addWidget(text(QCoreApplication::translate("ai", "Comparing %1 trainings…").arg(in.items.size()), theme::mono(11), c.textDim, host));
+    m_result->addStretch(1);
+    // prediction files of tens of thousands of rows, a thousand resamples each: off the window's thread
+    const int seq = m_compareSeq;
+    auto* w = new QFutureWatcher<ml::comparison::Report>(this);
+    connect(w, &QFutureWatcher<ml::comparison::Report>::finished, this, [this, w, seq] {
+      w->deleteLater();
+      if (seq != m_compareSeq) return;   // another run or comparison shown since
+      m_report = std::make_shared<ml::comparison::Report>(w->result());
+      showReport();
+    });
+    w->setFuture(QtConcurrent::run([in] { return ml::comparison::build(in); }));
+  }
+  // the last comparison, drawn again (BACK TO THE COMPARISON after opening one of its runs): no files read again
+  void showReport() {
+    if (!m_report) return;
+    ++m_compareSeq;
+    clearResult();
+    m_comparing = true;
+    m_shownRun.clear();
+    CompareViewHooks hooks;
+    hooks.question = [](const ml::Run& r) { return runQuestion(r); };
+    hooks.algorithm = [](const QString& id) { const Algo a = algoById(id); return a.id.isEmpty() ? id : a.name; };
+    hooks.compact = m_mode != Desktop;   // tables too narrow for one line take two lines a row
+    hooks.open = [this](const QString& id) {
+      m_runList->select(id);
+      const auto& l = ml::Runs::instance().list();
+      for (int i = 0; i < l.size(); ++i) if (l[i].id == id) m_runScroll->ensureVisible(0, i * 50 + 25, 0, 30);
+      m_fromReport = true;
+      showRun(id);
+    };
+    addComparison(m_result, m_result->parentWidget(), *m_report, hooks);
+    m_result->addStretch(1);
+    m_reportShown = true;
+    m_resScroll->verticalScrollBar()->setValue(0);
+    if (qEnvironmentVariableIsSet("DW_ML_COMPARE_SCROLL"))   // test hook: screenshots of a long report's lower parts
+      QTimer::singleShot(300, this, [this] { m_resScroll->verticalScrollBar()->setValue(qEnvironmentVariableIntValue("DW_ML_COMPARE_SCROLL")); });
+    static bool opened = false;   // DW_ML_COMPARE_OPEN=1: once, a click on the first table's first row (then BACK must show)
+    if (!opened && qEnvironmentVariableIsSet("DW_ML_COMPARE_OPEN") && !m_report->groups.isEmpty() && !m_report->groups.first().rows.isEmpty()) {
+      opened = true;
+      const QString id = m_report->groups.first().rows.first().id;
+      QTimer::singleShot(500, this, [hooks, id] { hooks.open(id); });
+    }
+  }
+  void showRun(const QString& id) {
+    struct AtEnd { MlPage* p; ~AtEnd() { p->fitResult(); } } atEnd{this};   // every way out of here
+    m_shownRun = runSignature(id);
+    m_comparing = false;
+    ++m_compareSeq;
+    clearResult();
+    // opened from a comparison's table: the way back (the flag lasts while the same run is shown: progress redraws keep it)
+    if (m_fromReport) m_reportRun = id;
+    else if (id != m_reportRun) m_reportRun.clear();
+    m_fromReport = false;
+    if (m_report && !m_reportRun.isEmpty() && id == m_reportRun) {
+      auto* back = button(QCoreApplication::translate("ai", "‹ BACK TO THE COMPARISON"), false, m_result->parentWidget());
+      connect(back, &QPushButton::clicked, this, [this] { m_reportRun.clear(); showReport(); });
+      auto* row = new QHBoxLayout; row->addWidget(back); row->addStretch(1);
+      m_result->addLayout(row);
     }
     const auto& c = theme::pal();
     QWidget* host = m_result->parentWidget();
@@ -1394,7 +1888,9 @@ private:
     const QJsonObject res = r->result;
     const bool cls = res.value("task").toString() == "classification";
     const QJsonArray tp = res.value("test_period").toArray(), trp = res.value("train_period").toArray();
-    m_result->addWidget(text(QCoreApplication::translate("ai", "%1 · trained on %2 rows (%3 → %4), tested on the next %5 rows (%6 → %7) · %8 s")
+    m_result->addWidget(text((res.value("walk_forward").isObject()
+                                  ? QCoreApplication::translate("ai", "%1 · walk-forward: retrained before each test block, the last time on %2 rows (%3 → %4); tested on %5 rows (%6 → %7) · %8 s")
+                                  : QCoreApplication::translate("ai", "%1 · trained on %2 rows (%3 → %4), tested on the next %5 rows (%6 → %7) · %8 s"))
                                  .arg(cls ? QCoreApplication::translate("ai", "classification") : QCoreApplication::translate("ai", "regression")).arg(res.value("train_rows").toInt())
                                  .arg(trp.at(0).toString().left(10), trp.at(1).toString().left(10)).arg(res.value("test_rows").toInt())
                                  .arg(tp.at(0).toString().left(10), tp.at(1).toString().left(10))
@@ -1404,8 +1900,10 @@ private:
 
     // metrics: test | train | no skill
     const QJsonObject te = res.value("test").toObject(), trn = res.value("train").toObject(), base = res.value("baseline").toObject();
+    const QJsonObject pers = res.value("persistence").toObject();   // since 2026-11-19 (and older runs completed afterwards)
     auto* g = new QGridLayout; g->setHorizontalSpacing(16); g->setVerticalSpacing(3);
-    const QStringList heads{QCoreApplication::translate("ai", "METRIC"), QCoreApplication::translate("ai", "TEST"), QCoreApplication::translate("ai", "TRAINING"), QCoreApplication::translate("ai", "NO SKILL")};
+    QStringList heads{QCoreApplication::translate("ai", "METRIC"), QCoreApplication::translate("ai", "TEST"), QCoreApplication::translate("ai", "TRAINING"), QCoreApplication::translate("ai", "NO SKILL")};
+    if (!pers.isEmpty()) heads << QCoreApplication::translate("ai", "PERSISTENCE");
     for (int k = 0; k < heads.size(); ++k) g->addWidget(micro(heads[k], host), 0, k, k ? Qt::AlignRight : Qt::AlignLeft);
     QList<QPair<QString, QString>> rows;
     if (cls) rows = {{"balanced_accuracy", QCoreApplication::translate("ai", "Balanced accuracy")}, {"accuracy", QCoreApplication::translate("ai", "Accuracy")}, {"roc_auc", "ROC AUC"},
@@ -1420,6 +1918,7 @@ private:
       g->addWidget(text(fmt(te), theme::mono(11, QFont::Bold), c.text, host), gr, 1, Qt::AlignRight);
       g->addWidget(text(fmt(trn), theme::mono(11), c.textDim, host), gr, 2, Qt::AlignRight);
       g->addWidget(text(fmt(base), theme::mono(11), c.textMute, host), gr, 3, Qt::AlignRight);
+      if (!pers.isEmpty()) g->addWidget(text(fmt(pers), theme::mono(11), c.textMute, host), gr, 4, Qt::AlignRight);
       ++gr;
     }
     g->setColumnStretch(0, 1);
@@ -1431,6 +1930,45 @@ private:
                            : rule;
     m_result->addWidget(text(QCoreApplication::translate("ai", "No skill: %1. A model is only useful where TEST beats it; TRAINING far above TEST means it learned the past by heart.")
                                  .arg(ruleText), theme::sans(11), c.textMute, host, true));
+    if (!pers.isEmpty())
+      m_result->addWidget(text(QCoreApplication::translate("ai", "Persistence: what was last seen happens again (the last change over the same horizon, the last "
+                                                                  "direction, today's level). A second naive rule; on noisy returns the training mean is often the harder one."),
+                               theme::sans(11), c.textMute, host, true));
+    // volatility targets: the two references a volatility forecast must beat (train.py vol_refs, 2026-11-20)
+    if (const QJsonObject refs = res.value("references").toObject(); !refs.isEmpty()) {
+      const QString key = cls ? "balanced_accuracy" : "mae";
+      auto score = [&](const QJsonObject& o) { return cls ? pct(jnum(o.value(key))) : fixed(jnum(o.value(key))); };
+      QStringList lines;
+      for (const auto& [name, label] : {std::pair{"har", "HAR"}, std::pair{"ewma", "EWMA"}}) {
+        const QJsonObject r = refs.value(name).toObject(), vs = refs.value(QString("vs_") + name).toObject();
+        const double p = jnum(vs.value("p")), pw = jnum(vs.value("p_worse"));
+        lines << QCoreApplication::translate("ai", "%1: %2 → the model %3 (p %4)")
+                     .arg(label, score(r),
+                          p < 0.05 ? QCoreApplication::translate("ai", "does better") : pw < 0.05 ? QCoreApplication::translate("ai", "does worse")
+                                                                              : QCoreApplication::translate("ai", "is not distinguishable"),
+                          fixed(p < 0.05 || pw >= 0.05 ? p : pw, 3));
+      }
+      m_result->addSpacing(6);
+      m_result->addWidget(micro(QCoreApplication::translate("ai", "AGAINST THE VOLATILITY REFERENCES (SAME TEST ROWS)"), host));
+      m_result->addWidget(text(QCoreApplication::translate("ai", "Model %1 = %2. %3. HAR: a regression on the volatility of the last h, 5h and 22h rows; EWMA: on the exponentially weighted volatility. Both fitted on the same training rows.")
+                                   .arg(key, score(te), lines.join(" · ")) +
+                                   (res.contains("move_threshold_pct") ? " " + QCoreApplication::translate("ai", "Big move: beyond %1 %.").arg(fixed(jnum(res.value("move_threshold_pct")), 2)) : QString()),
+                               theme::sans(11), c.textDim, host, true));
+    }
+    addTrading(res.value("trading").toObject(), host);   // the test predictions traded after costs
+    const QJsonObject wfr = res.value("walk_forward").toObject();
+    if (!wfr.isEmpty()) {
+      QStringList bl;
+      const QString key = wfr.value("metric").toString();
+      for (const auto& v : wfr.value("blocks").toArray()) {
+        const QJsonObject b = v.toObject();
+        bl << b.value("from").toString().left(10) + " " + (cls ? pct(jnum(b.value(key))) : fixed(jnum(b.value(key))));
+      }
+      m_result->addWidget(text(QCoreApplication::translate("ai", "Walk-forward: the test rows predicted in %1 blocks, each by a model retrained on every row before it "
+                                                                  "(%2 row(s) left out before each block). TEST above is over all the blocks; %3 by block: %4")
+                                   .arg(wfr.value("folds").toInt()).arg(wfr.value("gap_rows").toInt()).arg(key, bl.join(" · ")),
+                               theme::mono(10), c.textDim, host, true));
+    }
     const QJsonObject cv = res.value("cv").toObject();
     if (!cv.isEmpty())
       m_result->addWidget(text(QCoreApplication::translate("ai", "Cross-validation on the training rows (%1 folds in time order): %2 = %3 ± %4")
@@ -1822,6 +2360,7 @@ private:
       m_result->addLayout(g);
       m_result->addWidget(text(QCoreApplication::translate("ai", "What it learned is useful for this target when the first row beats the raw features; all of them must beat \"no skill\" to mean anything."),
                                theme::sans(11), c.textMute, host, true));
+      addTrading(pr.value("trading").toObject(), host);   // the probe's test predictions traded after costs
     }
     const QJsonArray un = res.value("unusual").toArray();
     if (!un.isEmpty()) {
@@ -1838,6 +2377,239 @@ private:
     m_result->addWidget(text(QCoreApplication::translate("ai", "Every window's embedding is in assignments.csv (emb_0, emb_1…), the encoder in encoder.pt: FOLDER, top right."),
                              theme::sans(11), c.textMute, host, true));
     m_result->addStretch(1);
+  }
+
+  // ---------------------------------------------------------------- phones (2026-11-21)
+  // Desktop (1024x600 and up): the three columns DATA | MODEL | RUNS, exactly as before. Narrower than ui::compact (an
+  // iPhone upright) or shorter than 420 px (an iPhone turned): one column at a time, picked in a DATA | MODEL | RUNS bar
+  // (each column already scrolls by itself), fields and buttons a finger high. Upright, the header stacks (the Python
+  // state on its own wrapped line, the families in a strip that scrolls sideways, their description under it), RUNS' buttons
+  // go on a row of their own, the forms put labels over fields and the result's tables narrow. Turned, the families and
+  // the column bar share a row and the run list stands beside the result. Every change is undone exactly when the page
+  // is wide again (a Mac window resized back).
+  enum Mode { Desktop, Phone, Short };
+  static constexpr int kTouch = 34;   // finger height of fields and buttons on phones
+  static Mode modeFor(const QSize& s) {
+    if (ui::compact(s.width())) return Phone;
+    return s.height() > 0 && s.height() < 420 ? Short : Desktop;
+  }
+  QList<QWidget*> touchTargets() const {
+    QList<QWidget*> l{m_key, m_marketRows, m_target, m_transform, m_horizon, m_lags, m_test, m_folds, m_task, m_validation, m_name,
+                      m_orderFlow, m_choose, m_load, m_allBtn, m_noneBtn, m_train, m_compare, m_folder, m_delete, m_install};
+    for (QWidget* w : m_paramEdits) l << w;
+    return l;
+  }
+  void applyMode(Mode m) {
+    if (m == m_mode || !m_runList) return;
+    const Mode old = m_mode;
+    m_mode = m;
+    if (old == Phone) unphone(); else if (old == Short) unshort();
+    if (old == Desktop) narrow(); else if (m == Desktop) unnarrow();
+    if (m == Phone) phone(); else if (m == Short) shortHeight();
+    rebuildRuns();
+    showSection();
+    // the result's tables are built for the mode: drawn again (not a comparison still being computed)
+    if (!m_comparing) showRun(m_runList->selected());
+    else if (m_reportShown) showReport();
+  }
+  void showSection() {
+    const bool all = m_mode == Desktop;
+    const int s = m_section ? m_section->current() : 0;
+    m_dataPanel->setVisible(all || s == 0);
+    m_modelPanel->setVisible(all || s == 1);
+    m_runsPanel->setVisible(all || s == 2);
+  }
+  // a panel's title row shown or left out; without it the body starts lower, clear of the corner bracket
+  static void titleRow(ui::Panel* p, bool on) {
+    p->header()->setVisible(on);
+    p->setPadding(12, on ? 4 : 12, 12, 10);   // ui::Panel's own margins with the title
+  }
+  void narrow() {
+    for (QSpacerItem*& gap : m_headGaps) if (gap) { m_root->removeItem(gap); delete gap; gap = nullptr; }
+    if (!m_section) {
+      // the panels' own titles (same translations)
+      m_section = new ui::PillBar({QCoreApplication::translate("ai", "Data").toUpper(), QCoreApplication::translate("ai", "Model").toUpper(),
+                                   QCoreApplication::translate("ai", "Runs").toUpper()}, this, ui::PillBar::Underline);
+      m_section->setFontPx(12);
+      // test hook DW_ML_SECTION=<0..2> (screenshots of one column)
+      const int s = qEnvironmentVariableIsSet("DW_ML_SECTION") ? qEnvironmentVariableIntValue("DW_ML_SECTION") : settings::value("ml.section", 0).toInt();
+      m_section->setCurrent(qBound(0, s, 2));
+      connect(m_section, &ui::PillBar::changed, this, [this](int i) { settings::setValue("ml.section", i); showSection(); });
+    }
+    m_section->show();
+    m_root->setContentsMargins(12, 8, 12, 8); m_root->setSpacing(8);
+    for (QWidget* w : touchTargets()) w->setMinimumHeight(kTouch);
+    // list rows (algorithms, features) and the features' tick boxes a finger high
+    setStyleSheet(formQss() + "QListWidget::item { padding: 8px 4px; } QListWidget::indicator { width: 18px; height: 18px; }");
+    fitAlgoHeight();
+    m_runList->touchBox = true;
+  }
+  void unnarrow() {
+    m_section->hide();
+    m_root->setContentsMargins(16, 12, 16, 12); m_root->setSpacing(10);
+    for (QWidget* w : touchTargets()) w->setMinimumHeight(0);
+    setStyleSheet(formQss());
+    m_algo->setFixedHeight(m_algoH);
+    m_runList->touchBox = false;
+    // The header row as the desktop page has always shown it: its layout keeps the size it computed while building
+    // (30 px high, its 18 px labels centred on INSTALL's height). Laid out again after a phone layout, the row would be
+    // 12 px shorter, its labels 4 px higher and everything below would move up: the differences are put back as gaps
+    // above and under the row.
+    m_head->invalidate();
+    const int natural = m_head->sizeHint().height(), gap = m_headH - natural;
+    if (gap > 0) {
+      const int above = qBound(0, (m_install->sizeHint().height() - natural) / 2, gap);
+      const int at = m_root->indexOf(m_head);
+      m_headGaps[1] = new QSpacerItem(0, gap - above, QSizePolicy::Fixed, QSizePolicy::Fixed);
+      m_root->insertItem(at + 1, m_headGaps[1]);
+      if (above > 0) {
+        m_headGaps[0] = new QSpacerItem(0, above, QSizePolicy::Fixed, QSizePolicy::Fixed);
+        m_root->insertItem(at, m_headGaps[0]);
+      }
+    }
+  }
+  void phone() {
+    // header: the Python state wraps, INSTALL beside it; the app's header already says AI › ML and the families'
+    // description says what each does
+    m_mlTitle->hide();
+    m_mlDesc->hide();
+    m_env->setWordWrap(true);
+    m_head->setStretchFactor(m_env, 1);
+    delete m_head->takeAt(2);   // the stretch before it (put back by unphone)
+    // families: a strip that scrolls sideways (five pills are wider than a phone), the description under it
+    m_famRow->removeWidget(m_family);
+    m_famRow->removeWidget(m_familyDesc);
+    if (!m_famScroll) {
+      m_famScroll = new QScrollArea(this);
+      m_famScroll->setFrameShape(QFrame::NoFrame);
+      m_famScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+      m_famScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+      m_famScroll->setStyleSheet("QScrollArea { background: transparent; }");
+      m_famScroll->viewport()->setAutoFillBackground(false);
+      m_famScroll->installEventFilter(this);   // resized: the chosen family scrolled into view again
+    }
+    m_famScroll->setWidget(m_family);
+    m_family->setAutoFillBackground(false);   // setWidget turns it on
+    m_family->resize(m_family->sizeHint());   // its whole width, whatever the row gave it before
+    m_family->show();
+    m_famScroll->setFixedHeight(m_family->sizeHint().height());
+    const int at = m_root->indexOf(m_famRow);
+    m_root->insertWidget(at, m_famScroll);
+    m_famScroll->show();
+    m_root->insertWidget(at + 1, m_familyDesc);
+    m_root->insertWidget(m_root->indexOf(m_stack), m_section);
+    // the column bar names the column: the panels' own title rows are left out
+    for (ui::Panel* p : {m_dataPanel, m_modelPanel, m_runsPanel}) titleRow(p, false);
+    // RUNS: its buttons on a row of their own (the title and three buttons are wider than the column)
+    m_runBar = new QHBoxLayout; m_runBar->setSpacing(6);
+    for (QWidget* b : {static_cast<QWidget*>(m_compare), static_cast<QWidget*>(m_folder), static_cast<QWidget*>(m_delete)}) {
+      m_runsPanel->headerRight()->removeWidget(b);
+      m_runBar->addWidget(b);
+    }
+    m_runBar->addStretch(1);
+    m_runsPanel->body()->insertLayout(0, m_runBar);
+    for (QWidget* b : {static_cast<QWidget*>(m_compare), static_cast<QWidget*>(m_folder), static_cast<QWidget*>(m_delete)}) b->setMinimumHeight(kTouch);
+    // DATA: the technical data's row count and order flow under the timeframes, one above the other (side by side they
+    // are wider than a 375 px phone)
+    m_pick2->removeWidget(m_marketRows);
+    m_pick2->removeWidget(m_orderFlow);
+    m_pick3 = new QVBoxLayout; m_pick3->setSpacing(8);
+    m_pick3->addWidget(m_marketRows);
+    m_pick3->addWidget(m_orderFlow);
+    m_dataBody->insertLayout(m_dataBody->indexOf(m_pick2) + 1, m_pick3);
+    // MODEL: validation labels over their fields
+    for (int k = 0; k < 8; ++k) { QWidget* w = m_supOnly[1 + k]; m_valGrid->removeWidget(w); m_valGrid->addWidget(w, k, 0); }
+  }
+  // the strip of families scrolled so that the chosen one shows (REINFORCEMENT is past a phone's width). The pills'
+  // places as ui::PillBar lays them out: label + 18 px, 2 px apart, in its 11 px medium mono.
+  void showFamilyPill() {
+    if (m_mode != Phone || !m_famScroll) return;
+    const QFontMetricsF fm(theme::mono(11, QFont::Medium, 1.0));
+    qreal x = 0, w = 0;
+    for (int i = 0; i <= m_family->current() && i < m_familyNames.size(); ++i) {
+      if (i) x += w + 2;
+      w = fm.horizontalAdvance(m_familyNames[i]) + 18;
+    }
+    m_famScroll->ensureVisible(int(x + w / 2), m_famScroll->height() / 2, int(w / 2) + 16, 0);
+  }
+  void unphone() {
+    m_mlTitle->show();
+    m_mlDesc->show();
+    m_env->setWordWrap(false);
+    m_head->setStretchFactor(m_env, 0);
+    m_head->insertStretch(2, 1);
+    m_root->removeWidget(m_famScroll);
+    m_famScroll->hide();
+    m_famScroll->takeWidget();
+    m_family->setParent(this);
+    m_family->setAutoFillBackground(false);
+    m_famRow->insertWidget(0, m_family);
+    m_family->show();
+    m_root->removeWidget(m_familyDesc);
+    m_famRow->insertWidget(1, m_familyDesc, 1);
+    m_root->removeWidget(m_section);
+    for (ui::Panel* p : {m_dataPanel, m_modelPanel, m_runsPanel}) titleRow(p, true);
+    for (QWidget* b : {static_cast<QWidget*>(m_compare), static_cast<QWidget*>(m_folder), static_cast<QWidget*>(m_delete)}) {
+      m_runBar->removeWidget(b);
+      m_runsPanel->headerRight()->addWidget(b);
+    }
+    m_runsPanel->body()->removeItem(m_runBar);
+    delete m_runBar; m_runBar = nullptr;
+    m_pick3->removeWidget(m_marketRows);
+    m_pick3->removeWidget(m_orderFlow);
+    m_pick2->insertWidget(1, m_marketRows);
+    m_pick2->insertWidget(2, m_orderFlow);
+    m_dataBody->removeItem(m_pick3);
+    delete m_pick3; m_pick3 = nullptr;
+    for (int k = 0; k < 8; ++k) { QWidget* w = m_supOnly[1 + k]; m_valGrid->removeWidget(w); m_valGrid->addWidget(w, k / 2, k % 2); }
+  }
+  void shortHeight() {
+    // families left, column bar right, on one row; the description would take lines the height cannot spare, and so
+    // would DATA's and MODEL's title rows (the bar names them; RUNS keeps its own for its buttons)
+    m_familyDesc->hide();
+    titleRow(m_dataPanel, false); titleRow(m_modelPanel, false);
+    m_famStretch = new QSpacerItem(0, 0, QSizePolicy::Expanding, QSizePolicy::Minimum);
+    m_famRow->addItem(m_famStretch);
+    m_famRow->addWidget(m_section);
+    // RUNS: the list beside the result, both the column's full height
+    auto* body = m_runsPanel->body();
+    body->removeWidget(m_runScroll);
+    body->removeWidget(m_resScroll);
+    m_runSplit = new QHBoxLayout; m_runSplit->setSpacing(10);
+    m_runSplit->addWidget(m_runScroll, 4);
+    m_runSplit->addWidget(m_resScroll, 5);
+    body->addLayout(m_runSplit, 1);
+    // RUNS' buttons stay in its 34 px title row: their usual height
+    for (QWidget* b : {static_cast<QWidget*>(m_compare), static_cast<QWidget*>(m_folder), static_cast<QWidget*>(m_delete)}) b->setMinimumHeight(0);
+  }
+  void unshort() {
+    m_famRow->removeWidget(m_section);
+    m_famRow->removeItem(m_famStretch);
+    delete m_famStretch; m_famStretch = nullptr;
+    m_familyDesc->show();
+    titleRow(m_dataPanel, true); titleRow(m_modelPanel, true);
+    auto* body = m_runsPanel->body();
+    m_runSplit->removeWidget(m_runScroll);
+    m_runSplit->removeWidget(m_resScroll);
+    body->removeItem(m_runSplit);
+    delete m_runSplit; m_runSplit = nullptr;
+    body->addWidget(m_runScroll);
+    body->addWidget(m_resScroll, 1);
+  }
+  // Phones: the result's tables (metrics, trading after costs…) are grids of labels: narrower gaps, and the first column
+  // (the rows' names) wraps instead of holding the grid wider than the screen.
+  void fitResult() {
+    if (m_mode != Phone || !m_result) return;
+    std::function<void(QLayout*)> walk = [&](QLayout* l) {
+      if (auto* g = qobject_cast<QGridLayout*>(l)) {
+        g->setHorizontalSpacing(qMin(g->horizontalSpacing(), 8));
+        for (int r = 0; r < g->rowCount(); ++r)
+          if (QLayoutItem* it = g->itemAtPosition(r, 0))
+            if (auto* lab = qobject_cast<QLabel*>(it->widget())) lab->setWordWrap(true);
+      }
+      for (int i = 0; i < l->count(); ++i) if (QLayout* sub = l->itemAt(i)->layout()) walk(sub);
+    };
+    walk(m_result);
   }
 
   // ---------------------------------------------------------------- test hooks
@@ -1893,6 +2665,15 @@ private:
         const QString id = m_runList->idAt(qEnvironmentVariableIntValue("DW_ML_RUN"));
         if (!id.isEmpty()) { m_runList->select(id); showRun(id); }
       }
+      if (qEnvironmentVariableIsSet("DW_ML_COMPARE")) {   // "similar" (the selected run's), or rows to tick: "0,3,5"
+        const QString v = qEnvironmentVariable("DW_ML_COMPARE");
+        if (v != "similar") {
+          QStringList ids;
+          for (const QString& k : v.split(',')) if (const QString id = m_runList->idAt(k.toInt()); !id.isEmpty()) ids << id;
+          m_runList->setTicked(ids);
+        }
+        compare();
+      }
       return;
     }
     const QStringList p = qEnvironmentVariable("DW_ML_LOAD").split(':');
@@ -1908,6 +2689,8 @@ private:
       spec.key = p.value(1) + ":" + p.value(2);
       spec.interval = p.value(3, "1h");
       spec.rows = p.value(4, "0").toInt();
+      spec.orderFlow = p.value(5) == "of";   // markets:BINANCE:BTCUSDT:15m:0:of
+      { QSignalBlocker b(m_orderFlow); m_orderFlow->setChecked(spec.orderFlow); }
       { QSignalBlocker b(m_key); const int k = m_key->findData(spec.key); if (k >= 0) m_key->setCurrentIndex(k); }
       int ti = 0;
       for (int i = 0; i < technicaldata::timeframes().size(); ++i) if (technicaldata::timeframes()[i].name == spec.interval) ti = i;
@@ -1939,16 +2722,42 @@ private:
   }
 
   QLabel *m_env, *m_installLine, *m_familyDesc, *m_later;
+  // phones (applyMode)
+  Mode m_mode = Desktop;
+  QVBoxLayout* m_root = nullptr;
+  QHBoxLayout *m_head = nullptr, *m_famRow = nullptr, *m_pick2 = nullptr, *m_runBar = nullptr, *m_runSplit = nullptr;
+  QVBoxLayout* m_pick3 = nullptr;
+  QVBoxLayout* m_dataBody = nullptr;
+  QGridLayout* m_valGrid = nullptr;
+  QWidget *m_mlTitle = nullptr, *m_mlDesc = nullptr;
+  ui::PillBar* m_section = nullptr;
+  QScrollArea* m_famScroll = nullptr;
+  QSpacerItem* m_famStretch = nullptr;
+  ui::Panel *m_dataPanel = nullptr, *m_modelPanel = nullptr, *m_runsPanel = nullptr;
+  QPushButton *m_allBtn = nullptr, *m_noneBtn = nullptr;
+  int m_algoH = 0;
+  int m_headH = 0;                    // the header row's height when first shown
+  QSpacerItem* m_headGaps[2] = {nullptr, nullptr};   // above and under it, back on desktop (unnarrow)
+  bool m_reportShown = false;   // the result column shows a finished comparison (not one being computed)
   QPushButton* m_install;
   ui::PillBar* m_family;
+  QStringList m_familyNames;
   QStackedWidget* m_stack;
   // data
   ui::PillBar *m_source = nullptr, *m_interval = nullptr, *m_marketTf = nullptr;
   QComboBox* m_marketRows = nullptr;
+  QCheckBox* m_orderFlow = nullptr;
   QComboBox *m_key = nullptr, *m_target = nullptr, *m_transform = nullptr, *m_task = nullptr;
-  QPushButton *m_choose = nullptr, *m_load = nullptr, *m_train = nullptr, *m_delete = nullptr, *m_folder = nullptr;
+  QPushButton *m_choose = nullptr, *m_load = nullptr, *m_train = nullptr, *m_delete = nullptr, *m_folder = nullptr, *m_compare = nullptr;
+  QScrollArea* m_resScroll = nullptr;
+  bool m_comparing = false;   // the result column shows a comparison: run updates leave it
+  int m_compareSeq = 0;       // a comparison finishing after another run or comparison was shown is dropped
+  std::shared_ptr<ml::comparison::Report> m_report;   // the last comparison drawn
+  bool m_fromReport = false;  // showRun called from its table
+  QString m_reportRun;        // the run opened from it: shown with BACK TO THE COMPARISON
   QLabel *m_dataInfo = nullptr, *m_targetHint = nullptr, *m_algoDesc = nullptr, *m_trainInfo = nullptr;
   QSpinBox *m_horizon = nullptr, *m_lags = nullptr, *m_test = nullptr, *m_folds = nullptr;
+  QComboBox* m_validation = nullptr;
   QListWidget *m_features = nullptr, *m_algo = nullptr;
   QWidget* m_paramsHost = nullptr;
   QGridLayout* m_params = nullptr;
@@ -1971,6 +2780,121 @@ private:
   int m_loadTicket = 0;
 };
 }  // namespace
+
+// ------------------------------------------------------------------------------------------------ AI › Agents' panel
+namespace {
+// Under a small map of groups: each group's colour, name and share of the rows.
+class GroupLegend : public QWidget {
+public:
+  GroupLegend(const QJsonArray& groups, const QString& kind, QWidget* p) : QWidget(p), m_kind(kind) {
+    for (const auto& g : groups) m_groups << g.toObject();
+    setFixedHeight(16 * ((int(m_groups.size()) + 1) / 2) + 4);
+  }
+protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter p(this);
+    const auto& c = theme::pal();
+    p.setFont(theme::mono(9));
+    const int colW = width() / 2;
+    for (int i = 0; i < m_groups.size(); ++i) {
+      const int lab = m_groups[i].value("label").toInt();
+      const QRect cell((i % 2) * colW, 2 + (i / 2) * 16, colW - 6, 14);
+      const QColor col = m_kind == "anomaly" ? (lab ? c.down : c.textDim) : groupColor(lab);
+      p.fillRect(QRect(cell.left(), cell.top() + 3, 8, 8), col);
+      p.setPen(c.textDim);
+      p.drawText(cell.adjusted(13, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter,
+                 p.fontMetrics().elidedText(groupName(lab, m_kind) + "  " + pct(jnum(m_groups[i].value("share")), 0), Qt::ElideRight, cell.width() - 13));
+    }
+  }
+private:
+  QList<QJsonObject> m_groups;
+  QString m_kind;
+};
+}  // namespace
+
+// What a run's small chart is drawn from: its files read and thinned (a few thousand points are all a panel's width can
+// show; real runs hold up to 80 000 rows). Plain data: built on a worker thread.
+struct MlMiniRows {
+  Assign assign;               // assignments.csv: maps and strips
+  PredChart::Lines pred;       // predictions.csv: supervised and semi-supervised
+  EquityChart::Rows equity;    // equity.csv: reinforcement
+};
+
+std::shared_ptr<const MlMiniRows> mlMiniRows(const ml::Run& r) {
+  auto rows = std::make_shared<MlMiniRows>();
+  if (r.state != ml::RunState::Done) return rows;
+  const QString fam = r.job.value("family").toString();
+  if (fam == "unsupervised" || fam == "self_supervised") rows->assign = thinAssign(readAssign(ml::runFile(r, "assignments.csv")), 8000);
+  else if (fam == "reinforcement") rows->equity = EquityChart::read(ml::runFile(r, "equity.csv"), 4000);
+  else rows->pred = PredChart::lines(ml::runFile(r, "predictions.csv"), r.result.value("task").toString() == "classification", 4000);
+  return rows;
+}
+
+MlMiniChart mlMiniChart(const ml::Run& r, QWidget* parent) { return mlMiniChart(r, mlMiniRows(r), parent); }
+
+MlMiniChart mlMiniChart(const ml::Run& r, const std::shared_ptr<const MlMiniRows>& data, QWidget* parent) {
+  MlMiniChart out;
+  if (r.state != ml::RunState::Done || !data) return out;
+  const QJsonObject res = r.result, job = r.job;
+  const QString fam = job.value("family").toString();
+  auto* host = new QWidget(parent);
+  auto* v = new QVBoxLayout(host);
+  v->setContentsMargins(0, 0, 0, 0); v->setSpacing(6);
+  auto assign = [&]() -> const Assign& { return data->assign; };
+  auto scatter = [&](ScatterMap::Mode mode) {
+    auto* m = new ScatterMap(assign(), mode, host);
+    m->compact = true;
+    m->setMinimumHeight(0); m->setMaximumHeight(QWIDGETSIZE_MAX);
+    v->addWidget(m, 1);
+    return m;
+  };
+  if (fam == "unsupervised") {
+    const QString kind = res.value("kind").toString();
+    if (kind == "clustering" || kind == "anomaly") {
+      out.title = QCoreApplication::translate("ai", "MAP OF THE ROWS (FIRST TWO PRINCIPAL AXES)");
+      scatter(kind == "anomaly" ? ScatterMap::Anomaly : ScatterMap::Groups);
+      auto* legend = new GroupLegend(res.value("groups").toArray(), kind, host);
+      v->addWidget(legend);
+      auto* strip = new RegimeStrip(assign(), kind == "anomaly", host);
+      strip->compact = true;
+      v->addWidget(strip);
+      out.caption = QCoreApplication::translate("ai", "each dot is a row  ·  ring: latest row");
+      const int extra = legend->height() + 46 + 12;
+      out.heightFor = [extra](int w) { return qBound(140, int(w * 0.62), 340) + extra; };
+    } else {
+      out.title = QCoreApplication::translate("ai", "MAP OF THE ROWS (FIRST TWO AXES)");
+      scatter(ScatterMap::Time);
+      out.caption = QCoreApplication::translate("ai", "colour: from the oldest rows (grey) to the latest (amber)  ·  ring: latest row");
+      out.heightFor = [](int w) { return qBound(140, int(w * 0.62), 340); };
+    }
+  } else if (fam == "self_supervised") {
+    out.title = QCoreApplication::translate("ai", "MAP OF THE EMBEDDINGS (FIRST TWO AXES)");
+    scatter(ScatterMap::Time);
+    out.caption = QCoreApplication::translate("ai", "colour: from the oldest rows (grey) to the latest (amber)  ·  ring: latest row");
+    out.heightFor = [](int w) { return qBound(140, int(w * 0.62), 340); };
+  } else if (fam == "reinforcement") {
+    out.title = QCoreApplication::translate("ai", "TEST PERIOD: SIMULATED EQUITY");
+    auto* e = new EquityChart(data->equity, host);
+    e->compact = true;
+    e->setMinimumHeight(0); e->setMaximumHeight(QWIDGETSIZE_MAX);
+    v->addWidget(e, 1);
+    out.caption = QCoreApplication::translate("ai", "amber: agent  ·  grey: buy & hold  ·  strip: long (green), short (red), flat (empty)");
+    out.heightFor = [](int w) { return qBound(150, int(w * 0.55), 300); };
+  } else {   // supervised, semi-supervised
+    const bool cls = res.value("task").toString() == "classification";
+    out.title = cls ? QCoreApplication::translate("ai", "TEST PERIOD: HIT RATE") : QCoreApplication::translate("ai", "TEST PERIOD: ACTUAL AND PREDICTED");
+    auto* chart = new PredChart(host);
+    chart->compact = true;
+    chart->setLines(data->pred, cls, cls ? jnum(res.value("baseline").toObject().value("accuracy")) : NAN);
+    chart->setMinimumHeight(0); chart->setMaximumHeight(QWIDGETSIZE_MAX);
+    v->addWidget(chart, 1);
+    out.caption = cls ? QCoreApplication::translate("ai", "hit rate over the last 30 test rows  ·  dashed: no-skill rate")
+                      : QCoreApplication::translate("ai", "grey: actual  ·  amber: predicted");
+    out.heightFor = [](int w) { return qBound(130, int(w * 0.5), 280); };
+  }
+  out.widget = host;
+  return out;
+}
 }  // namespace aipage
 
 using MlPageImpl = aipage::MlPage;

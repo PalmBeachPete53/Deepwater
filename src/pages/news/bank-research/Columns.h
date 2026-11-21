@@ -88,6 +88,8 @@ public:
   void setBankFilter(const QString& bankId);
   void setTab(int t);
   void setSelected(const QString& noteId) { m_list->setSelected(noteId); }
+  // phones: the page stacks the column at full width; tabs and dropdowns grow to finger size (36 / 34 px)
+  void setPhone(bool on) { if (on != m_phone) { m_phone = on; resizeEvent(nullptr); update(); } }
   NoteList* list() const { return m_list; }
   QScrollArea* scroll() const { return m_scroll; }
   std::function<void(const QString& noteId)> onOpen;
@@ -104,6 +106,8 @@ private:
   void refill();
   void fillData();
   void fillFilings();
+  int dy() const { return m_phone ? 7 : 0; }   // phones: everything under the taller tabs moves down
+  bool m_phone = false;
   int m_tab = 0, m_tabHover = -1;
   QString m_bank, m_type;
   QString m_shownView;                   // bank|type|tab of the list on screen (refill keeps the place when unchanged)
@@ -121,6 +125,7 @@ private:
 class RegistryColumn : public QWidget {
 public:
   explicit RegistryColumn(QWidget* parent);
+  static int fullHeight();               // every row at 35 px, nothing to scroll (phones: the page scrolls)
   void setSelected(const QString& bankId) { m_selected = bankId; update(); }
   std::function<void(const QString& bankId)> onClick;
 protected:

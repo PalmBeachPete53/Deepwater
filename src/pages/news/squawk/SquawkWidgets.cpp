@@ -20,6 +20,12 @@ namespace wire::squawk {
 namespace {
 QFont headlineFont() { return theme::condensed(16, QFont::Medium); }
 constexpr int kTextX = 178, kTimeX = 15, kAgeX = 88, kCoinX = 162, kRightPad = 46;
+// Phone-width lists (< 520 px): time, age and coin on a line of their own, the headline below over the full width
+// (beside them it had 200 px and wrapped every few words).
+constexpr int kPhoneW = 520, kPhoneMetaH = 24;
+bool phoneList(int w) { return w < kPhoneW; }
+int textX(int w) { return phoneList(w) ? kTimeX : kTextX; }
+int textWidth(int w) { return phoneList(w) ? qMax(120, w - kTimeX - 16) : qMax(120, w - kTextX - kRightPad); }
 
 QString ageText(const QDateTime& t) {
   const qint64 s = t.secsTo(QDateTime::currentDateTimeUtc());
@@ -119,9 +125,11 @@ void Header::paintEvent(QPaintEvent*) {
   p.setFont(theme::mono(11, QFont::Normal, 2)); p.setPen(L.items);
   p.drawText(QRectF(0, 0, width() - 13, height()), Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("wire", "%1 ITEMS").arg(m_count));
 }
-void Header::mousePressEvent(QMouseEvent* e) { if (langRect().contains(e->position())) emit languageToggled(); }
+// phones: the toggle takes taps over the whole height of the band (a 22 px box is too small for a finger)
+static QRectF tapRect(const QRectF& r, int width, int bandH) { return width < kPhoneW ? QRectF(r.left() - 4, 0, r.width() + 8, bandH) : r; }
+void Header::mousePressEvent(QMouseEvent* e) { if (tapRect(langRect(), width(), height()).contains(e->position())) emit languageToggled(); }
 void Header::mouseMoveEvent(QMouseEvent* e) {
-  const bool h = langRect().contains(e->position());
+  const bool h = tapRect(langRect(), width(), height()).contains(e->position());
   if (h != m_hoverLang) {
     m_hoverLang = h; update();
     setCursor(h ? Qt::PointingHandCursor : Qt::ArrowCursor);
@@ -279,11 +287,11 @@ void FilterTabs::paintEvent(QPaintEvent*) {
 void FilterTabs::mousePressEvent(QMouseEvent* e) {
   const auto rs = rects();
   for (int i = 0; i < rs.size(); ++i)
-    if (rs[i].contains(e->position()) && i != m_cur) { m_cur = i; update(); emit changed(i); }
+    if (tapRect(rs[i], width(), height()).contains(e->position()) && i != m_cur) { m_cur = i; update(); emit changed(i); }
 }
 void FilterTabs::mouseMoveEvent(QMouseEvent* e) {
   const auto rs = rects(); int h = -1;
-  for (int i = 0; i < rs.size(); ++i) if (rs[i].contains(e->position())) h = i;
+  for (int i = 0; i < rs.size(); ++i) if (tapRect(rs[i], width(), height()).contains(e->position())) h = i;
   if (h != m_hover) { m_hover = h; update(); setCursor(h >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor); }
 }
 void FilterTabs::leaveEvent(QEvent*) { m_hover = -1; update(); }
@@ -337,7 +345,7 @@ void WireList::setItems(const QList<wire::Item>& items) {
 void WireList::relayout() {
   const int w = viewport()->width();
   m_layoutWidth = w;
-  const int textW = qMax(120, w - kTextX - kRightPad);
+  const int textW = textWidth(w);
   const QFontMetrics fm(headlineFont());
   m_y.resize(m_items.size() + 1);
   // Heights are kept only for the rows listed at the current width: the cache was keyed by every width a resize went
@@ -352,7 +360,7 @@ void WireList::relayout() {
     if (h < 0) {
       const QRect br = fm.boundingRect(QRect(0, 0, textW, 10000), Qt::TextWordWrap, textOf(m_items[i]));
       const int lines = qMax(1, int(std::round(br.height() / double(fm.lineSpacing()))));
-      h = 19 + lines * 20;
+      h = 19 + lines * 20 + (phoneList(w) ? kPhoneMetaH : 0);
     }
     kept.insert(key, h);
     y += h;
@@ -384,7 +392,7 @@ void WireList::paintEvent(QPaintEvent* e) {
   }
   const QFont ft = theme::mono(13, QFont::Bold), fa = theme::mono(11), fh = headlineFont();
   const QFontMetrics fmh(fh);
-  const int textW = qMax(120, w - kTextX - kRightPad);
+  const int textW = textWidth(w), tx = textX(w), dy = phoneList(w) ? kPhoneMetaH : 0;
   int r = qMax(0, rowAt(top + e->rect().top()));
   for (; r < m_items.size() && m_y[r] - top < e->rect().bottom() + 1; ++r) {
     const auto& it = m_items[r];
@@ -398,18 +406,19 @@ void WireList::paintEvent(QPaintEvent* e) {
     p.drawText(QPointF(kAgeX, base - 0.5), ageText(it.time));
     coin(p, QPointF(kCoinX, base - 7), it);
     p.setFont(fh);
+    const int tb = base + dy;   // headline baseline
     if (it.kind == wire::Kind::Mover && std::isfinite(it.changePct)) {
       const auto* in = market::find(it.symbol);
       const QString name = (in ? in->name : it.symbol) + " ";
       const QString pc = fmt::pct(it.changePct);
       const QString rest = QCoreApplication::translate("wire", " — now %1").arg(fmt::num(it.price, in ? in->decimals : 2));
-      qreal x = kTextX;
-      p.setPen(L.body); p.drawText(QPointF(x, base), name); x += fmh.horizontalAdvance(name);
-      p.setPen(it.changePct >= 0 ? L.up : L.down); p.drawText(QPointF(x, base), pc); x += fmh.horizontalAdvance(pc);
-      p.setPen(L.body); p.drawText(QPointF(x, base), rest);
+      qreal x = tx;
+      p.setPen(L.body); p.drawText(QPointF(x, tb), name); x += fmh.horizontalAdvance(name);
+      p.setPen(it.changePct >= 0 ? L.up : L.down); p.drawText(QPointF(x, tb), pc); x += fmh.horizontalAdvance(pc);
+      p.setPen(L.body); p.drawText(QPointF(x, tb), rest);
     } else {
       p.setPen(L.body);
-      p.drawText(QRect(kTextX, base - fmh.ascent(), textW, rh), Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, textOf(it));
+      p.drawText(QRect(tx, tb - fmh.ascent(), textW, rh), Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, textOf(it));
     }
   }
   // amber rule along the left edge

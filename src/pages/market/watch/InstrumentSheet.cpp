@@ -15,6 +15,7 @@
 #include "core/I18n.h"
 #include <QCoreApplication>
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QtConcurrent>
 #include <QFutureWatcher>
 #include <QPainter>
@@ -414,10 +415,15 @@ void InstrumentSheet::relayout() {
   const int VH = m_scroll->viewport()->height() > 0 ? m_scroll->viewport()->height() : height() - kHeader;
   // size classes: narrow (< 1180) stacks the side cards and the bottom pairs; wide (> 1700) widens the side column
   const bool stacked = W < 1180, wide = W > 1700;
+  // phone held upright: the three side cards one under the other (a third of 410 px cut their text) and a chart
+  // that leaves room to see the next card
+  const bool phone = ui::compact(W);
+  m_tech->setColumns(phone ? 3 : 0);
   const int right = wide ? std::clamp(int(W * 0.24), kRight, 560) : kRight;
   // top block: 644 at the reference (viewport 928); shorter on short screens, taller on tall ones
   int topH = stacked ? std::clamp(VH - 2 * kM, 300, kChartH) : std::clamp(VH - 2 * kM, 590, kChartH);
   if (VH > 1000) topH = std::min(int(VH * 0.69), 900);
+  if (phone) topH = std::clamp(int(VH * 0.75), 300, 640);   // room for the whole drawing-tool column
   const double sc = topH / double(kChartH);
   // heights measured on the reference: loading frame (t1.5) chart 586, retail 93, COT 160, data compare 68;
   // loaded (t2.0) chart 644, retail 270, COT 179, data compare 178
@@ -438,6 +444,13 @@ void InstrumentSheet::relayout() {
     m_cot->setGeometry(rx, ry, right, ch); ry += ch + kM;
     m_data->setGeometry(rx, ry, right, dh); ry += dh;
     y += std::max(chartH, ry - y) + 10;
+  } else if (phone) {
+    m_chart->setGeometry(kM, y, W - 2 * kM, chartH);
+    y += chartH + kM;
+    const int rh = full ? 270 : 160, ch = full ? 210 : 160, dh = full || m_data->state() == SheetCard::Ready ? 200 : 100;
+    m_retail->setGeometry(kM, y, W - 2 * kM, rh); y += rh + kM;
+    m_cot->setGeometry(kM, y, W - 2 * kM, ch); y += ch + kM;
+    m_data->setGeometry(kM, y, W - 2 * kM, dh); y += dh + 10;
   } else {
     m_chart->setGeometry(kM, y, W - 2 * kM, chartH);
     y += chartH + kM;
@@ -448,7 +461,7 @@ void InstrumentSheet::relayout() {
     m_data->setGeometry(kM + 2 * (cw + kM), y, cw3, h);
     y += h + 10;
   }
-  const int th = m_tech->state() == SheetCard::Ready ? 93 : 67;
+  const int th = m_tech->state() == SheetCard::Ready ? (phone ? 93 + 53 : 93) : 67;   // phone: tiles 3 x 2
   m_tech->setGeometry(kM, y, W - 2 * kM, th);
   y += th + kM;
   auto pair = [&](QWidget* a, QWidget* b, int h) {

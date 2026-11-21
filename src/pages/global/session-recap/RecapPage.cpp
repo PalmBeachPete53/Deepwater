@@ -3,6 +3,8 @@
 // Centre: the session file (automated read, window timeline, moves of the window). Right: releases and wire
 // headlines inside the window.
 //
+// Phones: see RecapPage::mode() (one scrolling column upright, registry | scrolling file turned).
+//
 // Page hooks (tests): DW_RECAP_SCROLL=<px>  DW_RECAP_HOVER=<x in the centre view>  DW_RECAP_TRACE=<asset 0..11>
 //                     DW_RECAP_LANG=FR  DW_RECAP_TAB=1 (weeks)  DW_RECAP_PICK=<row n of the registry>
 #include "app/Preload.h"
@@ -13,10 +15,14 @@
 #include "core/Paths.h"
 #include "core/Settings.h"
 #include <QDir>
+#include "global/PageScroll.h"
 #include "ui/Format.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QCoreApplication>
 #include <QPainter>
+#include <QPaintEvent>
+#include <QScrollBar>
 #include "core/I18n.h"
 #include <QTimer>
 
@@ -48,14 +54,30 @@ protected:
     const QString full = QCoreApplication::translate("wire", "SESSION RECAP — AUTOMATED READ OF EACH SESSION");
     const QString t = QFontMetricsF(p.font()).elidedText(full, Qt::ElideRight, r.left() - 70);
     setToolTip(t != full ? full : QString());
-    p.drawText(QPointF(50, 22), t);
-    if (m_on) p.fillRect(QRectF(50 + QFontMetricsF(p.font()).horizontalAdvance(t) + 2, 10, 7, 14), theme::map("#f5e392"));
+    // phone: no room for the title beside the badge (it was a lone "…"); the header already names the page
+    if (!ui::compact(width()) || r.left() - 70 >= 120) {
+      p.drawText(QPointF(50, 22), t);
+      if (m_on) p.fillRect(QRectF(50 + QFontMetricsF(p.font()).horizontalAdvance(t) + 2, 10, 7, 14), theme::map("#f5e392"));
+    }
     QLinearGradient bg(0, r.top(), 0, r.bottom()); bg.setColorAt(0, theme::map("#554600")); bg.setColorAt(1, theme::map("#342100"));
     p.setPen(QPen(theme::map("#736935"), 1)); p.setBrush(bg); p.drawRoundedRect(r.adjusted(.5, .5, -.5, -.5), 2, 2);
     p.setFont(f); p.setPen(theme::map("#efdd99")); p.drawText(r, Qt::AlignCenter, b);
   }
 private:
   bool m_on = true;
+};
+
+// Scrolling content of the phone layouts: the page's background and the gold rules between the boxes.
+class RecapCanvas : public QWidget {
+public:
+  using QWidget::QWidget;
+  QList<int> rules;   // y of a 1 px rule
+protected:
+  void paintEvent(QPaintEvent* e) override {
+    QPainter p(this);
+    p.fillRect(e->rect(), theme::map("#050402"));
+    for (int y : rules) p.fillRect(QRect(0, y, width(), 1), theme::map("#3a3214"));
+  }
 };
 
 class RecapPage : public QWidget, public app::Preloadable {
@@ -70,6 +92,12 @@ public:
     m_rel = new ReleasesBox(this);
     m_wire = new WireBox(this);
     m_model = new Model(this);
+    m_canvas = new RecapCanvas;
+    m_scroll = new global::PageScroll(m_canvas, this);
+    m_scroll->layout = [this](int w, int vh) { return layoutScroll(w, vh); };
+    m_scroll->hide();
+    // phone layouts: the file is shown whole in the page's scroll, which follows its height
+    connect(m_centre, &CentreView::heightChanged, this, [this] { if (m_mode) m_scroll->relayout(); });
     m_tab = qEnvironmentVariableIsSet("DW_RECAP_TAB") ? qEnvironmentVariableIntValue("DW_RECAP_TAB") : 0;
     m_head->setTab(m_tab);
     // the read is written in the interface language; the in-card EN/FR toggle switches it for this session only
@@ -95,9 +123,66 @@ protected:
   //  1920+: side columns widen a little (to 380 / 460) so the centre does not swallow all the extra width.
   int leftW() const { return width() < 1366 ? 300 : qBound(317, 317 + (width() - 1600) / 12, 380); }
   int rightW() const { return width() < 1366 ? 0 : qBound(373, 373 + (width() - 1600) / 8, 460); }
+  // Layout modes. 0: desktop (the reference's columns, unchanged). Below 1024 px wide only:
+  //  2 (ui::compact, phone upright): one scrolling column, the registry (its list scrolls inside, 4½ rows) above the
+  //    session file, the releases and the wire, each shown whole;
+  //  1 (shorter than 600 px, phone turned): the registry keeps the left column, the file, releases and wire scroll as
+  //    one column on the right (stacked under the registry they were three slivers).
+  int mode() const { return ui::compact(width()) ? 2 : width() < 1024 && height() < 600 ? 1 : 0; }
+  void setMode(int m) {
+    if (m == m_mode) return;
+    m_mode = m;
+    // boxes go into the scroll's content (or back onto the page); a reparented widget is hidden until shown again
+    auto put = [](QWidget* w, QWidget* host) { if (w->parentWidget() != host) { w->setParent(host); w->show(); } };
+    for (QWidget* w : {static_cast<QWidget*>(m_head), static_cast<QWidget*>(m_list)}) put(w, m == 2 ? static_cast<QWidget*>(m_canvas) : this);
+    for (QWidget* w : {static_cast<QWidget*>(m_centre), static_cast<QWidget*>(m_rel), static_cast<QWidget*>(m_wire)}) put(w, m ? static_cast<QWidget*>(m_canvas) : this);
+    for (SmoothScroll* b : {static_cast<SmoothScroll*>(m_centre), static_cast<SmoothScroll*>(m_rel), static_cast<SmoothScroll*>(m_wire)}) {
+      b->setPassWheel(m != 0);
+      if (m) b->verticalScrollBar()->setValue(0);
+    }
+    m_scroll->setVisible(m != 0);
+    m_strip->raise();
+  }
+  // Content of the phone scroll (modes 1 and 2), `w` wide; returns its height.
+  int layoutScroll(int w, int) {
+    if (!m_mode) return 0;
+    int y = 0;
+    m_canvas->rules.clear();
+    if (m_mode == 2) {
+      m_head->setGeometry(0, 0, w, 71);
+      const int listH = 22 + 4 * 51 + 26;   // day band + 4 rows + half a row (shows that the list scrolls)
+      m_list->setGeometry(0, 71, w, listH);
+      y = 71 + listH;
+      m_canvas->rules << y; y += 1;
+    }
+    const int ch = m_centre->heightFor(w);
+    m_centre->setGeometry(0, y, w, ch);
+    y += ch;
+    m_canvas->rules << y + 1; y += 4;
+    m_rel->setGeometry(0, y, w, m_rel->preferredHeight());
+    y += m_rel->preferredHeight() + 2;
+    const int wireH = qMax(130, m_wire->contentHeight());   // whole: the wire is the last box, nothing scrolls inside
+    m_wire->setGeometry(0, y, w, wireH);
+    m_canvas->update();
+    return y + wireH;
+  }
   void resizeEvent(QResizeEvent*) override {
     const int W = width(), H = height();
     const int lw = leftW(), rw = rightW();
+    setMode(mode());
+    if (m_mode) {
+      m_strip->setGeometry(0, 0, W, 37);
+      if (m_mode == 1) {
+        m_head->setGeometry(0, 37, lw, 71);
+        m_list->setGeometry(0, 108, lw, H - 108);
+        m_scroll->setGeometry(lw + 1, 37, W - lw - 1, H - 37);
+      } else {
+        m_scroll->setGeometry(0, 37, W, H - 37);
+      }
+      m_scroll->relayout();
+      update();
+      return;
+    }
     m_strip->setGeometry(0, 0, W, 37);
     m_head->setGeometry(0, 37, lw, 71);
     if (rw == 0) {   // stacked: registry ≈ 40 %, releases, wire the rest
@@ -116,7 +201,9 @@ protected:
   void paintEvent(QPaintEvent*) override {
     QPainter p(this);
     p.fillRect(rect(), theme::map("#050402"));
+    if (m_mode == 2) return;
     p.fillRect(QRect(leftW(), 37, 1, height()), theme::map("#110f0b"));
+    if (m_mode == 1) return;
     if (rightW()) p.fillRect(QRect(width() - rightW() - 1, 37, 1, height()), theme::map("#181714"));
     else p.fillRect(QRect(0, m_rel->y() - 2, leftW(), 1), theme::map("#3a3214"));
   }
@@ -134,6 +221,7 @@ protected:
 
 private:
   void layoutRight() {
+    if (m_mode) { m_scroll->relayout(); return; }   // phone: the boxes' heights follow their content
     const int H = height();
     if (rightW() == 0) {   // stacked under the registry list
       const int top = m_list->geometry().bottom() + 4, w = leftW();
@@ -245,6 +333,9 @@ private:
   ReleasesBox* m_rel;
   WireBox* m_wire;
   Model* m_model;
+  RecapCanvas* m_canvas;
+  global::PageScroll* m_scroll;
+  int m_mode = 0;
   Window m_sel;
   QString m_selKey;
   int m_tab = 0;

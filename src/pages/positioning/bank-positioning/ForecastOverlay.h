@@ -1,5 +1,6 @@
 #pragma once
 #include <QWidget>
+#include <QPainter>
 #include <QList>
 #include <QRectF>
 #include <functional>
@@ -27,6 +28,10 @@ protected:
   void showEvent(QShowEvent*) override;   // the spot quote is polled only while the overlay is on screen
   void hideEvent(QHideEvent*) override;
 private:
+  bool phone() const;                           // ui::compact(width()): one column (see phoneGeo)
+  struct PhoneGeo { QRectF panel, chart; qreal chartH = 0, tableTop = 0; };
+  PhoneGeo phoneGeo() const;
+  void paintPhone(QPainter& p);                 // below the title and the pair pills
   QRectF panelRect() const;
   QRectF closeRect() const;
   QList<QRectF> pairRects() const;

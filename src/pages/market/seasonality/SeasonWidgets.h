@@ -17,6 +17,8 @@ QFont mono(int px, int weight = QFont::Normal, qreal ls = 0);
 QRectF drawPeriodPill(QPainter& p, qreal right, qreal top, const QString& text);
 void drawCardFrame(QPainter& p, const QRect& r);
 void drawCardTitle(QPainter& p, const QPointF& at, const QString& text, bool centred = false, qreal width = 0);
+// Narrow cards (phones): the title font steps down (letter spacing, then size) until the text fits maxWidth.
+void drawCardTitleFit(QPainter& p, const QPointF& at, const QString& text, qreal maxWidth);
 QString signedPct(double v, int dec = 2);                  // +0.41% / -0.47% / "—"
 
 // ---------------------------------------------------------------- toolbar
@@ -31,6 +33,10 @@ public:
   void setToggles(bool actual, bool index);
   void setActualLabel(const QString& s) { m_actualLabel = s; relayout(); }
   QRect itemRect(int item) const;
+  // phones: the items wrap onto rows of finger-sized buttons; the height then follows heightFor(width)
+  void setWrap(bool on) { if (on != m_wrap) { m_wrap = on; relayout(); } }
+  bool wraps() const { return m_wrap; }
+  int heightFor(int w) const { QVector<QRect> r(Refresh + 1); return place(w, r); }
 signals:
   void clicked(int item);
 protected:
@@ -42,7 +48,9 @@ protected:
   bool event(QEvent* e) override;
 private:
   void relayout();
+  int place(int w, QVector<QRect>& rects) const;   // item rects for width w; returns the bar's height
   int hit(const QPoint& p) const;
+  bool m_wrap = false;
   QString m_asset, m_years, m_compare, m_actualLabel = "2026 actual";
   QVector<QRect> m_rects;
   int m_hover = None, m_open = None, m_seg = 0; bool m_segClicked = false, m_actual = false, m_index = false;
@@ -169,6 +177,8 @@ class RiskCard : public QWidget {
 public:
   explicit RiskCard(QWidget* parent);
   void setStats(const seasonality::Stats& s);
+  int heightFor(int w) const;   // phones: tall enough for the wrapped footnote (the desktop card is 315 px)
+  static QString footnote(const QString& period);
   void setStatus(const QString& s) { m_status = s; update(); }
 protected:
   void paintEvent(QPaintEvent*) override;

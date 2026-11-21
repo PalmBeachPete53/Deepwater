@@ -89,15 +89,23 @@ void Strip::paintEvent(QPaintEvent*) {
   iconBank(p, QRectF(13, 11, 11, 11), theme::map("#d6c27a"));
   p.setPen(Qt::NoPen); p.setBrush(blinkOn() ? dot : theme::mix(dot, strip, 0.5));
   p.drawEllipse(QPointF(37, 17), 2.6, 2.6);
-  const QFont f = theme::mono(11, QFont::Normal, 1.8);
-  p.setFont(f); p.setPen(dim);
-  const QString title = QCoreApplication::translate("banks", "GLOBAL BANKING NETWORK — LIVE SURVEILLANCE");
-  spacedText(p, QPointF(50, 21), title);
-  drawBlockCursor(p, QPointF(50 + QFontMetricsF(f).horizontalAdvance(title) + 2, 10), 6, 14);
-  // badge
+  QFont f = theme::mono(11, QFont::Normal, 1.8);
+  QString title = QCoreApplication::translate("banks", "GLOBAL BANKING NETWORK — LIVE SURVEILLANCE");
   const QFont bf = theme::mono(10, QFont::Bold, 0.4);
   const QString badge = m_badge;
   const qreal bw = QFontMetricsF(bf).horizontalAdvance(badge) + 22;
+  // narrow windows (phones): the badge goes when it would run into the title (the registry below says the same),
+  // then the title tightens and is elided at the window edge
+  const bool showBadge = 50 + QFontMetricsF(f).horizontalAdvance(title) + 20 + 14 + bw <= width();
+  if (!showBadge && 50 + QFontMetricsF(f).horizontalAdvance(title) + 14 > width()) {
+    f = theme::mono(10, QFont::Normal, 0.6);
+    title = QFontMetricsF(f).elidedText(title, Qt::ElideRight, width() - 50 - 14);
+  }
+  p.setFont(f); p.setPen(dim);
+  spacedText(p, QPointF(50, 21), title);
+  drawBlockCursor(p, QPointF(50 + QFontMetricsF(f).horizontalAdvance(title) + 2, 10), 6, 14);
+  if (!showBadge) return;
+  // badge
   const QRectF br(width() - 14 - bw, 8, bw, 20);
   QLinearGradient bg(br.topLeft(), br.bottomLeft()); bg.setColorAt(0, theme::map("#524604")); bg.setColorAt(1, theme::map("#3a3103"));
   p.setPen(QPen(QColor(badgeBorder), 1)); p.setBrush(bg);
@@ -380,12 +388,12 @@ QRectF LeftColumn::tabRect(int i) const {
     total += need[t];
     if (need[t] > ws[t] * k) fits = false;
   }
-  if (fits) return QRectF(xs[i] * k, 0, ws[i] * k, 29);
+  if (fits) return QRectF(xs[i] * k, 0, ws[i] * k, 29 + dy());
   // 6 px from the column edges (the first tab's icon touched the window edge, the last tab the border)
   const qreal gap = qMax<qreal>(2, (width() - 12 - total) / 3.0);
   qreal x = 6;
   for (int t = 0; t < i; ++t) x += need[t] + gap;
-  return QRectF(x, 0, need[i], 29);
+  return QRectF(x, 0, need[i], 29 + dy());
 }
 // Short windows (< 760 px): the sources footer keeps 3 lines, the last one elided, full text in the tooltip
 // (its 5 lines crowded the list at 1024x600).
@@ -401,13 +409,13 @@ int LeftColumn::footerHeight() const {
 
 void LeftColumn::resizeEvent(QResizeEvent*) {
   const int w = width();
-  const int dw = (w - 9 - 9 - 7) / 2;
-  m_banks->setGeometry(9, 89, dw, 28);
-  m_types->setGeometry(9 + dw + 7, 89, w - 9 - (9 + dw + 7), 28);
-  const int listTop = m_tab >= 2 ? 37 : 123;
+  const int dw = (w - 9 - 9 - 7) / 2, d = dy(), bh = m_phone ? 34 : 28;
+  m_banks->setGeometry(9, 89 + d, dw, bh);
+  m_types->setGeometry(9 + dw + 7, 89 + d, w - 9 - (9 + dw + 7), bh);
+  const int listTop = m_tab >= 2 ? 37 + d : 123 + d + (bh - 28);
   const int fh = footerHeight();
   m_scroll->setGeometry(0, listTop, w, height() - listTop - fh);
-  m_textScroll->setGeometry(0, 82, w, height() - 82 - fh);
+  m_textScroll->setGeometry(0, 82 + d, w, height() - 82 - d - fh);
   m_list->setFixedWidth(w);
 }
 
@@ -546,10 +554,11 @@ void LeftColumn::paintEvent(QPaintEvent*) {
     p.drawText(QRectF(r.x() + 17, r.y(), r.width(), r.height()), Qt::AlignVCenter | Qt::AlignLeft, QCoreApplication::translate("banks", kTabs[i]));
   }
   // header band
-  const QRectF band(0, 29, width() - 1, 51);
+  const int d = dy();
+  const QRectF band(0, 29 + d, width() - 1, 51);
   p.fillRect(band, look::band);
   p.fillRect(QRectF(0, band.bottom(), width() - 1, 1), bandBorder);
-  iconDoc(p, QRectF(13, 51, 10, 12), theme::map("#d6c27a"));
+  iconDoc(p, QRectF(13, 51 + d, 10, 12), theme::map("#d6c27a"));
   const QFont fh = theme::mono(10, QFont::Normal, 1.2);
   p.setFont(fh); p.setPen(theme::map("#67624f"));
   static const char* heads[] = {QT_TRANSLATE_NOOP("banks", "BANK RESEARCH — DAILY PDFS"), QT_TRANSLATE_NOOP("banks", "BANK NEWS — QUICK READS"),
@@ -564,11 +573,11 @@ void LeftColumn::paintEvent(QPaintEvent*) {
     QFont hf2 = fh;
     if (QFontMetricsF(hf2).horizontalAdvance(head) > avail) hf2 = theme::mono(10);   // narrow column: no spacing
     p.setFont(hf2);
-    p.drawText(QPointF(34, 52), QFontMetricsF(hf2).elidedText(head, Qt::ElideRight, avail));
+    p.drawText(QPointF(34, 52 + d), QFontMetricsF(hf2).elidedText(head, Qt::ElideRight, avail));
   }
-  drawBlockCursor(p, QPointF(35, 58), 7, 13);
+  drawBlockCursor(p, QPointF(35, 58 + d), 7, 13);
   p.setFont(theme::mono(10)); p.setPen(theme::map("#5c5a50"));
-  if (m_tab <= 1) p.drawText(QPointF(width() - 11 - countsW, 52), counts);
+  if (m_tab <= 1) p.drawText(QPointF(width() - 11 - countsW, 52 + d), counts);
   // footer
   p.setFont(theme::mono(8, QFont::Normal, 1.0)); p.setPen(footer);
   if (height() < 760) {
@@ -583,7 +592,7 @@ void LeftColumn::paintEvent(QPaintEvent*) {
 void LeftColumn::mouseMoveEvent(QMouseEvent* e) {
   setToolTip(height() < 760 && e->position().y() > height() - footerHeight() ? m_footer : QString());   // elided footer
   int h = -1; for (int i = 0; i < 4; ++i) if (tabRect(i).contains(e->position())) h = i;
-  if (h != m_tabHover) { m_tabHover = h; setCursor(h >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor); update(QRect(0, 0, width(), 32)); }
+  if (h != m_tabHover) { m_tabHover = h; setCursor(h >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor); update(QRect(0, 0, width(), 32 + dy())); }
 }
 void LeftColumn::mousePressEvent(QMouseEvent* e) {
   for (int i = 0; i < 4; ++i) if (tabRect(i).contains(e->position())) { setTab(i); return; }
@@ -604,9 +613,10 @@ RegistryColumn::RegistryColumn(QWidget* parent) : QWidget(parent) {
   m_wheel->setDuration(150); m_wheel->setEasingCurve(QEasingCurve::OutCubic);
   QObject::connect(m_wheel, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) { m_off = v.toReal(); update(); });
 }
+int RegistryColumn::fullHeight() { return kRowTop + 21 * 35 + 4; }
 qreal RegistryColumn::maxOffset() const { return qMax<qreal>(0, kRowTop + 21 * rowH(this) + 4 - height()); }
 void RegistryColumn::wheelEvent(QWheelEvent* e) {
-  if (maxOffset() <= 0) return;
+  if (maxOffset() <= 0) { e->ignore(); return; }   // nothing to scroll (phones): the page scrolls instead
   if (!e->pixelDelta().isNull()) { m_wheel->stop(); m_off = qBound<qreal>(0, m_off - e->pixelDelta().y(), maxOffset()); update(); return; }
   const qreal target = qBound<qreal>(0, (m_wheel->state() == QAbstractAnimation::Running ? m_wheel->endValue().toReal() : m_off)
                                           - e->angleDelta().y() * 70 / 120.0, maxOffset());

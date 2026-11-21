@@ -27,9 +27,16 @@ public:
   void hoverAt(const QPoint& p);
   void hoverChart(double fraction);
   void setChartMode(int mode, int span);
+  // Phones / short windows: the page scrolls (one finger-scrollable column), so the table takes its whole height
+  // (fullHeight()) and does not scroll itself; setVisibleBand tells it which part of it the page shows, so the
+  // column header and the day header stay pinned at the top of that band.
+  void setFullHeight(bool on);
+  int fullHeight() const { return int(kHeaderH + contentHeight() + 8); }
+  void setVisibleBand(double top, double height);
 
 signals:
   void valueClicked(const news::Event& e, int col);
+  void contentChanged();                         // rows or expansion changed: fullHeight() may differ
 
 protected:
   void paintEvent(QPaintEvent*) override;
@@ -56,6 +63,13 @@ private:
   void setTarget(double y);
   int itemAt(double contentY) const;
   void paintRow(QPainter& p, const Item& it, double y, bool pinned) const;
+  void paintRowPhone(QPainter& p, const Item& it, double y) const;
+  // phone width: two-line rows (time, flag, name / tag, actual, forecast, previous), no SURPRISE / MIN / MAX
+  bool phone() const { return width() < 520; }
+  double rowH() const { return phone() ? kPhoneRowH : kRowH; }
+  double scrollPos() const { return m_full ? m_viewTop : m_scroll; }   // content y shown under the column header
+  double headY() const { return m_full ? m_viewTop : 0; }              // where the column header is painted
+  double contentY(double y) const { return y - kHeaderH - headY() + scrollPos(); }
   void paintGroup(QPainter& p, const QDate& day, double y, bool sticky) const;
   void paintExpand(QPainter& p, const Item& it, double y) const;
   void updateHover(const QPointF& pos);
@@ -64,6 +78,7 @@ private:
   static constexpr int kHeaderH = 34;            // column header (with its borders)
   static constexpr int kRowH = 37;
   static constexpr int kStickyH = 36;
+  static constexpr int kPhoneRowH = 60;
 
   QList<news::Event> m_events;
   QList<Item> m_items;
@@ -76,5 +91,7 @@ private:
   bool m_cardPress = false;
   QString m_focusKey; int m_focusCol = -1;
   bool m_pin = false;                            // hover set by the test hook survives leave events
+  bool m_full = false;                           // setFullHeight
+  double m_viewTop = 0, m_viewH = 0;             // setVisibleBand
 };
 }  // namespace news::pages

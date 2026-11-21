@@ -1,4 +1,5 @@
 #include "ai/McpServer.h"
+#include "ai/Blind.h"
 #include "core/Paths.h"
 #include "ai/Engine.h"
 #include "core/Paths.h"
@@ -127,7 +128,11 @@ int McpServer::gate(const QByteArray& path, const QHash<QByteArray, QByteArray>&
   if (!path.startsWith("/mcp/")) return 404;
   const int env = path.mid(5).toInt() - 1;
   if (env < 0 || env >= Slots::kCount) return 404;
-  if (m_tokens[env].isEmpty() || h.value("authorization") != "Bearer " + m_tokens[env].toLatin1()) return 401;
+  // compared in constant time: how long a wrong token takes to refuse must not tell how much of it was right
+  const QByteArray want = "Bearer " + m_tokens[env].toLatin1(), got = h.value("authorization");
+  unsigned char diff = got.size() == want.size() ? 0 : 1;
+  for (int i = 0; i < want.size(); ++i) diff |= static_cast<unsigned char>(want[i] ^ (i < got.size() ? got[i] : 0));
+  if (m_tokens[env].isEmpty() || diff) return 401;
   return 0;
 }
 
@@ -169,7 +174,9 @@ void McpServer::handle(QTcpSocket* s, const QByteArray& method, const QByteArray
     const QJsonObject args = params.value("arguments").toObject();
     const QJsonObject call{{"name", name}, {"arguments", args}};
     QPointer<QTcpSocket> sock(s);
-    auto answer = [this, sock, id, env, call](const ToolResult& r) {
+    const blind::Mask mask = maskFor(env);   // blind trials: dates, the market's name and price level masked both ways
+    auto answer = [this, sock, id, env, call, mask](const ToolResult& r0) {
+      const ToolResult r{r0.ok, blind::out(mask, r0.text)};
       if (Engine* e = Engines::instance().at(env)) e->recordTool(call, r);
       reply(sock, 200, rpcResult(id, QJsonObject{{"content", QJsonArray{QJsonObject{{"type", "text"}, {"text", r.text}}}},
                                                  {"isError", !r.ok}}));
@@ -188,14 +195,22 @@ void McpServer::handle(QTcpSocket* s, const QByteArray& method, const QByteArray
       refuse("refused: this environment does not grant the skill \"" + tool->skill + "\" any more");
       return;
     }
+    // the evaluation clock: a tool that only knows the present is refused, and the refusal is journaled
+    const qint64 asOf = Slots::instance().asOf(env);
+    if (const QString why = clockGate(*tool, asOf); !why.isEmpty()) { answer({false, why}); return; }
     auto once = std::make_shared<bool>(false);
-    auto guarded = [answer, once](const ToolResult& r) { if (*once) return; *once = true; answer(r); };
+    auto guarded = [answer, once, tool](const ToolResult& r) {
+      if (*once) return;
+      *once = true;
+      answer({r.ok, r.ok ? wrapExternal(*tool, r.text) : r.text});   // third parties' text marked as data
+    };
     const int ms = tool->timeoutMs;
     QTimer::singleShot(ms, this, [guarded, ms] {
       guarded({false, QString("error: the data did not arrive within %1 s").arg(ms / 1000)});
     });
-    currentCaller() = ToolCaller{env, QStringLiteral("Claude Code")};
-    tool->run(args, guarded);
+    currentCaller() = ToolCaller{env, QStringLiteral("Claude Code"), asOf};
+    e->beginTool(call);
+    tool->run(blind::in(mask, args), guarded);
     return;
   }
   reply(s, 200, rpcError(id, -32601, "method not found: " + m));

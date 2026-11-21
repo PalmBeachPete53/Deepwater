@@ -38,13 +38,24 @@ public:
   QStringList skills(int i) const;
   bool hasSkill(int i, const QString& id) const { return skills(i).contains(id); }
   void setSkill(int i, const QString& id, bool on);
+  // Evaluation mode (2026-11-20): the past moment (Unix s, UTC) the environment's tools answer as of; 0 = off, the
+  // present. Saved in settings ai.asof (list of 4, seconds or "").
+  qint64 asOf(int i) const { return i >= 0 && i < kCount ? m_asOf[i] : 0; }
+  void setAsOf(int i, qint64 secs);
+  // Blind trials (ai/Blind.h): with evaluation mode, the tools' dates, the market's name and its price level are masked
+  // for this environment; seed: the secret shift and factor (0 = off). Saved in settings ai.blind. asOfChanged too.
+  quint32 blindSeed(int i) const { return i >= 0 && i < kCount ? m_blind[i] : 0; }
+  void setBlind(int i, quint32 seed);
 signals:
   void changed(int index);
   void skillsChanged(int index);
+  void asOfChanged(int index);
 private:
   Slots();
   void save();
   QVector<Slot> m_slots;
   QVector<QStringList> m_skills;
+  QVector<qint64> m_asOf;
+  QVector<quint32> m_blind;
 };
 }  // namespace ai

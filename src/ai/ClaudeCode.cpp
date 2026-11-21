@@ -4,7 +4,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QProcess>
+#include "core/Process.h"
 #include <QStandardPaths>
 #include <QTimer>
 #include <memory>
@@ -48,18 +48,18 @@ void Probe::refresh() {
   }
   // `claude --version`, then `claude auth status` (JSON); each with its own time limit
   auto runOne = [this](const QStringList& args, std::function<void(int, const QByteArray&)> done) {
-    auto* p = new QProcess(this);
+    auto* p = new dw::Process(this);
     p->setProcessEnvironment(environment());
     p->setProgram(m_status.path);
     p->setArguments(args);
     auto fired = std::make_shared<bool>(false);
-    connect(p, &QProcess::finished, this, [p, done, fired](int code, QProcess::ExitStatus) {
+    connect(p, &dw::Process::finished, this, [p, done, fired](int code, dw::Process::ExitStatus) {
       if (*fired) return; *fired = true;
       done(code, p->readAllStandardOutput());
       p->deleteLater();
     });
-    connect(p, &QProcess::errorOccurred, this, [p, done, fired](QProcess::ProcessError e) {
-      if (e != QProcess::FailedToStart || *fired) return; *fired = true;
+    connect(p, &dw::Process::errorOccurred, this, [p, done, fired](dw::Process::ProcessError e) {
+      if (e != dw::Process::FailedToStart || *fired) return; *fired = true;
       done(-1, {});
       p->deleteLater();
     });

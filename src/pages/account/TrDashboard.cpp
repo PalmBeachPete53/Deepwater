@@ -5,6 +5,7 @@
 #include "ui/Format.h"
 #include "core/I18n.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QtMath>
@@ -234,7 +235,7 @@ DashboardView::DashboardView(QWidget* parent) : TrView(parent) {
     g.setColorAt(0, theme::map("#df5f61")); g.setColorAt(0.35, theme::map("#e88a4f")); g.setColorAt(0.65, theme::map("#eebc52")); g.setColorAt(1, theme::map("#4caf50"));
     p.setPen(Qt::NoPen); p.setBrush(g); p.drawRoundedRect(gb, 2.5, 2.5);
     p.setFont(cond(10, false)); p.setPen(c().ghost);
-    p.drawText(QRectF(10, 362, r.width() - 20, 22), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
+    p.drawText(QRectF(10, 362, r.width() - 20, m_phone ? 44 : 22), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
                m_d.demo ? QCoreApplication::translate("account", "This app's own average of the six metrics above (sample trades) — not an industry-standard score.")
                         : QCoreApplication::translate("account", "This app's own average of the six real metrics above — not an industry-standard score."));
   });
@@ -273,7 +274,7 @@ DashboardView::DashboardView(QWidget* parent) : TrView(parent) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(QPen(c().cyanLine, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.setBrush(Qt::NoBrush);
     p.drawPath(line);
-    const int every = std::max(1, int(std::ceil(n / 12.0)));
+    const int every = std::max(1, int(std::ceil(n / (m_phone ? 4.0 : 12.0))));   // phones: ~300 px of plot, 80 px labels
     p.setPen(c().axis);
     for (int i = 0; i < n; i += every)
       p.drawText(QRectF(X(i) - 40, pl.bottom() + 8, 80, 16), Qt::AlignCenter, days[i].date.toString(i18n::current() == i18n::Lang::English ? "MM/dd/yy" : "dd/MM/yy"));
@@ -311,7 +312,7 @@ DashboardView::DashboardView(QWidget* parent) : TrView(parent) {
           b.labels << t.close.toLocalTime().toString(i18n::current() == i18n::Lang::English ? "MM/dd" : "dd/MM"); b.values << t.net();
           tipTitle << account::displaySymbol(t.symbol) + " · " + account::sideName(t.side);
         }
-        b.labelEvery = 5; b.barWidth = 0.6;
+        b.labelEvery = m_phone ? 10 : 5; b.barWidth = 0.6;   // phones: 8 px per bar, a date every 5 bars touched
       }
       const int h = drawVBars(p, b, anim, mouse);
       if (h >= 0) {
@@ -337,55 +338,8 @@ DashboardView::DashboardView(QWidget* parent) : TrView(parent) {
     p.setPen(Qt::NoPen); p.setBrush(theme::map("#e0c566")); p.drawEllipse(QPointF(15.5, 19.5), 2.5, 2.5);
     p.setFont(mono(10, true, 2)); p.setPen(theme::map("#e9d258"));
     p.drawText(QPointF(22, 23), QCoreApplication::translate("account", "AUTOMATED READ"));
-    const auto& s = m_d.stats;
-    const auto& T = m_d.trades;
-    if (T.isEmpty()) return;
-    const QString cc = m_d.currency;
-    QStringList lines;
-    lines << QCoreApplication::translate("account", "%1 over %2 trades, %3 → %4: %5% winners, profit factor %6, average win %7 against an average loss of %8.")
-               .arg(signedMoney(s.net, cc)).arg(s.n).arg(longDate(T.first().close).section(',', 0, 0), longDate(T.last().close).section(',', 0, 0))
-               .arg(fmt::num(s.winRate * 100, 1)).arg(std::isfinite(s.profitFactor) ? fmt::num(s.profitFactor, 2) : std::isinf(s.profitFactor) ? QString("∞") : fmt::dash())   // NaN: only breakeven trades
-               .arg(money(s.avgWin, cc), money(s.avgLoss, cc));
-    // drawdown and recovery
-    if (s.maxDD < 0) {
-      int trough = 0; for (int i = 0; i < s.drawdown.size(); ++i) if (s.drawdown[i] <= s.maxDD) { trough = i; break; }
-      int recovered = -1; for (int i = trough; i < s.drawdown.size(); ++i) if (s.drawdown[i] >= 0) { recovered = i; break; }
-      // without a starting balance the % is unknown: the sentence gives the money drop only
-      lines << (std::isfinite(s.maxDDPct)
-                  ? QCoreApplication::translate("account", "Deepest drawdown %1 (%2%) reached on %3; %4")
-                      .arg(money(s.maxDD, cc), fmt::num(s.maxDDPct * 100, 2), longDate(T[trough].close).section(',', 0, 0))
-                  : QCoreApplication::translate("account", "Deepest drawdown %1 reached on %2; %3")
-                      .arg(money(s.maxDD, cc), longDate(T[trough].close).section(',', 0, 0)))
-                 .arg(recovered >= 0 ? QCoreApplication::translate("account", "recovered %1 trades later, on %2.").arg(recovered - trough).arg(longDate(T[recovered].close).section(',', 0, 0))
-                                     : QCoreApplication::translate("account", "not recovered yet (%1 below the peak).").arg(money(s.currentDD, cc)));
-    }
-    // best / worst instrument and weekday
-    if (s.bySymbol.size() >= 2)
-      lines << QCoreApplication::translate("account", "Best instrument %1 (%2 over %3 trades); weakest %4 (%5 over %6).")
-                 .arg(s.bySymbol.first().label, signedMoney(s.bySymbol.first().pnl, cc)).arg(s.bySymbol.first().count)
-                 .arg(s.bySymbol.last().label, signedMoney(s.bySymbol.last().pnl, cc)).arg(s.bySymbol.last().count);
-    if (s.byWeekday.size() >= 2) {
-      auto best = *std::max_element(s.byWeekday.begin(), s.byWeekday.end(), [](auto& a, auto& b) { return a.pnl < b.pnl; });
-      auto worst = *std::min_element(s.byWeekday.begin(), s.byWeekday.end(), [](auto& a, auto& b) { return a.pnl < b.pnl; });
-      lines << QCoreApplication::translate("account", "Best day %1 (%2), weakest %3 (%4).").arg(best.label, signedMoney(best.pnl, cc), worst.label, signedMoney(worst.pnl, cc));
-    }
-    // holding time winners vs losers, streaks
-    double hw = 0, hl = 0; int nw = 0, nl = 0, run = 0, bestRun = 0, worstRun = 0;
-    for (const auto& t : T) {
-      const double h = t.heldHours();
-      if (t.net() > 0) { if (std::isfinite(h)) { hw += h; ++nw; } run = run > 0 ? run + 1 : 1; }
-      else if (t.net() < 0) { if (std::isfinite(h)) { hl += h; ++nl; } run = run < 0 ? run - 1 : -1; }
-      else run = 0;                                     // a breakeven trade ends a streak (A14)
-      bestRun = std::max(bestRun, run); worstRun = std::min(worstRun, run);
-    }
-    QString hold;
-    if (nw && nl) {
-      const double aw = hw / nw, al = hl / nl;
-      hold = QCoreApplication::translate("account", "Winners are held %1 on average, losers %2%3. ").arg(held(aw), held(al),
-               al > aw * 1.2 ? QCoreApplication::translate("account", " — losers stay open longer")
-                             : aw > al * 1.2 ? QCoreApplication::translate("account", " — winners are given room") : QString());
-    }
-    lines << hold + QCoreApplication::translate("account", "Longest winning streak %1, longest losing streak %2.").arg(bestRun).arg(-worstRun);
+    if (m_d.trades.isEmpty()) return;
+    const QStringList lines = readLines();
     p.setFont(cond(15, false));
     // prose lines stay readable (max 900 px); wide panels use two columns
     const int cols = r.width() >= 1900 ? 2 : 1;
@@ -404,7 +358,9 @@ DashboardView::DashboardView(QWidget* parent) : TrView(parent) {
       }
     }
     p.setFont(cond(10, false)); p.setPen(c().ghost);
-    p.drawText(QRectF(22, r.height() - 24, r.width() - 44, 14), Qt::AlignLeft | Qt::AlignVCenter,
+    // phones: the note wraps on two lines (relayout() leaves room for them)
+    p.drawText(m_phone ? QRectF(22, r.height() - 36, r.width() - 44, 28) : QRectF(22, r.height() - 24, r.width() - 44, 14),
+               Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
                QCoreApplication::translate("account", "Rule-based read computed by Deepwater from the trades above%1 — not advice.")
                .arg(m_d.demo ? QCoreApplication::translate("account", " (invented sample trades)") : QString()));
   });
@@ -416,7 +372,75 @@ DashboardView::DashboardView(QWidget* parent) : TrView(parent) {
   });
 }
 
+QStringList DashboardView::readLines() const {
+  const auto& s = m_d.stats;
+  const auto& T = m_d.trades;
+  if (T.isEmpty()) return {};
+  const QString cc = m_d.currency;
+  QStringList lines;
+  lines << QCoreApplication::translate("account", "%1 over %2 trades, %3 → %4: %5% winners, profit factor %6, average win %7 against an average loss of %8.")
+             .arg(signedMoney(s.net, cc)).arg(s.n).arg(longDate(T.first().close).section(',', 0, 0), longDate(T.last().close).section(',', 0, 0))
+             .arg(fmt::num(s.winRate * 100, 1)).arg(std::isfinite(s.profitFactor) ? fmt::num(s.profitFactor, 2) : std::isinf(s.profitFactor) ? QString("∞") : fmt::dash())   // NaN: only breakeven trades
+             .arg(money(s.avgWin, cc), money(s.avgLoss, cc));
+  // drawdown and recovery
+  if (s.maxDD < 0) {
+    int trough = 0; for (int i = 0; i < s.drawdown.size(); ++i) if (s.drawdown[i] <= s.maxDD) { trough = i; break; }
+    int recovered = -1; for (int i = trough; i < s.drawdown.size(); ++i) if (s.drawdown[i] >= 0) { recovered = i; break; }
+    // without a starting balance the % is unknown: the sentence gives the money drop only
+    lines << (std::isfinite(s.maxDDPct)
+                ? QCoreApplication::translate("account", "Deepest drawdown %1 (%2%) reached on %3; %4")
+                    .arg(money(s.maxDD, cc), fmt::num(s.maxDDPct * 100, 2), longDate(T[trough].close).section(',', 0, 0))
+                : QCoreApplication::translate("account", "Deepest drawdown %1 reached on %2; %3")
+                    .arg(money(s.maxDD, cc), longDate(T[trough].close).section(',', 0, 0)))
+               .arg(recovered >= 0 ? QCoreApplication::translate("account", "recovered %1 trades later, on %2.").arg(recovered - trough).arg(longDate(T[recovered].close).section(',', 0, 0))
+                                   : QCoreApplication::translate("account", "not recovered yet (%1 below the peak).").arg(money(s.currentDD, cc)));
+  }
+  // best / worst instrument and weekday
+  if (s.bySymbol.size() >= 2)
+    lines << QCoreApplication::translate("account", "Best instrument %1 (%2 over %3 trades); weakest %4 (%5 over %6).")
+               .arg(s.bySymbol.first().label, signedMoney(s.bySymbol.first().pnl, cc)).arg(s.bySymbol.first().count)
+               .arg(s.bySymbol.last().label, signedMoney(s.bySymbol.last().pnl, cc)).arg(s.bySymbol.last().count);
+  if (s.byWeekday.size() >= 2) {
+    auto best = *std::max_element(s.byWeekday.begin(), s.byWeekday.end(), [](auto& a, auto& b) { return a.pnl < b.pnl; });
+    auto worst = *std::min_element(s.byWeekday.begin(), s.byWeekday.end(), [](auto& a, auto& b) { return a.pnl < b.pnl; });
+    lines << QCoreApplication::translate("account", "Best day %1 (%2), weakest %3 (%4).").arg(best.label, signedMoney(best.pnl, cc), worst.label, signedMoney(worst.pnl, cc));
+  }
+  // holding time winners vs losers, streaks
+  double hw = 0, hl = 0; int nw = 0, nl = 0, run = 0, bestRun = 0, worstRun = 0;
+  for (const auto& t : T) {
+    const double h = t.heldHours();
+    if (t.net() > 0) { if (std::isfinite(h)) { hw += h; ++nw; } run = run > 0 ? run + 1 : 1; }
+    else if (t.net() < 0) { if (std::isfinite(h)) { hl += h; ++nl; } run = run < 0 ? run - 1 : -1; }
+    else run = 0;                                     // a breakeven trade ends a streak (A14)
+    bestRun = std::max(bestRun, run); worstRun = std::min(worstRun, run);
+  }
+  QString hold;
+  if (nw && nl) {
+    const double aw = hw / nw, al = hl / nl;
+    hold = QCoreApplication::translate("account", "Winners are held %1 on average, losers %2%3. ").arg(held(aw), held(al),
+             al > aw * 1.2 ? QCoreApplication::translate("account", " — losers stay open longer")
+                           : aw > al * 1.2 ? QCoreApplication::translate("account", " — winners are given room") : QString());
+  }
+  lines << hold + QCoreApplication::translate("account", "Longest winning streak %1, longest losing streak %2.").arg(bestRun).arg(-worstRun);
+  return lines;
+}
+
 int DashboardView::relayout(int W, int H) {
+  m_phone = ui::compact(W);
+  if (m_phone) {
+    // phones: one column, every panel the page width; the read is as tall as its wrapped sentences
+    const int w = W - 20;
+    int y = 10;
+    for (auto* k : m_kpi) { k->setGeometry(10, y, w, 110); y += 110 + 11; }
+    m_score->setGeometry(10, y, w, 420); y += 420 + 11;
+    m_cum->setGeometry(10, y, w, 300); y += 300 + 11;
+    for (auto* b : {m_month, m_quarter, m_last}) { b->setGeometry(10, y, w, 260); y += 260 + 11; }
+    const QFontMetricsF fm(cond(15, false));
+    int readH = 50 + 44;
+    for (const auto& l : readLines()) readH += int(std::ceil(fm.boundingRect(QRectF(0, 0, w - 44, 4000), Qt::TextWordWrap, l).height())) + 6;
+    m_read->setGeometry(10, y, w, readH);
+    return y + readH + 10;
+  }
   // KPI cards: one row of five when each card keeps >= 270 px (the drawdown sparkline and split bar need it),
   // otherwise three + two
   int y = 10;

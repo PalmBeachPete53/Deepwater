@@ -18,6 +18,8 @@
 #include <QAtomicInt>
 #include <QHash>
 #include <algorithm>
+#include <climits>
+#include <limits>
 #include <cmath>
 
 namespace technicaldata {
@@ -39,6 +41,20 @@ void schema(QSqlDatabase& db) {
   q.exec("CREATE TABLE IF NOT EXISTS gaps(market INTEGER NOT NULL, tf INTEGER NOT NULL, from_t INTEGER NOT NULL, to_t INTEGER, "
          "missing INTEGER, checked INTEGER DEFAULT 0, PRIMARY KEY(market, tf, from_t))");
   q.exec("CREATE TABLE IF NOT EXISTS pairs(market INTEGER PRIMARY KEY, spec TEXT NOT NULL, added INTEGER)");
+  // 2026-11-20: footprint history (a rowid table: its rows hold a blob of ~130 KB, too large for WITHOUT ROWID)
+  q.exec("CREATE TABLE IF NOT EXISTS fp_days(market INTEGER NOT NULL, venue TEXT NOT NULL, day INTEGER NOT NULL, minutes INTEGER, "
+         "trades INTEGER, levels INTEGER, bytes INTEGER, zip_bytes INTEGER, built INTEGER, data BLOB, PRIMARY KEY(market, venue, day))");
+  q.exec("CREATE TABLE IF NOT EXISTS fp_missing(market INTEGER NOT NULL, venue TEXT NOT NULL, day INTEGER NOT NULL, why TEXT, "
+         "checked INTEGER, PRIMARY KEY(market, venue, day))");
+  // 2026-11-20: the perpetual's depth (a blob a day) and open interest (rows)
+  q.exec("CREATE TABLE IF NOT EXISTS depth_days(market INTEGER NOT NULL, day INTEGER NOT NULL, samples INTEGER, bytes INTEGER, "
+         "zip_bytes INTEGER, built INTEGER, data BLOB, PRIMARY KEY(market, day))");
+  q.exec("CREATE TABLE IF NOT EXISTS oi(market INTEGER NOT NULL, t INTEGER NOT NULL, oi REAL, oi_value REAL, top_acc REAL, "
+         "top_pos REAL, accounts REAL, taker REAL, PRIMARY KEY(market, t)) WITHOUT ROWID");
+  q.exec("CREATE TABLE IF NOT EXISTS oi_days(market INTEGER NOT NULL, day INTEGER NOT NULL, rows INTEGER, zip_bytes INTEGER, "
+         "built INTEGER, PRIMARY KEY(market, day))");
+  q.exec("CREATE TABLE IF NOT EXISTS arch_missing(market INTEGER NOT NULL, kind TEXT NOT NULL, day INTEGER NOT NULL, why TEXT, "
+         "checked INTEGER, PRIMARY KEY(market, kind, day))");
   // 2026-11-18: the first day a series was asked from (pairs with their own first day)
   bool hasStart = false;
   q.exec("PRAGMA table_info(sync)");
@@ -138,7 +154,7 @@ public:
     if (id < 0) return;
     m_db.transaction();
     QSqlQuery q(m_db);
-    for (const char* t : {"bars", "ind", "sync", "ind_sync", "gaps"}) {
+    for (const char* t : {"bars", "ind", "sync", "ind_sync", "gaps", "fp_days", "fp_missing", "depth_days", "oi", "oi_days", "arch_missing"}) {
       q.prepare(QString("DELETE FROM %1 WHERE market = ?").arg(t));
       q.addBindValue(id); q.exec();
     }
@@ -146,9 +162,21 @@ public:
     setPausedFlag(symbol, true, true);
     m_db.commit();
   }
-  struct Pair { QSet<int> tfs; qint64 start = 0; bool paused = false, cancelled = false; };
+  struct Pair {
+    QSet<int> tfs;
+    qint64 start = 0;
+    bool paused = false, cancelled = false;
+    QSet<QString> fp;
+    qint64 fpStart = 0;
+    bool depth = false, oi = false;
+  };
   static Pair pairOf(const QJsonObject& spec) {
     Pair p;
+    const PairSpec s = specFromJson(spec);
+    p.fp = QSet<QString>(s.footprint.cbegin(), s.footprint.cend());
+    p.fpStart = s.footprintStart;
+    p.depth = s.depth;
+    p.oi = s.openInterest;
     for (const QJsonValue& t : spec.value("timeframes").toArray()) p.tfs.insert(t.toInt());
     p.start = qint64(spec.value("start").toDouble(0));
     p.paused = spec.value("paused").toBool();
@@ -227,6 +255,11 @@ public:
     if (it != m_pairs.cend()) {
       const Pair was = *it;
       for (int tf : was.tfs) if (!now.tfs.contains(tf)) deleteSeries(id, tf);
+      // footprint: a market no longer recorded, or a later first day: its days go
+      for (const QString& v : was.fp) if (!now.fp.contains(v)) deleteFootprint(id, v, LLONG_MAX);
+      if (now.fpStart > was.fpStart) for (const QString& v : now.fp) deleteFootprint(id, v, now.fpStart);
+      if (was.depth && !now.depth) deleteArchive(id, "depth");
+      if (was.oi && !now.oi) deleteArchive(id, "oi");
       if (now.start > was.start) for (int tf : now.tfs) trimBefore(id, tf, now.start);
       // forex, an earlier first day: Dukascopy's files go forward from it again; the minute series are made again
       // (written in order, so their indicators are computed once, not again at every day added before them)
@@ -243,7 +276,8 @@ public:
     if (id < 0) return;
     m_db.transaction();
     QSqlQuery q(m_db);
-    for (const char* t : {"bars", "ind", "sync", "ind_sync", "gaps", "pairs"}) {
+    for (const char* t : {"bars", "ind", "sync", "ind_sync", "gaps", "pairs", "fp_days", "fp_missing", "depth_days", "oi", "oi_days",
+                          "arch_missing"}) {
       q.prepare(QString("DELETE FROM %1 WHERE market = ?").arg(t));
       q.addBindValue(id); q.exec();
     }
@@ -482,6 +516,104 @@ public:
     return true;
   }
 
+  // ---- footprint history
+  void deleteFootprint(qint64 id, const QString& venue, qint64 before) {
+    QSqlQuery q(m_db);
+    for (const char* t : {"fp_days", "fp_missing"}) {
+      q.prepare(QString("DELETE FROM %1 WHERE market = ? AND venue = ? AND day < ?").arg(t));
+      q.addBindValue(id); q.addBindValue(venue); q.addBindValue(before); q.exec();
+    }
+  }
+  bool wantsFootprint(qint64 id, const QString& venue, qint64 day) const {
+    const auto it = m_pairs.constFind(id);
+    return it != m_pairs.cend() && it->fp.contains(venue) && day >= it->fpStart && !it->paused && !m_allPaused;
+  }
+  bool addFootprintDay(const QString& symbol, const QString& venue, const FpDay& d, const QByteArray& data) {
+    const qint64 id = findId(symbol);
+    if (id < 0 || !wantsFootprint(id, venue, d.day)) return false;
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR REPLACE INTO fp_days(market, venue, day, minutes, trades, levels, bytes, zip_bytes, built, data) "
+              "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    q.addBindValue(id); q.addBindValue(venue); q.addBindValue(d.day); q.addBindValue(d.minutes); q.addBindValue(d.trades);
+    q.addBindValue(d.levels); q.addBindValue(qint64(data.size())); q.addBindValue(d.zipBytes); q.addBindValue(d.built);
+    q.addBindValue(data);
+    const bool ok = q.exec();
+    q.prepare("DELETE FROM fp_missing WHERE market = ? AND venue = ? AND day = ?");
+    q.addBindValue(id); q.addBindValue(venue); q.addBindValue(d.day); q.exec();
+    m_db.commit();
+    return ok;
+  }
+  void footprintMissing(const QString& symbol, const QString& venue, qint64 day, const QString& why) {
+    const qint64 id = findId(symbol);
+    if (id < 0 || !wantsFootprint(id, venue, day)) return;
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR REPLACE INTO fp_missing(market, venue, day, why, checked) VALUES(?, ?, ?, ?, ?)");
+    q.addBindValue(id); q.addBindValue(venue); q.addBindValue(day); q.addBindValue(why); q.addBindValue(QDateTime::currentMSecsSinceEpoch());
+    q.exec();
+  }
+
+  // ---- the perpetual's depth and open interest
+  void deleteArchive(qint64 id, const QString& kind) {
+    QSqlQuery q(m_db);
+    const QStringList tables = kind == "depth" ? QStringList{"depth_days"} : QStringList{"oi", "oi_days"};
+    for (const QString& t : tables) {
+      q.prepare(QString("DELETE FROM %1 WHERE market = ?").arg(t));
+      q.addBindValue(id); q.exec();
+    }
+    q.prepare("DELETE FROM arch_missing WHERE market = ? AND kind = ?");
+    q.addBindValue(id); q.addBindValue(kind); q.exec();
+  }
+  bool wantsArchive(qint64 id, const QString& kind) const {
+    const auto it = m_pairs.constFind(id);
+    return it != m_pairs.cend() && (kind == "depth" ? it->depth : it->oi) && !it->paused && !m_allPaused;
+  }
+  void clearArchiveMissing(qint64 id, const QString& kind, qint64 day) {
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM arch_missing WHERE market = ? AND kind = ? AND day = ?");
+    q.addBindValue(id); q.addBindValue(kind); q.addBindValue(day); q.exec();
+  }
+  bool addDepthDay(const QString& symbol, const ArchDay& d, const QByteArray& data) {
+    const qint64 id = findId(symbol);
+    if (id < 0 || !wantsArchive(id, "depth")) return false;
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR REPLACE INTO depth_days(market, day, samples, bytes, zip_bytes, built, data) VALUES(?, ?, ?, ?, ?, ?, ?)");
+    q.addBindValue(id); q.addBindValue(d.day); q.addBindValue(d.rows); q.addBindValue(qint64(data.size())); q.addBindValue(d.zipBytes);
+    q.addBindValue(d.built); q.addBindValue(data);
+    const bool ok = q.exec();
+    clearArchiveMissing(id, "depth", d.day);
+    m_db.commit();
+    return ok;
+  }
+  bool addOiDay(const QString& symbol, const ArchDay& d, const std::vector<perp::OiRow>& rows) {
+    const qint64 id = findId(symbol);
+    if (id < 0 || !wantsArchive(id, "oi")) return false;
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR REPLACE INTO oi(market, t, oi, oi_value, top_acc, top_pos, accounts, taker) VALUES(?, ?, ?, ?, ?, ?, ?, ?)");
+    auto val = [](double v) { return std::isfinite(v) ? QVariant(v) : QVariant(); };
+    for (const perp::OiRow& r : rows) {
+      q.addBindValue(id); q.addBindValue(r.t); q.addBindValue(val(r.oi)); q.addBindValue(val(r.oiValue)); q.addBindValue(val(r.topAccounts));
+      q.addBindValue(val(r.topPositions)); q.addBindValue(val(r.accounts)); q.addBindValue(val(r.takerRatio));
+      q.exec();
+    }
+    q.prepare("INSERT OR REPLACE INTO oi_days(market, day, rows, zip_bytes, built) VALUES(?, ?, ?, ?, ?)");
+    q.addBindValue(id); q.addBindValue(d.day); q.addBindValue(int(rows.size())); q.addBindValue(d.zipBytes); q.addBindValue(d.built);
+    const bool ok = q.exec();
+    clearArchiveMissing(id, "oi", d.day);
+    m_db.commit();
+    return ok;
+  }
+  void archiveMissing(const QString& symbol, const QString& kind, qint64 day, const QString& why) {
+    const qint64 id = findId(symbol);
+    if (id < 0 || !wantsArchive(id, kind)) return;
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR REPLACE INTO arch_missing(market, kind, day, why, checked) VALUES(?, ?, ?, ?, ?)");
+    q.addBindValue(id); q.addBindValue(kind); q.addBindValue(day); q.addBindValue(why); q.addBindValue(QDateTime::currentMSecsSinceEpoch());
+    q.exec();
+  }
+
   void gapChecked(const QString& symbol, int tf, qint64 from) {
     const qint64 id = findId(symbol);
     if (id < 0) return;
@@ -621,6 +753,57 @@ void Store::removePair(const QString& market, QObject* ctx, std::function<void()
       if (done && (!hasCtx || c)) done();
     }, Qt::QueuedConnection);
   }, Qt::QueuedConnection);
+}
+
+void Store::addFootprintDay(const QString& market, const QString& venue, const FpDay& info, const QByteArray& data, QObject* ctx,
+                            std::function<void(bool)> done) {
+  QPointer<QObject> c(ctx);
+  const bool hasCtx = ctx != nullptr;
+  QPointer<Store> self(this);
+  QMetaObject::invokeMethod(m_writer, [w = m_writer, self, market, venue, info, data, c, hasCtx, done] {
+    const bool written = w->addFootprintDay(market, venue, info, data);
+    if (self) QMetaObject::invokeMethod(self.data(), [self, market, venue, day = info.day, written, c, hasCtx, done] {
+      if (written && self) emit self->footprintChanged(market, venue, day);
+      if (done && (!hasCtx || c)) done(written);
+    }, Qt::QueuedConnection);
+  }, Qt::QueuedConnection);
+}
+
+void Store::setFootprintMissing(const QString& market, const QString& venue, qint64 day, const QString& why) {
+  QMetaObject::invokeMethod(m_writer, [w = m_writer, market, venue, day, why] { w->footprintMissing(market, venue, day, why); },
+                            Qt::QueuedConnection);
+}
+
+void Store::addDepthDay(const QString& market, const ArchDay& info, const QByteArray& data, QObject* ctx, std::function<void(bool)> done) {
+  QPointer<QObject> c(ctx);
+  const bool hasCtx = ctx != nullptr;
+  QPointer<Store> self(this);
+  QMetaObject::invokeMethod(m_writer, [w = m_writer, self, market, info, data, c, hasCtx, done] {
+    const bool written = w->addDepthDay(market, info, data);
+    if (self) QMetaObject::invokeMethod(self.data(), [self, market, day = info.day, written, c, hasCtx, done] {
+      if (written && self) emit self->archiveChanged(market, "depth", day);
+      if (done && (!hasCtx || c)) done(written);
+    }, Qt::QueuedConnection);
+  }, Qt::QueuedConnection);
+}
+
+void Store::addOiDay(const QString& market, const ArchDay& info, const std::vector<perp::OiRow>& rows, QObject* ctx,
+                     std::function<void(bool)> done) {
+  QPointer<QObject> c(ctx);
+  const bool hasCtx = ctx != nullptr;
+  QPointer<Store> self(this);
+  QMetaObject::invokeMethod(m_writer, [w = m_writer, self, market, info, rows, c, hasCtx, done] {
+    const bool written = w->addOiDay(market, info, rows);
+    if (self) QMetaObject::invokeMethod(self.data(), [self, market, day = info.day, written, c, hasCtx, done] {
+      if (written && self) emit self->archiveChanged(market, "oi", day);
+      if (done && (!hasCtx || c)) done(written);
+    }, Qt::QueuedConnection);
+  }, Qt::QueuedConnection);
+}
+
+void Store::setArchiveMissing(const QString& market, const QString& kind, qint64 day, const QString& why) {
+  QMetaObject::invokeMethod(m_writer, [w = m_writer, market, kind, day, why] { w->archiveMissing(market, kind, day, why); },
+                            Qt::QueuedConnection);
 }
 
 void Store::setMeta(const QString& key, const QString& value) {
@@ -780,6 +963,16 @@ QVector<Kline> Store::range(const QString& market, int tf, qint64 from, qint64 t
   return out;
 }
 
+qint64 Store::count(const QString& market, int tf, qint64 from, qint64 to) const {
+  QSqlDatabase db = reader(m_path);
+  const qint64 id = idOf(db, market);
+  if (id < 0) return 0;
+  QSqlQuery q(db);
+  q.prepare("SELECT COUNT(*) FROM bars WHERE market = ? AND tf = ? AND t >= ? AND t <= ?");
+  q.addBindValue(id); q.addBindValue(tf); q.addBindValue(from); q.addBindValue(to);
+  return q.exec() && q.next() ? q.value(0).toLongLong() : 0;
+}
+
 QVector<Kline> Store::last(const QString& market, int tf, int n) const {
   QVector<Kline> out;
   QSqlDatabase db = reader(m_path);
@@ -913,4 +1106,91 @@ qint64 Store::fileBytes() const {
   return QFileInfo(m_path).size() + QFileInfo(m_path + "-wal").size();
 }
 
+QVector<FpDay> Store::footprintDays(const QString& market, const QString& venue) const {
+  QVector<FpDay> out;
+  QSqlDatabase db = reader(m_path);
+  const qint64 id = idOf(db, market);
+  if (id < 0) return out;
+  QSqlQuery q(db);
+  q.prepare("SELECT day, minutes, trades, levels, bytes, zip_bytes, built FROM fp_days WHERE market = ? AND venue = ? ORDER BY day");
+  q.addBindValue(id); q.addBindValue(venue); q.exec();
+  while (q.next())
+    out << FpDay{q.value(0).toLongLong(), q.value(1).toInt(), q.value(2).toLongLong(), q.value(3).toLongLong(),
+                 q.value(4).toLongLong(), q.value(5).toLongLong(), q.value(6).toLongLong()};
+  return out;
+}
+
+QHash<qint64, QString> Store::footprintMissing(const QString& market, const QString& venue) const {
+  QHash<qint64, QString> out;
+  QSqlDatabase db = reader(m_path);
+  const qint64 id = idOf(db, market);
+  if (id < 0) return out;
+  QSqlQuery q(db);
+  q.prepare("SELECT day, why FROM fp_missing WHERE market = ? AND venue = ?");
+  q.addBindValue(id); q.addBindValue(venue); q.exec();
+  while (q.next()) out.insert(q.value(0).toLongLong(), q.value(1).toString());
+  return out;
+}
+
+QByteArray Store::footprintData(const QString& market, const QString& venue, qint64 day) const {
+  QSqlDatabase db = reader(m_path);
+  const qint64 id = idOf(db, market);
+  if (id < 0) return {};
+  QSqlQuery q(db);
+  q.prepare("SELECT data FROM fp_days WHERE market = ? AND venue = ? AND day = ?");
+  q.addBindValue(id); q.addBindValue(venue); q.addBindValue(day); q.exec();
+  return q.next() ? q.value(0).toByteArray() : QByteArray();
+}
+
+QVector<ArchDay> Store::archiveDays(const QString& market, const QString& kind) const {
+  QVector<ArchDay> out;
+  QSqlDatabase db = reader(m_path);
+  const qint64 id = idOf(db, market);
+  if (id < 0) return out;
+  QSqlQuery q(db);
+  // oi rows have no blob: their size is counted as SQLite keeps them (about 60 bytes a row, WITHOUT ROWID)
+  q.prepare(kind == "depth" ? "SELECT day, samples, bytes, zip_bytes, built FROM depth_days WHERE market = ? ORDER BY day"
+                            : "SELECT day, rows, rows * 60, zip_bytes, built FROM oi_days WHERE market = ? ORDER BY day");
+  q.addBindValue(id); q.exec();
+  while (q.next())
+    out << ArchDay{q.value(0).toLongLong(), q.value(1).toInt(), q.value(2).toLongLong(), q.value(3).toLongLong(), q.value(4).toLongLong()};
+  return out;
+}
+
+QHash<qint64, QString> Store::archiveMissing(const QString& market, const QString& kind) const {
+  QHash<qint64, QString> out;
+  QSqlDatabase db = reader(m_path);
+  const qint64 id = idOf(db, market);
+  if (id < 0) return out;
+  QSqlQuery q(db);
+  q.prepare("SELECT day, why FROM arch_missing WHERE market = ? AND kind = ?");
+  q.addBindValue(id); q.addBindValue(kind); q.exec();
+  while (q.next()) out.insert(q.value(0).toLongLong(), q.value(1).toString());
+  return out;
+}
+
+QByteArray Store::depthData(const QString& market, qint64 day) const {
+  QSqlDatabase db = reader(m_path);
+  const qint64 id = idOf(db, market);
+  if (id < 0) return {};
+  QSqlQuery q(db);
+  q.prepare("SELECT data FROM depth_days WHERE market = ? AND day = ?");
+  q.addBindValue(id); q.addBindValue(day); q.exec();
+  return q.next() ? q.value(0).toByteArray() : QByteArray();
+}
+
+std::vector<perp::OiRow> Store::openInterest(const QString& market, qint64 from, qint64 to) const {
+  std::vector<perp::OiRow> out;
+  QSqlDatabase db = reader(m_path);
+  const qint64 id = idOf(db, market);
+  if (id < 0) return out;
+  QSqlQuery q(db);
+  q.prepare("SELECT t, oi, oi_value, top_acc, top_pos, accounts, taker FROM oi WHERE market = ? AND t >= ? AND t < ? ORDER BY t");
+  q.addBindValue(id); q.addBindValue(from); q.addBindValue(to); q.exec();
+  auto v = [&q](int i) { return q.value(i).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(i).toDouble(); };
+  while (q.next()) out.push_back(perp::OiRow{q.value(0).toLongLong(), v(1), v(2), v(3), v(4), v(5), v(6)});
+  return out;
+}
+
 }  // namespace technicaldata
+

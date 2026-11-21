@@ -1,6 +1,6 @@
 #include "news/Translate.h"
 #include "core/Paths.h"
-#include <QProcess>
+#include "core/Process.h"
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QFile>
@@ -72,16 +72,16 @@ void Translate::start() {
   if (m_proc) return;
   const QString exe = QCoreApplication::applicationDirPath() + "/dw-translate";
   if (!QFileInfo::exists(exe)) { m_state = State::NoHelper; emit stateChanged(); finishWaiters(); return; }
-  m_proc = new QProcess(this);
+  m_proc = new dw::Process(this);
   m_proc->setProgram(exe);
   m_proc->setArguments({"en", "fr"});
-  m_proc->setProcessChannelMode(QProcess::SeparateChannels);
-  connect(m_proc, &QProcess::readyReadStandardOutput, this, &Translate::onOutput);
-  connect(m_proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
+  m_proc->setProcessChannelMode(dw::Process::SeparateChannels);
+  connect(m_proc, &dw::Process::readyReadStandardOutput, this, &Translate::onOutput);
+  connect(m_proc, &dw::Process::errorOccurred, this, [this](dw::Process::ProcessError) {
     if (m_state == State::Starting || m_state == State::Ready) { m_state = State::Failed; emit stateChanged(); }
     finishWaiters();
   });
-  connect(m_proc, &QProcess::finished, this, [this] {
+  connect(m_proc, &dw::Process::finished, this, [this] {
     if (m_state == State::Ready || m_state == State::Starting) { m_state = State::Failed; emit stateChanged(); }
     m_inflight.clear(); m_queue.clear();
     finishWaiters();

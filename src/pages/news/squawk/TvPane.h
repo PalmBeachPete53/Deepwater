@@ -21,6 +21,10 @@ public:
   bool idle() const;
   int idleHeight() const;
   std::function<void()> onIdleChanged;
+  // Scroll mode (phones): the page's visible area in window coordinates; the native player hides while it is not
+  // wholly inside it (it would float over the header). syncView() after the page scrolled.
+  std::function<QRect()> viewClip;
+  void syncView() { layoutView(); }
 protected:
   void paintEvent(QPaintEvent*) override;
   void resizeEvent(QResizeEvent*) override;
@@ -42,6 +46,7 @@ private:
   QSet<int> m_noLive;              // channels whose last load ended in a player error (kept across visits)
   void setNoLive(int channel, bool on);
   class NativeTv* m_tv = nullptr;
+  bool m_clipped = false;          // hidden by viewClip
   qreal titleRight() const;
 };
 }

@@ -46,6 +46,7 @@
 #include <QTimeZone>
 #include <cmath>
 #include <memory>
+#include <tuple>
 
 namespace ai {
 namespace {
@@ -638,6 +639,7 @@ QString when(qint64 t, int tf) {
 }
 
 void marketCoverage(const QJsonObject&, ToolDone done) {
+  const qint64 asOf = asOfFor("get_technical_coverage");   // evaluation mode: what was stored and closed by then
   auto& st = technicaldata::Store::instance();
   const QStringList markets = st.pairs();
   if (markets.isEmpty()) { done(fail("Data › Technical data records no pair (pairs are added in Data › Technical data)")); return; }
@@ -654,11 +656,25 @@ void marketCoverage(const QJsonObject&, ToolDone done) {
            ")\ntimeframe | bars | first | last | whole history | indicators up to | holes (bars missing: the exchange's own outages)\n";
     for (const auto& t : technicaldata::timeframes()) {
       if (!spec.timeframes.contains(t.seconds)) continue;
-      const auto s = st.state(m, t.seconds);
+      auto s = st.state(m, t.seconds);
+      auto i = st.indState(m, t.seconds);
+      qint64 cut = 0;   // evaluation mode: the newest bar closed by then
+      if (asOf > 0 && s.count > 0) {
+        cut = asOf - t.seconds;
+        if (s.last > cut) {
+          s.count = s.first <= cut ? st.count(m, t.seconds, s.first, cut) : 0;
+          const auto lastBars = st.before(m, t.seconds, cut + 1, 1);
+          s.last = lastBars.isEmpty() ? 0 : lastBars.last().t;
+          s.historyDone = s.historyDone && s.count > 0;
+        }
+        i.last = std::min(i.last, s.last);
+      }
       if (s.count == 0) { out += t.name + " | 0 | none yet\n"; continue; }
-      const auto i = st.indState(m, t.seconds);
       qint64 holes = 0, missing = 0;
-      for (const auto& g : st.gaps(m, t.seconds)) { ++holes; missing += g.missing; }
+      for (const auto& g : st.gaps(m, t.seconds)) {
+        if (cut && g.to > cut) continue;   // a hole known only once the bar after it came
+        ++holes; missing += g.missing;
+      }
       out += t.name + " | " + QString::number(s.count) + " | " + when(s.first, t.seconds) + " | " + when(s.last, t.seconds) + " | " +
              (s.historyDone ? "yes" : "not yet") + " | " + when(i.last, t.seconds) + " | " +
              (holes ? QString::number(holes) + " (" + QString::number(missing) + " bars)" : QStringLiteral("none")) + "\n";
@@ -677,8 +693,29 @@ void marketCoverage(const QJsonObject&, ToolDone done) {
     }
     out += "indicator columns (Charts indicator, settings, output): " + (d.isEmpty() ? QStringLiteral("none") : d.join("; ")) +
            ". Warm-up: the first " + QString::number(technicaldata::warmupOf(spec)) + " bars of each series (long averages not settled yet).\n";
+    if (m.startsWith("BINANCE:")) {   // the order flow it records (get_footprint, get_order_book, get_open_interest)
+      QStringList of;
+      auto span = [](qint64 a, qint64 b, int n) { return QString::number(n) + " days, " + when(a, 86400) + " to " + when(b, 86400); };
+      // evaluation mode: the whole days over by then (a day's archive holds all of it)
+      auto upTo = [asOf](auto days) {
+        if (asOf > 0) days.erase(std::remove_if(days.begin(), days.end(), [asOf](const auto& d) { return d.day + 86400 > asOf; }), days.end());
+        return days;
+      };
+      for (const QString& v : spec.footprint) {
+        const auto days = upTo(st.footprintDays(m, v));
+        of << "footprint " + v + ": " + (days.isEmpty() ? QStringLiteral("collecting, none stored yet") : span(days.first().day, days.last().day, int(days.size())));
+      }
+      for (const auto& [on, kind, name] : {std::tuple{spec.depth, "depth", "perpetual book depth"}, std::tuple{spec.openInterest, "oi", "open interest"}}) {
+        if (!on) continue;
+        const auto days = upTo(st.archiveDays(m, kind));
+        of << QString(name) + ": " + (days.isEmpty() ? QStringLiteral("collecting, none stored yet") : span(days.first().day, days.last().day, int(days.size())));
+      }
+      if (spec.liveBook) of << (asOf > 0 ? QStringLiteral("live book and trades: off in evaluation mode") : QStringLiteral("live book and trades (memory, spot and perpetual): on"));
+      out += "order flow: " + (of.isEmpty() ? QStringLiteral("none recorded") : of.join("; ")) + "\n";
+    }
   }
-  out += "\nRead bars with get_technical_data.\n";
+  out += "\nRead bars with get_technical_data; the order flow with get_footprint, get_order_book and get_open_interest.\n";
+  if (asOf > 0) out = "EVALUATION MODE: as of " + asOfStamp(asOf) + " (what was stored and over by then).\n" + out;
   done(okText(out));
 }
 
@@ -702,7 +739,8 @@ void marketBars(const QJsonObject& a, ToolDone done) {
   }
   if (s.count == 0) { done(fail("error: no " + tfName + " bar of " + m + " stored yet")); return; }
   const int want = intArg(a, "bars", 20, 1, 200);
-  qint64 end = s.last;
+  const qint64 asOf = asOfFor("get_technical_data");   // evaluation mode: only the bars closed by then
+  qint64 end = asOf > 0 ? std::min(s.last, asOf - tf) : s.last;
   const QString endArg = strArg(a, "end");
   if (!endArg.isEmpty()) {
     QDateTime e;
@@ -713,8 +751,11 @@ void marketBars(const QJsonObject& a, ToolDone done) {
     if (!e.isValid()) { done(fail("error: end must be a UTC date or time like 2024-03-01 or 2024-03-01 14:00")); return; }
     e.setTimeZone(QTimeZone::UTC);
     end = e.toSecsSinceEpoch();
+    if (asOf > 0 && end > asOf) { done(fail(afterClock(asOf, "end " + endArg))); return; }
+    if (asOf > 0) end = std::min(end, asOf - tf);   // the bar holding that time had not closed yet
     if (end < s.first) { done(fail("error: the stored " + tfName + " bars of " + m + " start at " + when(s.first, tf))); return; }
   }
+  if (asOf > 0 && end < s.first) { done(fail("error: no " + tfName + " bar of " + m + " had closed by " + asOfStamp(asOf))); return; }
   // columns: the indicators asked for (or a key set), always after the bar itself
   const QStringList all = st.indicatorColumns(m);
   QStringList cols = listArg(a, "columns");
@@ -738,6 +779,7 @@ void marketBars(const QJsonObject& a, ToolDone done) {
   const auto decOf = [dec, fx](const QString& c, double v) { return fx && std::isfinite(v) && std::fabs(v) < 50 && c != "bb_pb" && !c.startsWith("rsi") && !c.startsWith("stoch") && !c.startsWith("adx") && !c.startsWith("di_") ? 5 : dec(c); };
   QString head = m + " " + tfName + " bars (" + technicaldata::sourceOf(m) + ", closed bars; indicators by Deepwater's Charts engine), oldest first, times UTC (bar open)" +
                  (fx ? QStringLiteral("; forex volume is Dukascopy's own, no taker buys") : QString()) + "\n";
+  if (asOf > 0) head = "EVALUATION MODE: as of " + asOfStamp(asOf) + " (the bars closed by then).\n" + head;
   const QString colsLine = "time | open | high | low | close | volume | taker buy % | " + cols.join(" | ") + "\n";
   QStringList rows;
   int holes = 0, warm = 0;
@@ -872,8 +914,15 @@ void macroFacts(const QJsonObject& a, ToolDone done) {
   if (key.isEmpty()) { done(fail("error: give a chain key (find it with get_macro_chains)")); return; }
   const macrodata::Chain c = st.chain(key);
   if (!c.id) { done(fail("error: no chain \"" + key + "\" in Data › Macro data; find keys with get_macro_chains")); return; }
-  const qint64 from = dateArg(strArg(a, "from"), false), to = dateArg(strArg(a, "to"), true), asOf = dateArg(strArg(a, "as_of"), true);
+  const qint64 from = dateArg(strArg(a, "from"), false), to = dateArg(strArg(a, "to"), true);
+  qint64 asOf = dateArg(strArg(a, "as_of"), true);
   if (from < 0 || to < 0 || asOf < 0) { done(fail("error: dates look like 2024-03-01, 2024-03 or 2024")); return; }
+  // evaluation mode: as_of is the environment's moment (an earlier one may be asked, never a later one)
+  const qint64 clock = asOfFor("get_macro_facts");
+  if (clock > 0) {
+    if (asOf > clock * 1000) { done(fail(afterClock(clock, "as_of " + strArg(a, "as_of")))); return; }
+    if (asOf <= 0) asOf = clock * 1000;
+  }
   const bool withRevisions = !a.contains("revisions") || a.value("revisions").toBool(true);
   const int last = intArg(a, "last", 24, 1, 200);
   const bool forecast = c.def.kind == "forecast" || c.def.kind == "consensus" || c.def.kind == "implied";
@@ -921,7 +970,9 @@ void macroFacts(const QJsonObject& a, ToolDone done) {
   if (shown.size() > last) shown = shown.mid(shown.size() - last);
   QString out = "Data › Macro data chain " + c.def.key + ": " + c.def.subject + " · " + c.def.indicator + " · " + c.def.kind + " · source " +
                 c.def.source + (c.def.unit.isEmpty() ? QString() : " · unit " + c.def.unit) + " · frequency " + c.def.freq + " · " +
-                QString::number(c.count) + " facts, " + QString::number(c.revisions) + " revisions\n";
+                (clock > 0 ? QString::number(kept.size()) + " periods known by then\n"   // the chain's totals include later facts
+                           : QString::number(c.count) + " facts, " + QString::number(c.revisions) + " revisions\n");
+  if (clock > 0) out = "EVALUATION MODE: as of " + asOfStamp(clock) + ".\n" + out;
   if (!c.def.targetChain.isEmpty()) out += "predicts the chain " + c.def.targetChain + "\n";
   if (asOf > 0) out += "as of " + stamp(asOf) + " UTC: the latest value of each period known by then\n";
   out += QString("%1 of %2 fact(s), oldest first.\nperiod | %3value | published | recorded by Deepwater | origin%4\n")
@@ -930,7 +981,7 @@ void macroFacts(const QJsonObject& a, ToolDone done) {
     QString line = periodText(f->period, c.def.freq) + " | ";
     if (forecast) line += (f->target ? periodText(f->target, c.def.freq == "E" ? "D" : c.def.freq) : QStringLiteral("—")) + " | ";
     line += (f->text.isEmpty() ? factNum(f->value) : (std::isfinite(f->value) ? factNum(f->value) + " " : QString()) + f->text) + " | " +
-            stamp(f->at) + " | " + stamp(f->recorded) + " | " + f->origin;
+            stamp(f->at) + " | " + (clock > 0 && f->recorded > clock * 1000 ? QStringLiteral("—") : stamp(f->recorded)) + " | " + f->origin;
     if (withRevisions && asOf <= 0 && f->revises) {
       const auto* old = byId.value(f->revises);
       line += " | revises " + (old ? factNum(old->value) : QStringLiteral("an earlier value"));

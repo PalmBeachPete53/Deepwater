@@ -6,6 +6,7 @@
 #include "market/Candles.h"
 #include "ui/Theme.h"
 #include "ui/Kit.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -42,13 +43,31 @@ ForecastOverlay::ForecastOverlay(QWidget* parent) : QWidget(parent) {
   hide();
 }
 
+// Phone held upright (ui::compact): one column inside the panel — title, pair pills, pair + quarter pills, chart,
+// footnote, then the table (each bank on two lines, three quarters per line) and the note. The chart takes the
+// height the rest leaves (160–380 px).
+bool ForecastOverlay::phone() const { return ui::compact(width()); }
+namespace { constexpr qreal kPhHead = 84, kPhChartTop = 74, kPhFoot = 50, kPhTableHead = 40, kPhRow = 52, kPhNote = 92; }
+ForecastOverlay::PhoneGeo ForecastOverlay::phoneGeo() const {
+  PhoneGeo g;
+  const qreal top = 50, maxH = height() - 60;
+  const qreal rows = std::max<qreal>(1, m_rows.size());
+  const qreal fixed = kPhHead + kPhChartTop + kPhFoot + kPhTableHead + rows * kPhRow + kPhNote + 10;
+  g.chartH = std::clamp<qreal>(maxH - fixed, 160, 380);
+  g.panel = QRectF(10, top, width() - 20, fixed + g.chartH);
+  g.chart = QRectF(g.panel.left() + 10, top + kPhHead + kPhChartTop, g.panel.width() - 20, g.chartH);
+  g.tableTop = g.chart.bottom() + kPhFoot;
+  return g;
+}
+
 QRectF ForecastOverlay::panelRect() const {
+  if (phone()) return phoneGeo().panel;
   // 496 px at the reference size (page 966 px); taller pages give the chart 1.5 × the extra height (≤ page − 55)
   const qreal grow = std::max<qreal>(0, height() - 966) * 1.5;
   const qreal h = std::max<qreal>(496 + grow, kHeadH + 30 + (m_rows.size() + 1) * kRowPitch + 40);
   return QRectF(14, 41, width() - 28, std::min<qreal>(h, height() - 55));
 }
-QRectF ForecastOverlay::closeRect() const { return QRectF(width() - 83, 12, 68, 22); }
+QRectF ForecastOverlay::closeRect() const { return phone() ? QRectF(width() - 10 - 96, 8, 96, 34) : QRectF(width() - 83, 12, 68, 22); }
 
 // Pair pills, right-aligned like the reference. When they do not all fit, the first ones (most covered) are shown
 // and a "+N" pill at the right opens a menu with the others (moreRect()).
@@ -58,7 +77,9 @@ QList<QRectF> ForecastOverlay::pairRects() const {
   // pills start after the title and subtitle (540 px in English, further in French)
   const qreal head = pr.left() + 11 + QFontMetricsF(theme::display(20, QFont::Bold, 0.8)).horizontalAdvance(QCoreApplication::translate("banks", "FX BANK FORECASTS"))
                    + 12 + QFontMetricsF(theme::mono(10, QFont::Normal, 2.2)).horizontalAdvance(QCoreApplication::translate("banks", "INSTITUTIONAL PRICE PROJECTIONS")) + 24;
-  const qreal minX = qMax(pr.left() + 540, head), right = pr.right() - 11;
+  // phone: the pills have their own row under the title
+  const qreal minX = phone() ? pr.left() + 11 : qMax(pr.left() + 540, head), right = pr.right() - 11;
+  const qreal top = phone() ? pr.top() + 44 : pr.top() + 10, ph = phone() ? 30 : 26;
   QList<qreal> ws; qreal total = 0;
   for (const auto& id : m_pairs) { ws << fm.horizontalAdvance(pairText(id)) + 16; total += ws.last() + 5; }
   int n = int(m_pairs.size());
@@ -70,18 +91,24 @@ QList<QRectF> ForecastOverlay::pairRects() const {
   }
   QList<QRectF> out;
   qreal x = right - (n < m_pairs.size() ? 46 : 0);
-  for (int i = n - 1; i >= 0; --i) { out.prepend(QRectF(x - ws[i], pr.top() + 10, ws[i], 26)); x -= ws[i] + 5; }
+  for (int i = n - 1; i >= 0; --i) { out.prepend(QRectF(x - ws[i], top, ws[i], ph)); x -= ws[i] + 5; }
   return out;
 }
 QRectF ForecastOverlay::moreRect() const {
   if (pairRects().size() >= m_pairs.size()) return {};
   const QRectF pr = panelRect();
-  return QRectF(pr.right() - 11 - 41, pr.top() + 10, 41, 26);
+  return phone() ? QRectF(pr.right() - 11 - 41, pr.top() + 44, 41, 30) : QRectF(pr.right() - 11 - 41, pr.top() + 10, 41, 26);
 }
 
 QList<QRectF> ForecastOverlay::quarterRects() const {
   QList<QRectF> out;
   const QRectF pr = panelRect();
+  if (phone()) {   // own row under the pair, from the left, finger-sized
+    const QFontMetricsF fm(theme::mono(10, QFont::Medium));
+    qreal x = pr.left() + 11;
+    for (const auto& q : m_quarters) { const qreal w = fm.horizontalAdvance(q.label()) + 14; out << QRectF(x, pr.top() + kPhHead + 36, w, 28); x += w + 5; }
+    return out;
+  }
   qreal x = pr.right() - 11;
   const bool compact = pr.width() < 1200;      // small laptops: smaller pills so the pair and price stay readable
   const QFontMetricsF fm(theme::mono(compact ? 10 : 11, QFont::Medium));
@@ -103,16 +130,19 @@ QString ForecastOverlay::footnote() const {
       : QCoreApplication::translate("banks", "LINES = THIS BANK'S OWN FORECASTS (CLICK THE ROW AGAIN FOR THE AVERAGES) · FORECASTS AS WRITTEN IN THE BANK'S TABLE");
 }
 bool ForecastOverlay::footnoteTwoLines() const {
+  if (phone()) return true;
   const QRectF pr = panelRect();
   return QFontMetricsF(theme::mono(9, QFont::Normal, 0.8)).horizontalAdvance(footnote()) > pr.right() - splitX(pr) - 30;
 }
 
 QRectF ForecastOverlay::rowRect(int i) const {
   const QRectF pr = panelRect();
+  if (phone()) return QRectF(pr.left() + 1, phoneGeo().tableTop + kPhTableHead + i * kPhRow, pr.width() - 2, kPhRow);
   return QRectF(pr.left() + 1, pr.top() + kHeadH + 31 + i * kRowPitch, splitX(pr) - pr.left() - 1, kRowPitch);
 }
 
 void ForecastOverlay::resizeEvent(QResizeEvent*) {
+  if (phone()) { m_chart->setGeometry(phoneGeo().chart.toRect()); return; }
   const QRectF pr = panelRect();
   const qreal cx = splitX(pr);
   const int foot = footnoteTwoLines() ? 42 : 30;      // narrow chart / long text: the footnote wraps on two lines
@@ -239,7 +269,8 @@ void ForecastOverlay::paintEvent(QPaintEvent*) {
   p.drawText(QPointF(pr.left() + 11, pr.top() + 29), title);
   const qreal tw = QFontMetricsF(tf).horizontalAdvance(title);
   p.setFont(theme::mono(10, QFont::Normal, 2.2)); p.setPen(theme::map("#5b5750"));
-  p.drawText(QPointF(pr.left() + 11 + tw + 12, pr.top() + 27), QCoreApplication::translate("banks", "INSTITUTIONAL PRICE PROJECTIONS"));
+  const bool ph = phone();
+  if (!ph) p.drawText(QPointF(pr.left() + 11 + tw + 12, pr.top() + 27), QCoreApplication::translate("banks", "INSTITUTIONAL PRICE PROJECTIONS"));
   p.setRenderHint(QPainter::Antialiasing, true);
   const auto pills = pairRects();
   const QFont pf = theme::mono(11, QFont::Medium, 0.3);
@@ -256,7 +287,8 @@ void ForecastOverlay::paintEvent(QPaintEvent*) {
     p.drawText(mr, Qt::AlignCenter, QString("+%1").arg(m_pairs.size() - pills.size()));
   }
   p.setRenderHint(QPainter::Antialiasing, false);
-  p.fillRect(QRectF(pr.left() + 1, pr.top() + kHeadH, pr.width() - 2, 1), theme::map("#2d2818"));
+  p.fillRect(QRectF(pr.left() + 1, pr.top() + (ph ? kPhHead : kHeadH), pr.width() - 2, 1), theme::map("#2d2818"));
+  if (ph) { paintPhone(p); return; }
   const qreal cx = splitX(pr);
   p.fillRect(QRectF(cx - 1, pr.top() + kHeadH + 1, 1, pr.height() - kHeadH - 2), theme::map("#2a2516"));
 
@@ -333,8 +365,13 @@ void ForecastOverlay::paintEvent(QPaintEvent*) {
   const QString pt = pairText(m_pair);
   p.drawText(QPointF(cx + 41, chy + 6), pt);
   p.setFont(theme::mono(14)); p.setPen(theme::map("#97938d"));
-  if (std::isfinite(m_last)) p.drawText(QPointF(cx + 41 + QFontMetricsF(nf).horizontalAdvance(pt) + 8, chy + 6), en.toString(m_last, 'f', dec));
   const auto qr = quarterRects();
+  if (std::isfinite(m_last)) {
+    const qreal px = cx + 41 + QFontMetricsF(nf).horizontalAdvance(pt) + 8;
+    const QString ls = en.toString(m_last, 'f', dec);
+    // below 1024 px the quarter pills can reach the price: it is left out rather than drawn under them
+    if (width() >= 1024 || qr.isEmpty() || px + QFontMetricsF(p.font()).horizontalAdvance(ls) + 6 < qr.first().left()) p.drawText(QPointF(px, chy + 6), ls);
+  }
   for (int i = 0; i < qr.size(); ++i) {
     const bool on = m_qOn.value(i);
     p.setPen(on ? Qt::NoPen : QPen(theme::alpha(quarterColor(i), 120), 1));
@@ -351,6 +388,83 @@ void ForecastOverlay::paintEvent(QPaintEvent*) {
     p.drawText(QRectF(cx + 10, pr.bottom() - (two ? 38 : 26), pr.right() - cx - 30, two ? 30 : 16),
                Qt::AlignVCenter | Qt::AlignLeft | Qt::TextWordWrap, fn);
   }
+}
+
+void ForecastOverlay::paintPhone(QPainter& p) {
+  const QRectF pr = panelRect();
+  const PhoneGeo g = phoneGeo();
+  const QLocale en(QLocale::English);
+  const int dec = decimalsOf(m_pair);
+  p.setRenderHint(QPainter::Antialiasing, true);
+  // pair + last price, quarter pills under it
+  const banks::Market* m = banks::market(m_pair);
+  const qreal chy = pr.top() + kPhHead + 20;
+  if (m) p.drawPixmap(QPointF(pr.left() + 11, chy - 7), ui::flag(m_pair.left(3), QSize(22, 14), devicePixelRatioF()));
+  const QFont nf = theme::sans(15, QFont::Bold);
+  p.setFont(nf); p.setPen(theme::map("#fffefb"));
+  const QString pt = pairText(m_pair);
+  p.drawText(QPointF(pr.left() + 41, chy + 6), pt);
+  p.setFont(theme::mono(14)); p.setPen(theme::map("#97938d"));
+  if (std::isfinite(m_last)) p.drawText(QPointF(pr.left() + 41 + QFontMetricsF(nf).horizontalAdvance(pt) + 8, chy + 6), en.toString(m_last, 'f', dec));
+  const auto qr = quarterRects();
+  for (int i = 0; i < qr.size(); ++i) {
+    const bool on = m_qOn.value(i);
+    p.setPen(on ? Qt::NoPen : QPen(theme::alpha(quarterColor(i), 120), 1));
+    p.setBrush(on ? quarterColor(i) : Qt::NoBrush);
+    p.drawRoundedRect(qr[i].adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
+    p.setFont(theme::mono(10, QFont::Medium)); p.setPen(on ? banks::inkOn(quarterColor(i), "#141008") : theme::alpha(quarterColor(i), 170));
+    p.drawText(qr[i], Qt::AlignCenter, m_quarters[i].label());
+  }
+  // footnote under the chart
+  p.setFont(theme::mono(9, QFont::Normal, 0.8)); p.setPen(theme::map("#555149"));
+  p.drawText(QRectF(pr.left() + 11, g.chart.bottom() + 4, pr.width() - 22, kPhFoot - 8), Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap, footnote());
+  // table: INSTITUTION, then quarters 1-3 on the first line and 4-6 on the second
+  p.setRenderHint(QPainter::Antialiasing, false);
+  p.fillRect(QRectF(pr.left() + 1, g.tableTop, pr.width() - 2, 1), theme::map("#2d2818"));
+  const qreal tl = pr.left() + 1, w0 = 118, step = (pr.width() - 2 - w0 - 10) / 3.0;
+  auto colRight = [&](int q) { return tl + w0 + step * (q % 3 + 1); };   // q = 0..5
+  auto lineTop = [&](qreal top, int q) { return top + (q < 3 ? 3 : 24); };
+  p.setRenderHint(QPainter::Antialiasing, true);
+  p.setFont(theme::mono(9, QFont::Normal, 1.8)); p.setPen(theme::map("#5e5a52"));
+  p.drawText(QRectF(tl + 10, g.tableTop + 3, w0, 18), Qt::AlignVCenter | Qt::AlignLeft, QCoreApplication::translate("banks", "INSTITUTION"));
+  for (int q = 0; q < m_quarters.size(); ++q) {
+    p.setPen(quarterTextColor(q)); p.setFont(theme::mono(10, QFont::Bold, 1.0));
+    p.drawText(QRectF(colRight(q) - 80, lineTop(g.tableTop, q), 80, 16), Qt::AlignRight | Qt::AlignVCenter, m_quarters[q].label().toUpper());
+  }
+  const auto all = banks::Forecasts::instance().forecasts(m_pair);
+  for (int r = 0; r < m_rows.size(); ++r) {
+    const QRectF rr = rowRect(r);
+    const QString id = m_rows[r];
+    if (id == m_bank) { p.fillRect(rr, theme::map("#1b1503")); p.fillRect(QRectF(rr.left(), rr.top(), 2, rr.height()), kYellow); }
+    p.fillRect(QRectF(rr.left(), rr.bottom(), rr.width(), 1), kSep);
+    const banks::Bank* b = banks::bank(id);
+    p.drawPixmap(QPointF(tl + 10, rr.top() + 8), ui::flag(b ? b->country : "eu", QSize(18, 12), devicePixelRatioF()));
+    QDate rev;
+    for (const auto& x : all) if (x.bankId == id && x.revised > rev) rev = x.revised;
+    const QString revT = rev.isValid() ? i18n::locale().toString(rev, "MMM dd").toUpper() : QString::fromUtf8("—");
+    p.setFont(theme::sans(12)); p.setPen(theme::map("#e0ddd8"));
+    p.drawText(QRectF(tl + 35, rr.top() + 4, w0 - 35, 18), Qt::AlignVCenter | Qt::AlignLeft, b ? b->legalName.section(' ', 0, 0) : id);
+    p.setFont(theme::mono(9)); p.setPen(theme::map("#8c8881"));
+    p.drawText(QRectF(tl + 35, rr.top() + 25, w0 - 30, 16), Qt::AlignVCenter | Qt::AlignLeft, QCoreApplication::translate("banks", "REV. %1").arg(revT));
+    for (int q = 0; q < m_quarters.size(); ++q) {
+      double v = qQNaN();
+      for (const auto& x : all) if (x.bankId == id && x.quarter == m_quarters[q]) v = x.value;
+      const QRectF cell(colRight(q) - step + 4, lineTop(rr.top(), q), step - 4, 20);
+      if (std::isfinite(v)) { p.setFont(theme::mono(13)); p.setPen(theme::map("#fffdfa")); p.drawText(cell, Qt::AlignVCenter | Qt::AlignRight, en.toString(v, 'f', dec)); }
+      else { p.setFont(theme::mono(12)); p.setPen(theme::map("#5e5b53")); p.drawText(cell, Qt::AlignVCenter | Qt::AlignRight, QString::fromUtf8("—")); }
+    }
+  }
+  if (m_rows.isEmpty()) {
+    p.setFont(theme::mono(10, QFont::Normal, 2)); p.setPen(theme::map("#5b5750"));
+    p.drawText(rowRect(0).adjusted(10, 0, -10, 0), Qt::AlignVCenter | Qt::AlignLeft | Qt::TextWordWrap,
+               banks::Forecasts::instance().loaded() ? QCoreApplication::translate("banks", "NO BANK FORECAST FOR THIS PAIR") : QCoreApplication::translate("banks", "LOADING THE BANKS' FORECASTS"));
+  }
+  // note: who is read, who is not
+  p.setFont(theme::mono(9, QFont::Normal, 1.0)); p.setPen(theme::map("#4a473f"));
+  p.drawText(QRectF(tl + 10, pr.bottom() - kPhNote - 4, pr.width() - 22, kPhNote), Qt::TextWordWrap | Qt::AlignBottom | Qt::AlignLeft,
+             QCoreApplication::translate("banks", "FORECASTS READ FROM ING THINK (© ING BANK N.V., REUSE WITH ATTRIBUTION). TD, MUFG, KBC, "
+                               "SCOTIABANK AND COMMERZBANK PUBLISH FX TABLES TOO, BUT THEIR TERMS FORBID REUSE OR AUTOMATED "
+                               "ACCESS: NOT INCLUDED. QUARTER-END VALUES (EOP). LINE AVERAGES COMPUTED BY DEEPWATER."));
 }
 
 void ForecastOverlay::mouseMoveEvent(QMouseEvent* e) {

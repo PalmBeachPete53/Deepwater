@@ -1,5 +1,6 @@
 // Charts tab — quant checks box. Port of quant-terminal public/js/quantui.js (MIT, Copyright (c) 2026 Lewis Jackson).
 #include "pages/charts/panels/bottom/QuantChecks.h"
+#include "trials/Stats.h"
 #include "charts/core/PineQuant.h"
 #include "charts/data/CustomFiles.h"
 #include "charts/core/Quant.h"
@@ -359,13 +360,17 @@ QWidget* mountQuantChecks(const TestResult& result, ChartsApp* app) {
           po.timeframe = pine::timeframeFromCharts(res->tf);
           const pine::QuantResult pq = pine::quantChecks(source, res->bars, po, 2000, cancel.get());
           if (!pq.ok()) o.error = pq.error;
-          else o.q = pq.checks;
+          else {
+            o.q = pq.checks;
+            trials::withRegistry(o.q, res->r.equity, res->family, res->config);   // every other strategy tried on this data
+          }
           return o;
         }
         quant::Options opt;
         opt.subBars = res->subBars;
         opt.indicatorOrder = res->indicatorOrder;
         o.q = quant::quantChecks(res->bars, res->strat, opt, cancel.get());
+        trials::withRegistry(o.q, res->r.equity, res->family, res->config);   // every other strategy tried on this data
       } catch (const std::exception& e) {
         o.error = QString::fromUtf8(e.what());
       }

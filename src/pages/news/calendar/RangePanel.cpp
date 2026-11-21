@@ -3,6 +3,7 @@
 #include "ui/Theme.h"
 #include "pages/news/ThemeColor.h"
 #include "core/I18n.h"
+#include "ui/Touch.h"
 #include <QCoreApplication>
 #include <QPainter>
 #include <QPainterPath>
@@ -242,12 +243,34 @@ void RangePanel::updateHover(const QPointF& viewPos) {
   QString tip;   // elided source lines: full text in a tooltip
   for (const auto& l : m_links) if (l.r.contains(pos) && !l.full.isEmpty()) tip = l.full;
   if (!tip.isEmpty()) QToolTip::showText(mapToGlobal(viewPos.toPoint()), ui::plainTip(tip), this); else QToolTip::hideText();
-  const bool hc = QRectF(12, 4, 22, 20).contains(pos);
+  const bool hc = closeHit().contains(pos);
   setCursor(h >= 0 || hc ? Qt::PointingHandCursor : Qt::ArrowCursor);
   if (h != m_hoverLink || hc != m_hoverClose) { m_hoverLink = h; m_hoverClose = hc; update(); }
 }
-void RangePanel::mouseMoveEvent(QMouseEvent* e) { m_pin = false; updateHover(e->position()); }
+QRectF RangePanel::closeHit() const { return width() < 520 ? QRectF(0, 0, 48, 34) : QRectF(12, 4, 22, 20); }
+void RangePanel::mouseMoveEvent(QMouseEvent* e) {
+  m_pin = false;
+  if (m_dragY >= 0 && (e->buttons() & Qt::LeftButton)) {
+    const double dy = e->position().y() - m_dragY;
+    if (std::abs(dy) > 8) m_dragged = true;
+    if (m_dragged) {
+      const double n = std::clamp(m_dragOff - dy, 0.0, std::max(0.0, m_contentH - height()));
+      if (n != m_off) { m_off = n; update(); }
+      return;
+    }
+  }
+  updateHover(e->position());
+}
+void RangePanel::mouseReleaseEvent(QMouseEvent* e) {
+  if (m_dragY < 0) return;
+  m_dragY = -1;
+  if (m_dragged) { m_dragged = false; return; }
+  updateHover(e->position());
+  if (m_hoverClose) { emit closeRequested(); return; }
+  if (m_hoverLink >= 0) ui::openWebLink(m_links[m_hoverLink].url);
+}
 void RangePanel::mousePressEvent(QMouseEvent* e) {
+  if (ui::touch::enabled() && e->button() == Qt::LeftButton) { m_dragY = e->position().y(); m_dragOff = m_off; m_dragged = false; return; }
   updateHover(e->position());
   if (m_hoverClose) { emit closeRequested(); return; }
   if (m_hoverLink >= 0) ui::openWebLink(m_links[m_hoverLink].url);

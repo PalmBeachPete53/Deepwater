@@ -34,6 +34,8 @@ signals:
   void tradeEdit(const QString& tradeId);
   void tradeDelete(const QString& tradeId);
   void relayoutNeeded();                  // content height changed
+protected:
+  bool m_phone = false;                   // phone layout (ui::compact of the page width), set by relayout()
 };
 
 class DashboardView : public TrView {
@@ -47,6 +49,7 @@ protected:
   void showEvent(QShowEvent*) override;
   void hideEvent(QHideEvent*) override;
 private:
+  QStringList readLines() const;          // the automated read's sentences (painted, and measured on phones)
   TrData m_d;
   QList<PaintPanel*> m_kpi;
   PaintPanel *m_score, *m_cum, *m_month, *m_quarter, *m_last, *m_read;
@@ -82,6 +85,7 @@ public:
   void playEntry() override;
 private:
   void rebuild();
+  QRectF toggleRect() const;              // the $ / % BALANCE switch in the header
   TrData m_d;
   QList<account::Trade> m_top5, m_bottom5;   // TOP 5 / BOTTOM 5 TRADES (setData)
   bool m_pct = false;
@@ -101,6 +105,7 @@ public:
   QRect yearRect() const { return layout().year.toRect(); }
   QRect accountRect() const { return layout().account.toRect(); }
   static constexpr int kHeight = 86;
+  int heightFor(int w) const;             // kHeight, or taller when the controls stack (phones, narrow windows)
   static QString tabName(int i);
   static QString filtersText();
   static QString logText();
@@ -120,8 +125,10 @@ protected:
   void focusOutEvent(QFocusEvent*) override;
   bool event(QEvent*) override;
 private:
-  struct L { QRectF tabs[3], filters, year, account, lastImport, log, import; bool showImport = true; int yearPx = 19; };
+  struct L { QRectF tabs[3], filters, year, account, lastImport, log, import; bool showImport = true; int yearPx = 19; int tabPx = 12; };
   L layout() const;
+  int stackRows(int w) const;             // 0: the one-band desktop toolbar fits; 2 or 3: rows of the stacked toolbar
+  L stackedLayout() const;
   int hitTest(const QPointF& p) const;    // 0..2 tabs, 3 filters, 4 year, 5 account, 6 log, 7 import, -1
   int hoverAt() const;                    // hovered element (real pointer or the DW_HOVER test pointer)
   int m_view = 0, m_hover = -1, m_focus = -1;   // focus: 0..2 tabs, 3 FILTERS (ring drawn once m_focusShown)

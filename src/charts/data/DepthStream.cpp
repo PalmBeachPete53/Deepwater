@@ -114,7 +114,7 @@ public:
   // Built on the GUI thread before the depth thread starts (thread creation orders these reads before the thread).
   DepthWorker(DepthStream* gui, const QStringList& urls, const flow::TickScale& scale, bool futures)
       : urls_(urls), scale_(scale), ring_(gui->ring_.get()), statusRing_(gui->statusRing_.get()), snapshotRing_(gui->snapshotRing_.get()),
-        wantSnapshot_(&gui->wantSnapshot_), recRing_(gui->recRing_.get()), recordOn_(&gui->recordOn_), recordMs_(g_recordMs), sync_(futures ? flow::BookSync::Venue::Futures : flow::BookSync::Venue::Spot, book_) {
+        wantSnapshot_(&gui->wantSnapshot_), recRing_(gui->recRing_.get()), bandRing_(gui->bandRing_.get()), recordOn_(&gui->recordOn_), recordMs_(g_recordMs), sync_(futures ? flow::BookSync::Venue::Futures : flow::BookSync::Venue::Spot, book_) {
     snap_.bids.reserve(5000);
     snap_.asks.reserve(5000);
   }
@@ -154,6 +154,10 @@ public:
     ++snapshots_;
     const auto r = sync_.onSnapshot(snap_.lastUpdateId, snap_.bids, snap_.asks);
     if (r == flow::BookSync::Result::Synced) {
+      // how far the snapshot reaches on each side: the bands past it count only the levels updated since
+      coverBid_ = coverAsk_ = 0;
+      for (const auto& l : snap_.bids) if (coverBid_ == 0 || l.ticks < coverBid_) coverBid_ = l.ticks;
+      for (const auto& l : snap_.asks) if (l.ticks > coverAsk_) coverAsk_ = l.ticks;
       snapFails_ = 0;
       tooOld_ = 0;
       error_.clear();
@@ -256,6 +260,13 @@ private:
     sampler_.sample(book_, sync_.state() == flow::BookSync::State::Synced, exchangeNow(), *c);
     // the disk gets the columns on whole seconds (the sampling grid divides the recording interval)
     if (recordOn_->load(std::memory_order_relaxed) && c->timeMs % recordMs_ == 0 && !recRing_->push(*c)) ++dropped_;
+    // the bands, on whole seconds of a synced book (memory only: the GUI keeps 24 h)
+    if (c->timeMs % 1000 == 0 && sync_.state() == flow::BookSync::State::Synced) {
+      if (flow::BookBands* bb = bandRing_->beginPush()) {
+        flow::bookBands(book_, scale_, coverBid_, coverAsk_, c->timeMs, *bb);
+        bandRing_->commitPush();
+      }
+    }
     ring_->commitPush();
   }
 
@@ -288,6 +299,8 @@ private:
   flow::SpscRing<DepthStream::SnapshotMsg, 4>* snapshotRing_;
   std::atomic<bool>* wantSnapshot_;
   DepthStream::Ring* recRing_;
+  flow::SpscRing<flow::BookBands, 16>* bandRing_;
+  int64_t coverBid_ = 0, coverAsk_ = 0;                       // the last snapshot's deepest levels (ticks)
   const std::atomic<bool>* recordOn_;                         // whether whole-second columns go to the writer
   int recordMs_;
   flow::OrderBook book_{int64_t(1) << 17};
@@ -323,7 +336,7 @@ std::shared_ptr<DepthStream> DepthStream::acquire(const FlowMarket& m) {
 DepthStream::DepthStream(const FlowMarket& m)
     : market_(m), feed_(makeExchangeFeed(m)), ring_(std::make_unique<Ring>()),
       statusRing_(std::make_unique<flow::SpscRing<StatusMsg, 16>>()), snapshotRing_(std::make_unique<flow::SpscRing<SnapshotMsg, 4>>()),
-      recRing_(std::make_unique<Ring>()), recordOn_(g_record), keepDays_(g_keepDays),
+      recRing_(std::make_unique<Ring>()), bandRing_(std::make_unique<flow::SpscRing<flow::BookBands, 16>>()), recordOn_(g_record), keepDays_(g_keepDays),
       live_(std::make_unique<flow::ColumnRing<flow::DepthRecord>>(kLiveColumns)),
       history_(std::make_unique<flow::ColumnRing<flow::DepthRecord>>(kHistoryColumns)) {
   connect(&drainTimer_, &QTimer::timeout, this, &DepthStream::drain);
@@ -403,6 +416,11 @@ void DepthStream::drain() {
     if (c->timeMs % g_recordMs == 0 && (history_->empty() || history_->back().timeMs < c->timeMs)) history_->push() = r;
     ring_->popFront();
     ++n;
+  }
+  while (const flow::BookBands* b = bandRing_->front()) {
+    bands_.push_back(*b);
+    bandRing_->popFront();
+    if (bands_.size() > kBandsKept) bands_.pop_front();
   }
   if (n) emit appended(n);
 }

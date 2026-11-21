@@ -20,6 +20,7 @@ protected:
 private:
   QRectF scrollRect() const;
   qreal clocksLeft() const;
+  bool showClocks() const;
   void rebuildStrip();
   QPixmap m_strip;            // one loop of the items
   QPixmap m_scrollBg;         // the bar's gradient under the scroll area (frames copy it)

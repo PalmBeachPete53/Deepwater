@@ -25,6 +25,8 @@ public:
   void setScores(const QVector<fundamental::Score>& ranked, bool ready);
   void setSelected(const QString& ccy, bool fresh);
   void setFresh(bool fresh) { m_fresh = fresh; update(); }
+  // phones (strip under 760 px): two rows of four cards
+  static int heightFor(int w) { return w < 760 ? 2 * 93 + 8 : 93; }
 signals:
   void picked(const QString& ccy);
 protected:
@@ -80,6 +82,9 @@ public:
   void setData(const fundamental::Inputs* in, const QString& ccy, const QString& status, bool animate);
   HistoryChart* policyChart() const { return m_policy; }
   HistoryChart* inflationChart() const { return m_infl; }
+  // phones (card under 760 px): rate, move, meeting and gauge one under the other, the two charts stacked
+  static constexpr int kPhoneChartH = 260, kPhoneTop = 352;
+  static int phoneHeight() { return kPhoneTop + 2 * kPhoneChartH + 10 + 9; }
 protected:
   void paintEvent(QPaintEvent*) override;
   void resizeEvent(QResizeEvent*) override;
@@ -139,6 +144,9 @@ public:
   void setScores(const QVector<fundamental::Score>& ranked, bool ready);
   void setSelected(const QString& ccy) { m_sel = ccy; update(); }
   static int heightForRows(int n) { return 70 + (n - 1) * 63.5 + 58 + 12; }
+  // phones (card under 760 px): each currency on two lines (code, score and bias; then its six signal cells)
+  static int phoneHeightForRows(int n) { return 70 + n * kPhonePitch + 6; }
+  static constexpr int kPhonePitch = 84;
   void setHoverCell(int row, int col) { m_hr = row; m_hc = col; update(); }   // test hook
 signals:
   void picked(const QString& ccy);

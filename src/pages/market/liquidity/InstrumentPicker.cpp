@@ -2,7 +2,11 @@
 #include "pages/market/technical/MarketKit.h"
 #include "market/Instruments.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
+#include <QScroller>
+#include <QScrollerProperties>
+#include <QScrollPrepareEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -55,9 +59,22 @@ void InstrumentButton::paintEvent(QPaintEvent*) {
 }
 
 // ------------------------------------------------------------------ list
-namespace { constexpr double kItem = 25.5; }
 InstrumentList::InstrumentList(QWidget* parent) : QWidget(parent) {
   setMouseTracking(true); setCursor(Qt::PointingHandCursor);
+  // a finger drags the list (kinetic; a tap still picks a row) and needs taller rows; the mouse keeps the wheel
+  if (ui::touch::enabled()) {
+    m_item = 34;
+#ifdef Q_OS_IOS
+    QScroller::grabGesture(this, QScroller::TouchGesture);
+#else
+    QScroller::grabGesture(this, QScroller::LeftMouseButtonGesture);
+#endif
+    QScrollerProperties sp = QScroller::scroller(this)->scrollerProperties();
+    sp.setScrollMetric(QScrollerProperties::HorizontalOvershootPolicy, QScrollerProperties::OvershootAlwaysOff);
+    sp.setScrollMetric(QScrollerProperties::VerticalOvershootPolicy, QScrollerProperties::OvershootAlwaysOff);
+    sp.setScrollMetric(QScrollerProperties::DragStartDistance, 0.004);
+    QScroller::scroller(this)->setScrollerProperties(sp);
+  }
   // majors first (the reference list starts EUR/USD, GBP/USD, USD/JPY, USD/CHF, USD/CAD, AUD/USD, NZD/USD, EUR/GBP…)
   const QStringList first{"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY"};
   for (const auto& s : first) if (const auto* i = market::find(s)) m_all.push_back({i->symbol, instrumentLabel(i->symbol), tagOf(i->category)});
@@ -78,33 +95,49 @@ void InstrumentList::setCurrent(const QString& s) { m_current = s; update(); }
 void InstrumentList::scrollToCurrent() {
   for (int i = 0; i < m_items.size(); ++i)
     if (m_items[i].symbol == m_current) {
-      const double y = i * kItem;
-      if (y < m_scroll || y + kItem > m_scroll + height()) m_scroll = std::max(0.0, y - height() / 2.0);
+      const double y = i * m_item;
+      if (y < m_scroll || y + m_item > m_scroll + height()) m_scroll = std::max(0.0, y - height() / 2.0);
     }
-  m_scroll = std::clamp(m_scroll, 0.0, std::max(0.0, m_items.size() * kItem - height()));
+  m_scroll = std::clamp(m_scroll, 0.0, maxScroll());
   update();
 }
+bool InstrumentList::event(QEvent* e) {
+  if (e->type() == QEvent::ScrollPrepare) {
+    auto* se = static_cast<QScrollPrepareEvent*>(e);
+    se->setViewportSize(QSizeF(size()));
+    se->setContentPosRange(QRectF(0, 0, 0, maxScroll()));
+    se->setContentPos(QPointF(0, m_scroll));
+    se->accept();
+    return true;
+  }
+  if (e->type() == QEvent::Scroll) {
+    m_scroll = std::clamp(static_cast<QScrollEvent*>(e)->contentPos().y(), 0.0, maxScroll());
+    update();
+    return true;
+  }
+  return QWidget::event(e);
+}
 void InstrumentList::wheelEvent(QWheelEvent* e) {
-  const double d = !e->pixelDelta().isNull() ? e->pixelDelta().y() : e->angleDelta().y() / 120.0 * kItem * 3;
-  m_scroll = std::clamp(m_scroll - d, 0.0, std::max(0.0, m_items.size() * kItem - height()));
+  const double d = !e->pixelDelta().isNull() ? e->pixelDelta().y() : e->angleDelta().y() / 120.0 * m_item * 3;
+  m_scroll = std::clamp(m_scroll - d, 0.0, std::max(0.0, m_items.size() * m_item - height()));
   update(); e->accept();
 }
 void InstrumentList::mouseMoveEvent(QMouseEvent* e) {
-  const int h = int((e->position().y() + m_scroll) / kItem);
+  const int h = int((e->position().y() + m_scroll) / m_item);
   const int v = h >= 0 && h < m_items.size() ? h : -1;
   if (v != m_hover) { m_hover = v; update(); }
 }
 void InstrumentList::mousePressEvent(QMouseEvent* e) {
-  const int h = int((e->position().y() + m_scroll) / kItem);
+  const int h = int((e->position().y() + m_scroll) / m_item);
   if (h >= 0 && h < m_items.size()) emit picked(m_items[h].symbol);
 }
 void InstrumentList::leaveEvent(QEvent*) { m_hover = -1; update(); }
 void InstrumentList::paintEvent(QPaintEvent*) {
   QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
   const QFont f = theme::sans(11), tf = theme::mono(7, QFont::Normal, 0.5);
-  const int a = int(m_scroll / kItem), b = std::min<int>(m_items.size() - 1, int((m_scroll + height()) / kItem));
+  const int a = int(m_scroll / m_item), b = std::min<int>(m_items.size() - 1, int((m_scroll + height()) / m_item));
   for (int i = a; i <= b; ++i) {
-    const QRectF r(0, i * kItem - m_scroll, width(), kItem - 1.5);
+    const QRectF r(0, i * m_item - m_scroll, width(), m_item - 1.5);
     const bool cur = m_items[i].symbol == m_current;
     if (cur || i == m_hover) { p.setPen(Qt::NoPen); p.setBrush(cur ? theme::map("#29251d") : theme::map("#18140c")); p.drawRoundedRect(r, 2, 2); }
     p.setFont(f); p.setPen(cur ? theme::map("#d1c78a") : theme::map("#dddad6"));
@@ -124,7 +157,10 @@ InstrumentDropdown::InstrumentDropdown(QWidget* host) : QWidget(host) {
   connect(m_list, &InstrumentList::picked, this, [this](const QString& s) { dismiss(); emit picked(s); });
 }
 void InstrumentDropdown::popup(const QPoint& at, const QString& current) {
-  setGeometry(at.x(), at.y(), 190, 258);
+  if (ui::compact(parentWidget()->width())) {   // phones: wider and taller, kept inside the page
+    const int w = std::min(260, parentWidget()->width() - 16), h = std::min(380, parentWidget()->height() - at.y() - 8);
+    setGeometry(std::clamp(at.x(), 8, parentWidget()->width() - w - 8), at.y(), w, h);
+  } else setGeometry(at.x(), at.y(), 190, 258);
   m_search->setGeometry(7, 7, width() - 12, 25);
   m_list->setGeometry(7, 36, width() - 12, height() - 38);
   m_search->clear();

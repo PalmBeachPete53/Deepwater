@@ -39,6 +39,7 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
+#include <QTimeZone>
 #include <QTimer>
 #include <QToolTip>
 #include <algorithm>
@@ -786,9 +787,14 @@ struct ChartPane::Impl {
     const qint64 since = fp->coveredFromMs();
     const QDateTime t = QDateTime::fromMSecsSinceEpoch(since);
     const QString when = t.date() == QDate::currentDate() ? t.toString("HH:mm") : QLocale(QLocale::English).toString(t, "d MMM HH:mm");
+    const qint64 stored = fp->archiveFirstDay();   // the footprint history of Data › Technical data
+    const QString storedDay = stored ? QDateTime::fromSecsSinceEpoch(stored, QTimeZone::UTC).toString("yyyy-MM-dd") : QString();
     QString s = since == 0 ? QCoreApplication::translate("charts", "Footprint: waiting for trades…")
-                : st.historyDone ? QCoreApplication::translate("charts", "Footprint from %1 (older bars: plain candles)").arg(when)
+                : st.historyDone ? (stored ? QCoreApplication::translate("charts", "Footprint live from %1, stored history from %2 (1 bp levels)").arg(when, storedDay)
+                                           : QCoreApplication::translate("charts", "Footprint from %1 (older bars: plain candles)").arg(when))
                                  : QCoreApplication::translate("charts", "Footprint: loading trade history, back to %1 so far…").arg(when);
+    if (since != 0 && !st.historyDone && stored)
+      s += QCoreApplication::translate("charts", " · stored history from %1").arg(storedDay);
     if (st.feed != data::FeedState::Open) s += QCoreApplication::translate("charts", " · live trades reconnecting");
     if (st.approximate) s += QCoreApplication::translate("charts", " · aggressor sides estimated (tick rule)");
     return s;
@@ -1559,6 +1565,8 @@ ChartPane::ChartPane(ChartsApp* app_, const QJsonObject& c, QWidget* parent) : Q
     o.timeScale.rightOffset = 8;
     // down to 0.05 px a bar (JS 0.5): the navigator's window (and the wheel) can show the whole loaded history
     o.timeScale.minBarSpacing = 0.05;
+    // the deepest zoom: 5 bars (user's rule 2026-11-20), the navigator's 30 px window
+    o.timeScale.minVisibleBars = 5;
     o.timeScale.timeVisible = true;
     o.timeScale.secondsVisible = false;
     o.localization.priceFormatter = [](double p) { return pane::fmtPrice(p); };
@@ -2514,9 +2522,9 @@ static const bool kNavStep = registerUiStep("nav", [](ChartsApp* app, const QStr
     const auto r = pane->chart()->timeScale()->getVisibleLogicalRange();
     const int last = pane->chart()->timeScale()->baseIndex();
     nav->repaint();   // the span shown is computed at paint
-    const auto sp = nav->shownSpan();
-    if (r) qInfo("nav %s: visible %.2f .. %.2f (%.1f bars), last bar %d, domain -0.5 .. %.1f, shown %.1f .. %.1f", tag, r->from, r->to,
-                 r->to - r->from + 1, last, last + 0.5 + kFreshRightPad, sp ? sp->a : 0.0, sp ? sp->b : 0.0);
+    const auto w = nav->window();
+    if (r) qInfo("nav %s: visible %.2f .. %.2f (%.1f bars), last bar %d, domain -0.5 .. %.1f, window %.1f .. %.1f px (%.1f px of %d)", tag,
+                 r->from, r->to, r->to - r->from + 1, last, last + 0.5 + kFreshRightPad, w.x, w.right(), w.w, nav->width());
   };
   auto send = [&](QEvent::Type t, double fx, bool down) {
     const QPointF pt(fx * nav->width(), nav->height() / 2.0);
@@ -2569,7 +2577,8 @@ static const bool kNavStep = registerUiStep("nav", [](ChartsApp* app, const QStr
 });
 
 // ---------- UI step (screenshots, measures): the active pane's footprint ----------
-// fp:bars:<n> shows the last n bars · fp:mode:<bidask|delta|profile> · fp:log prints the footprint's state (detail level, rows, bars drawn, draw time,
+// fp:bars:<n> shows the last n bars · fp:at:<yyyy-MM-ddTHH:mm UTC>:<n> shows n bars ending at that time (the stored
+// history) · fp:mode:<bidask|delta|profile> · fp:log prints the footprint's state (detail level, rows, bars drawn, draw time,
 // trades, history) · fp:perf repaints 30 frames panned by a bar and prints ms per frame for the chart and the layer.
 std::optional<double> ChartPane::footprintTick() const {
   if (!d->fp || !d->fp->ready()) return std::nullopt;
@@ -2583,6 +2592,19 @@ bool ChartPane::footprintStep(const QString& arg) {
   if (what == "bars") {
     const double k = std::max(2.0, arg.section(':', 1).toDouble());
     ts->setVisibleLogicalRange({n - k, n - 1 + 2});
+    return true;
+  }
+  if (what == "at") {   // fp:at:2026-11-18T14:00:30 — the time has colons: the bar count is the last section
+    const QString rest = arg.section(':', 1);
+    const QDateTime t = QDateTime::fromString(rest.section(':', 0, -2), Qt::ISODate);
+    const double k = std::max(2.0, rest.section(':', -1).toDouble());
+    if (!t.isValid()) return false;
+    QDateTime u = t;
+    u.setTimeZone(QTimeZone::UTC);
+    const qint64 sec = u.toSecsSinceEpoch();
+    int i = 0;
+    while (i + 1 < shown.size() && shown[i + 1].time <= sec) ++i;
+    ts->setVisibleLogicalRange({i - k + 1, double(i)});
     return true;
   }
   if (what == "mode") {   // fp:mode:bidask|delta|profile — as the settings dialog saves it
@@ -2604,10 +2626,21 @@ bool ChartPane::footprintStep(const QString& arg) {
   if (what == "log") {
     const auto& st = d->fp->status();
     const auto r = ts->getVisibleLogicalRange();
-    qInfo("fp log: detail %s, rows of %lld ticks, %d bars drawn in %.2f ms, bar spacing %.1f px, visible %.0f bars; "
-          "%zu candles, history %s, feed %s",
+    int stored = 0, live = 0;
+    if (r)
+      for (int i = std::max(0, int(std::floor(r->from))); i <= std::min(int(shown.size()) - 1, int(std::ceil(r->to))); ++i) {
+        if (d->fp->fromArchive(shown[i].time)) ++stored;
+        else if (d->fp->complete(shown[i].time)) ++live;
+      }
+    auto utcOf = [&](double li) {
+      const int k = std::clamp(int(std::lround(li)), 0, int(shown.size()) - 1);
+      return shown.isEmpty() ? QString() : QDateTime::fromSecsSinceEpoch(shown[k].time, QTimeZone::UTC).toString("yyyy-MM-dd HH:mm");
+    };
+    qInfo("fp log: detail %s, rows of %lld ticks, %d bars drawn in %.2f ms, bar spacing %.1f px, visible %.0f bars %s .. %s UTC "
+          "(%d from the stored history, %d from live trades); %zu candles, history %s, feed %s",
           detail(), (long long)d->fpLayer->lastGroupTicks(), d->fpLayer->lastBarsDrawn(), d->fpLayer->lastDrawMs(), ts->barSpacing(),
-          r ? r->to - r->from + 1 : 0.0, d->fp->book().candles().size(),
+          r ? r->to - r->from + 1 : 0.0, qPrintable(r ? utcOf(r->from) : QString()), qPrintable(r ? utcOf(r->to) : QString()), stored, live,
+          d->fp->book().candles().size(),
           st.historyDone ? "done" : "loading", st.feed == data::FeedState::Open ? "open" : "not open");
     return true;
   }

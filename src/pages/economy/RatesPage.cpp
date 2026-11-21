@@ -5,6 +5,7 @@
 #include "macro/Registry.h"
 #include "app/Pages.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollArea>
@@ -72,15 +73,19 @@ public:
   qreal W() const { return std::min(width() - 20.0, 2400.0); }
   qreal L() const { return std::floor((width() - W()) / 2); }
   qreal S() const { return W() / 1558.0; }
-  qreal tableTop() const { return 145; }
-  qreal rowH() const { return 45.4; }
-  QRectF rowRect(int i) const { return QRectF(L(), tableTop() + 30 + i * rowH(), W(), rowH()); }
+  // phones (ui::compact): summary cards 2 x 2, table rows on two bands, committees stacked per bank; the blocks
+  // below move down by what that adds. Desktop keeps the reference positions.
+  bool phone() const { return ui::compact(width()); }
+  qreal tableTop() const { return phone() ? 206 : 145; }
+  qreal headH() const { return phone() ? 44 : 30; }
+  qreal rowH() const { return phone() ? 82 : 45.4; }
+  QRectF rowRect(int i) const { return QRectF(L(), tableTop() + headH() + i * rowH(), W(), rowH()); }
   qreal row1() const { return 585; }
   // chart panels: two columns from 1380 px of content (reference), one column below (charts keep 384 px of height);
   // on wide windows the panels grow taller with their width (up to 560 px)
   bool twoCol() const { return W() >= 1380; }
-  qreal panelH() const { return twoCol() ? std::clamp((W() - 11) / 2 * 0.497, 384.0, 560.0) : 384.0; }
-  qreal termHead() const { return 561; }
+  qreal panelH() const { return phone() ? 330.0 : twoCol() ? std::clamp((W() - 11) / 2 * 0.497, 384.0, 560.0) : 384.0; }
+  qreal termHead() const { return phone() ? rowRect(7).bottom() + 30 : 561; }
   qreal termTop() const { return termHead() + 24; }
   qreal polyHead() const { return termTop() + (twoCol() ? 2 : 4) * (panelH() + 12) + 1; }
   qreal polyTop() const { return polyHead() + 25; }
@@ -97,11 +102,19 @@ public:
     return QRectF(L(), y, W(), ph);
   }
   qreal commTop() const { return panel(5).bottom() + 33; }
+  qreal commTableTop() const { return commTop() + (phone() ? 70 : 40); }   // phones: the source note wraps above the table
+  // one bank's block in the committees table: two 38 px lines (desktop); phones: name lines + 60 px per decision
+  qreal commGroupH(const Bank& b) const {
+    const int n = int(std::min<qsizetype>(2, b.decisions.size()));
+    return phone() ? 50 + (n == 0 ? 30 : n * 60) : std::max(2, n) * 38;
+  }
   int contentHeight() const {
-    int h = int(commTop() + 40 + 26);
-    for (const auto& b : CentralBanks::instance().banks()) h += int(std::max(2, int(std::min<qsizetype>(2, b.decisions.size()))) * 38);
+    int h = int(commTableTop() + 26);
+    for (const auto& b : CentralBanks::instance().banks()) h += int(commGroupH(b));
     return h + 30;
   }
+  // the height depends on the width (two-column panels, phone layout)
+  void resizeEvent(QResizeEvent*) override { if (minimumHeight() != contentHeight()) setMinimumHeight(contentHeight()); }
 
   const Bank* bank() const { return CentralBanks::instance().bank(selected); }
 
@@ -159,12 +172,14 @@ public:
       ++priced;
       if (a == "Hike") ++hike; else if (a == "Cut") ++cut; else ++hold;
     }
-    const qreal cw = (W() - 3 * 6) / 4;
+    const bool ph = phone();
+    const qreal dy = ph ? 61 : 0;   // phones: the cards on two rows push the note down
+    const qreal cw = ph ? (W() - 6) / 2 : (W() - 3 * 6) / 4;
     struct Cd { int n; int of; QColor c; QString lab; };
     const QList<Cd> cards{{hike, priced, eco::cyan(), QCoreApplication::translate("economy", "PRICED TO HIKE")}, {hold, priced, C("#afb0b1"), QCoreApplication::translate("economy", "PRICED TO HOLD")},
                           {cut, priced, eco::red(), QCoreApplication::translate("economy", "PRICED TO CUT")}, {week, int(banks.size()), C("#afb0b1"), QCoreApplication::translate("economy", "MEETING THIS WEEK")}};
     for (int i = 0; i < 4; ++i) {
-      const QRectF r(L() + i * (cw + 6), 54, cw, 55);
+      const QRectF r = ph ? QRectF(L() + (i % 2) * (cw + 6), 54 + (i / 2) * 61, cw, 55) : QRectF(L() + i * (cw + 6), 54, cw, 55);
       p.setPen(QPen(C("#302c22"), 1)); p.setBrush(C("#0c0702")); p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
       const QFont big = eco::mono(20, QFont::Medium);
       p.setFont(big); p.setPen(cards[i].c);
@@ -176,16 +191,135 @@ public:
       if (i < 3) m_infos.append({r, QCoreApplication::translate("economy", "Counted over the %1 of %2 banks with market pricing; hover a row in the table for its source.").arg(priced).arg(banks.size())});
       eco::micro(p, r.left() + 11, r.top() + 43, lab, C("#555149"), 9, 0.8);
     }
-    p.setPen(Qt::NoPen); p.setBrush(C("#4cbcc0")); p.drawEllipse(QPointF(L() + 3, 121), 2, 2);
+    p.setPen(Qt::NoPen); p.setBrush(C("#4cbcc0")); p.drawEllipse(QPointF(L() + 3, 121 + dy), 2, 2);
     p.setFont(eco::sans(9)); p.setPen(C("#4a4943"));
     const QString note = QCoreApplication::translate("economy", "Odds computed by Deepwater: Fed CME 30-day fed funds \u00b7 ECB CME 3M \u20acSTR \u00b7 BoE BoE OIS forward curve \u00b7 "
                                            "BoJ JPX 3M TONA \u00b7 SNB Eurex 3M SARON \u00b7 BoC MX 3M CORRA \u00b7 RBA/RBNZ FinancialJuice picture (OCR, validated). "
                                            "Hover a row for its source. Polymarket: see below.");
-    p.drawText(QPointF(L() + 11, 124), QFontMetricsF(eco::sans(9)).elidedText(note, Qt::ElideRight, W() - 14));
-    m_infos.append({QRectF(L(), 114, W(), 14), note});
+    p.drawText(QPointF(L() + 11, 124 + dy), QFontMetricsF(eco::sans(9)).elidedText(note, Qt::ElideRight, W() - 14));
+    m_infos.append({QRectF(L(), 114 + dy, W(), 14), note});
+  }
+
+  // Phones: each bank on two bands — flag, code / name, action pill (+ bias pill when it fits), rate / since; then
+  // next meeting / in N days and the IMPL BP · CUT · HOLD · HIKE columns (headed on the header's second line).
+  void paintTablePhone(QPainter& p) {
+    const QRectF box(L(), tableTop(), W(), headH() + 8 * rowH());
+    p.fillRect(QRectF(box.left(), box.top(), box.width(), headH()), C("#0b0a03"));
+    p.setPen(QPen(C("#38311e"), 1)); p.setBrush(Qt::NoBrush); p.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5));
+    const auto& banks = CentralBanks::instance().banks();
+    auto rateSub = [](const Bank& b) {
+      return b.rateSince.isValid() ? QCoreApplication::translate("economy", "since %1").arg(i18n::locale().toString(b.rateSince, QCoreApplication::translate("economy", "MMM d")))
+             : b.rateAsOf.isValid() ? QCoreApplication::translate("economy", "as of %1").arg(i18n::locale().toString(b.rateAsOf, QCoreApplication::translate("economy", "MMM d"))) : b.rateNote;
+    };
+    const qreal xR = L() + W() - 11, c0 = L() + 110, cw = (xR - c0) / 4;
+    auto colR = [&](int k) { return c0 + (k + 1) * cw; };
+    qreal subW = 0;
+    {
+      const QFontMetricsF sf(eco::mono(9)), rf(eco::mono(15, QFont::Bold));
+      for (const Bank& b : banks) subW = std::max({subW, sf.horizontalAdvance(rateSub(b)), rf.horizontalAdvance("00.00%")});
+    }
+    const qreal rateLeft = xR - subW - 8;
+    // header: BANK … RATE, then NEXT MEETING … IMPL BP CUT HOLD HIKE
+    const QFont hf = eco::mono(9, QFont::Normal, 1);
+    p.setFont(hf);
+    const qreal h1 = box.top(), h2 = box.top() + 20;
+    p.setPen(C("#6d6b62"));
+    p.drawText(QRectF(L() + 11, h1, 200, 24), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("economy", "BANK"));
+    p.drawText(QRectF(xR - 200, h1, 200, 24), Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("economy", "RATE"));
+    const QString implH = QCoreApplication::translate("economy", "IMPL BP"), meetH = QCoreApplication::translate("economy", "NEXT MEETING");
+    if (L() + 11 + QFontMetricsF(hf).horizontalAdvance(meetH) < colR(0) - QFontMetricsF(hf).horizontalAdvance(implH) - 8)
+      p.drawText(QRectF(L() + 11, h2, 200, 24), Qt::AlignLeft | Qt::AlignVCenter, meetH);
+    const QList<QPair<QString, QColor>> cols{{implH, C("#6d6b62")}, {QCoreApplication::translate("economy", "CUT"), C("#c0504a")},
+                                             {QCoreApplication::translate("economy", "HOLD"), C("#6a6861")}, {QCoreApplication::translate("economy", "HIKE"), eco::cyan()}};
+    for (int k = 0; k < 4; ++k) { p.setPen(cols[k].second); p.drawText(QRectF(colR(k) - 200, h2, 200, 24), Qt::AlignRight | Qt::AlignVCenter, cols[k].first); }
+    for (int i = 0; i < banks.size(); ++i) {
+      const Bank& b = banks[i];
+      const QRectF r = rowRect(i);
+      const bool sel = b.id == selected, hov = under(r);
+      if (sel) {
+        QLinearGradient g(r.left(), 0, r.right(), 0); g.setColorAt(0, C("#352b04")); g.setColorAt(1, C("#1d1704"));
+        p.fillRect(r.adjusted(1, 0, -1, 0), g);
+        p.fillRect(QRectF(r.left() + 1, r.top(), 3, r.height()), C("#f5d648"));
+      } else if (hov) p.fillRect(r.adjusted(1, 0, -1, 0), C("#201b05"));
+      p.fillRect(QRectF(r.left() + 1, r.top(), r.width() - 2, 1), C("#292518"));
+      // band 1
+      const qreal cy = r.top() + 24;
+      p.drawPixmap(QPointF(L() + 11, cy - 7), macro::flag(b.iso2, QSize(20, 14)));
+      const QFont cf = eco::sans(14, QFont::Bold);
+      p.setFont(cf); p.setPen(C("#e7e1cd"));
+      p.drawText(QPointF(L() + 38, cy - 1), b.code);
+      p.setFont(eco::mono(10)); p.setPen(C("#736b4e"));
+      const QString nm = b.id == "SNB" || b.id == "RBA" || b.id == "RBNZ" || b.id == "ECB" ? b.code : trData(b.name);
+      p.drawText(QPointF(L() + 38, cy + 12), QFontMetricsF(eco::mono(10)).elidedText(nm, Qt::ElideRight, rateLeft - L() - 38));
+      qreal px = L() + 38 + QFontMetricsF(cf).horizontalAdvance(b.code) + 8;
+      const QString act = b.action();
+      if (!act.isEmpty()) {
+        const QString at = QCoreApplication::translate("economy", act.toUtf8().constData());   // Hike / Cut / Hold
+        const QRectF pr(px, cy - 16, std::max(40.0, QFontMetricsF(eco::mono(9, QFont::Bold, 0.4)).horizontalAdvance(at) + 16), 16);
+        if (act == "Hike") eco::pill(p, pr, QCoreApplication::translate("economy", "Hike"), C("#052523"), C("#6fbac2"), true, 8);
+        else if (act == "Cut") eco::pill(p, pr, QCoreApplication::translate("economy", "Cut"), C("#2a0c0a"), C("#e0786f"), true, 8);
+        else eco::pill(p, pr, QCoreApplication::translate("economy", "Hold"), C("#34311b"), C("#a4a29b"), true, 8);
+        px = pr.right() + 6;
+      }
+      p.setFont(eco::mono(15, QFont::Bold)); p.setPen(eco::cyan());
+      p.drawText(QRectF(xR - 200, cy - 14, 200, 18), Qt::AlignRight | Qt::AlignVCenter,
+                 std::isfinite(b.rate) ? QString::number(b.rate, 'f', 2) + "%" : QString("—"));
+      p.setFont(eco::mono(9)); p.setPen(C("#4b4633"));
+      p.drawText(QRectF(xR - 200, cy + 3, 200, 12), Qt::AlignRight | Qt::AlignVCenter, rateSub(b));
+      // band 2
+      const qreal cy2 = r.top() + 60;
+      const MeetingDate nm2 = b.nextMeeting();
+      p.setFont(eco::mono(13)); p.setPen(C("#c9c5b5"));
+      p.drawText(QRectF(L() + 11, cy2 - 15, c0 - L() - 11, 18), Qt::AlignLeft | Qt::AlignVCenter,
+                 nm2.decision.isValid() ? shortDate(nm2.first) + (nm2.verified ? "" : "*") : QString("—"));
+      if (nm2.decision.isValid()) {
+        const int d = b.daysToNext();
+        const QString t = d <= 0 ? QCoreApplication::translate("economy", "today") : QCoreApplication::translate("economy", "in %1d").arg(d);
+        const QFont f = eco::mono(9, QFont::Bold);
+        const QRectF br(L() + 12, cy2 + 4, QFontMetricsF(f).horizontalAdvance(t) + 9, 12);
+        p.setPen(Qt::NoPen); p.setBrush(C("#0f3324")); p.drawRoundedRect(br, 2, 2);
+        p.setFont(f); p.setPen(eco::cyan()); p.drawText(br, Qt::AlignCenter, t);
+        if (!nm2.verified) m_infos.append({QRectF(L() + 11, cy2 - 15, c0 - L() - 11, 18), QCoreApplication::translate("economy", "Date entered by hand from a secondary source: the bank's site refuses programs. Verify on %1").arg(b.scheduleUrl)});
+      }
+      const Odds o = b.nextOdds();
+      if (!b.priced || !o.valid()) {
+        p.setFont(eco::mono(13)); p.setPen(C("#5e5b54"));
+        for (int k = 0; k < 4; ++k) p.drawText(QRectF(colR(k) - 100, cy2 - 10, 100, 20), Qt::AlignRight | Qt::AlignVCenter, "—");
+        // "NO FEED" beside the action pill when it fits
+        const QRectF br(px, cy - 16, 62, 16);
+        if (br.right() < rateLeft) eco::pill(p, br, QCoreApplication::translate("economy", "NO FEED"), C("#14130e"), C("#5e5b54"), false, 3);
+        m_infos.append({QRectF(c0, cy2 - 20, xR - c0, 40), b.pricingNote});
+        continue;
+      }
+      p.setFont(eco::mono(13, QFont::Bold)); p.setPen(b.impliedBp >= 0 ? eco::cyan() : eco::red());
+      p.drawText(QRectF(colR(0) - 120, cy2 - 14, 120, 18), Qt::AlignRight | Qt::AlignVCenter, eco::signedBp(b.impliedBp));
+      const double wk = b.impliedBp - b.impliedBpWeekAgo;
+      p.setFont(eco::mono(9)); p.setPen(!std::isfinite(wk) ? C("#4b4633") : wk >= 0 ? C("#3fc7b4") : eco::red());
+      p.drawText(QRectF(colR(0) - 120, cy2 + 3, 120, 12), Qt::AlignRight | Qt::AlignVCenter,
+                 std::isfinite(wk) ? QCoreApplication::translate("economy", "%1 1w").arg(eco::signedBp(wk))
+                                    : QCoreApplication::translate("economy", "%1 1w").arg(QString::fromUtf8("\u2014")));
+      p.setFont(eco::mono(13)); p.setPen(eco::red());
+      p.drawText(QRectF(colR(1) - 120, cy2 - 10, 120, 20), Qt::AlignRight | Qt::AlignVCenter, QString::number(o.cut() * 100, 'f', 1) + "%");
+      p.setPen(C("#c9c7c0"));
+      p.drawText(QRectF(colR(2) - 120, cy2 - 10, 120, 20), Qt::AlignRight | Qt::AlignVCenter, QString::number(o.hold * 100, 'f', 1) + "%");
+      p.setFont(eco::mono(13, QFont::Bold)); p.setPen(eco::cyan());
+      p.drawText(QRectF(colR(3) - 120, cy2 - 10, 120, 20), Qt::AlignRight | Qt::AlignVCenter, QString::number(o.hike() * 100, 'f', 1) + "%");
+      // bias pill beside the action pill when there is room before the rate
+      int pct = 0; const QString bias = b.bias(&pct);
+      const QString bt = trData(bias) + " " + QString::number(pct);   // HAWKISH / DOVISH / NEUTRAL
+      const qreal bw = QFontMetricsF(eco::mono(9, QFont::Bold, 0.5)).horizontalAdvance(bt) + 14;
+      const QRectF br(px, cy - 16, bw, 16);
+      if (br.right() < rateLeft) {
+        if (bias == "HAWKISH") eco::pill(p, br, bt, C("#072a28"), C("#63b3ba"), false, 3);
+        else if (bias == "DOVISH") eco::pill(p, br, bt, C("#2a0d0b"), C("#e0786f"), false, 3);
+        else eco::pill(p, br, bt, C("#171712"), C("#9e9f9e"), false, 3);
+      }
+      m_infos.append({QRectF(c0, cy2 - 20, cw, 40), b.pricingSource + (b.pricingNote.isEmpty() ? QString() : ". " + b.pricingNote)});
+    }
   }
 
   void paintTable(QPainter& p) {
+    if (phone()) { paintTablePhone(p); return; }
     const qreal s = S();
     const QRectF box(L(), tableTop(), W(), 30 + 8 * rowH());
     p.fillRect(QRectF(box.left(), box.top(), box.width(), 30), C("#0b0a03"));
@@ -372,11 +506,14 @@ public:
     QPen dash(C("#4a5042"), 1); dash.setDashPattern({4, 3});
     p.setPen(dash); p.drawLine(QPointF(pl.left(), Y(b->rate)), QPointF(pl.right(), Y(b->rate)));
     p.setPen(QPen(C("#2cb1bf"), 1.6)); p.setBrush(Qt::NoBrush); p.drawPath(line);
+    // phones: the meetings sit closer than a label; value and date labels only every `every` points (and the last value)
+    const int every = phone() ? std::max(2, int(std::ceil(76 / std::max<qreal>(1, pitch)))) : 2;
     for (int i = 0; i < n; ++i) {
       p.setPen(QPen(C("#16595e"), 1.2)); p.setBrush(C("#6fd5dc")); p.drawEllipse(pts[i], 2.8, 2.8);
       p.setFont(eco::mono(10)); p.setPen(C("#8f8d87"));
-      p.drawText(QRectF(pts[i].x() - 30, pts[i].y() - 22, 60, 14), Qt::AlignCenter, QString::number(v[i], 'f', 2) + "%");
-      if (i % 2 == 0) {
+      if (!phone() || i % every == 0 || i == n - 1)
+        p.drawText(QRectF(pts[i].x() - 30, pts[i].y() - 22, 60, 14), Qt::AlignCenter, QString::number(v[i], 'f', 2) + "%");
+      if (i % every == 0) {
         p.setPen(C("#6a6961"));
         p.drawText(QRectF(pts[i].x() - 40, r.bottom() - 26, 80, 14), Qt::AlignCenter, labs[i]);
       }
@@ -400,6 +537,7 @@ public:
     p.fillRect(QRectF(pl.left(), std::round(Y(0)), pl.width(), 1), C("#31291e"));
     const int n = b->path.size();
     const qreal pitch = pl.width() / std::max(1, n);
+    const int every = phone() ? std::max(2, int(std::ceil(76 / std::max<qreal>(1, pitch)))) : 2;   // phones: dates closer than a label
     for (int i = 0; i < n; ++i) {
       const double v = b->path[i].bp;
       const qreal cx = pl.left() + (i + 0.5) * pitch;
@@ -407,7 +545,7 @@ public:
       p.fillRect(QRectF(cx - 14.5, std::min(y0, y1), 29, std::max(1.0, std::fabs(y1 - y0))), v >= 0 ? C("#19daf1") : C("#f46a5d"));
       p.setFont(eco::mono(10)); p.setPen(C("#97948c"));
       p.drawText(QRectF(cx - 30, std::min(y0, y1) - 17, 60, 14), Qt::AlignCenter, eco::signedBp(v));
-      if (i % 2 == 0) {
+      if (i % every == 0) {
         p.setPen(C("#6a6961"));
         p.drawText(QRectF(cx - 40, r.bottom() - 26, 80, 14), Qt::AlignCenter, shortDate(b->path[i].meeting.decision));
       }
@@ -487,8 +625,20 @@ public:
       x += w + 6;
     }
     const qreal top = y + 34;
-    // legend
-    {
+    qreal legendBottom = top;
+    // legend (phones: left to right, wrapping; it is wider than the panel)
+    if (phone()) {
+      qreal lx = r.left() + 24, ly = top + 6;
+      p.setFont(eco::mono(10));
+      for (int k = 0; k <= 4; ++k) {
+        const qreal tw = QFontMetricsF(eco::mono(10)).horizontalAdvance(bucketName(k));
+        if (lx + tw > r.right() - 10) { lx = r.left() + 24; ly += 18; }
+        p.setPen(C("#928d85")); p.drawText(QPointF(lx, ly), bucketName(k));
+        p.setPen(QPen(eco::outcome(k), 2)); p.setBrush(theme::map("#ffffff")); p.drawEllipse(QPointF(lx - 10, ly - 4), 3.2, 3.2);
+        lx += tw + 32;
+      }
+      legendBottom = ly - 6;
+    } else {
       qreal lx = r.right() - 14;
       p.setFont(eco::mono(10));
       for (int k = 4; k >= 0; --k) {
@@ -499,7 +649,7 @@ public:
         lx -= 32;
       }
     }
-    const QRectF pl(r.left() + 56, top + 22, r.width() - 76, r.bottom() - 34 - (top + 22));
+    const QRectF pl(r.left() + 56, legendBottom + 22, r.width() - 76, r.bottom() - 34 - (legendBottom + 22));
     m_oddsPlot = pl;
     yGrid(p, pl, 0, 100, 20, [](double t) { return QString::number(t, 'f', 0) + "%"; }, r.left() + 48);
     QPen half(C("#5a2a20"), 1); half.setDashPattern({4, 3}); p.setPen(half);
@@ -592,20 +742,101 @@ public:
 
   void paintPoly(QPainter& p, const QRectF& r, const QString& title) {
     panelFrame(p, r, title, QCoreApplication::translate("economy", "Polymarket's own odds, the reference's second source. Shown only when its API is reachable."));
-    const QRectF m = r.adjusted(60, 70, -60, -40);
+    // phones: the status text gets the panel's width and the height left under the icon (it is long and wraps)
+    const QRectF m = phone() ? r.adjusted(16, 70, -16, -40) : r.adjusted(60, 70, -60, -40);
     p.setPen(QPen(C("#3a3010"), 1)); p.setBrush(Qt::NoBrush);
-    const QPointF c(m.center().x(), m.center().y() - 40);
+    const QPointF c(m.center().x(), phone() ? m.top() + 24 : m.center().y() - 40);
     p.drawEllipse(c, 16, 16);
     p.drawLine(c + QPointF(-7, -7), c + QPointF(7, 7));
     p.setFont(eco::mono(11, QFont::Bold, 1)); p.setPen(C("#8a877e"));
     p.drawText(QRectF(m.left(), c.y() + 26, m.width(), 18), Qt::AlignCenter, CentralBanks::instance().polymarketReachable()
                ? QCoreApplication::translate("economy", "POLYMARKET MARKETS NOT WIRED") : QCoreApplication::translate("economy", "POLYMARKET UNREACHABLE"));
     p.setFont(eco::mono(10)); p.setPen(C("#6a6961"));
-    p.drawText(QRectF(m.left(), c.y() + 48, m.width(), 60), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
+    p.drawText(QRectF(m.left(), c.y() + 48, m.width(), phone() ? r.bottom() - 10 - (c.y() + 48) : 60), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
                CentralBanks::instance().polymarketStatus());
   }
 
+  // Phones: one block per bank — name / committee left, head right; then per decision: date, vote, official link;
+  // the decision text; the dissent. The committee note is left out (too long for the width).
+  void paintCommitteesPhone(QPainter& p) {
+    eco::sectionHeading(p, L(), commTop(), L() + W(), QCoreApplication::translate("economy", "COMMITTEES & VOTES"));
+    eco::micro(p, L(), commTop() + 27, QCoreApplication::translate("economy", "POLICY COMMITTEES — CHAIRS, DECISIONS & VOTES"), C("#726f6a"), 9, 0.3);
+    p.setFont(eco::sans(9)); p.setPen(C("#4a4943"));
+    p.drawText(QRectF(L(), commTop() + 34, W(), 30), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+               QCoreApplication::translate("economy", "From each bank's own official statement where it publishes one · otherwise read from its rate series"));
+    const qreal top = commTableTop(), xR = L() + W() - 10;
+    const auto& banks = CentralBanks::instance().banks();
+    qreal y = top + 26;
+    for (const auto& b : banks) y += commGroupH(b);
+    const QRectF box(L(), top, W(), y - top);
+    p.fillRect(QRectF(box.left(), top, box.width(), 26), C("#0b0a03"));
+    p.setPen(QPen(C("#38311e"), 1)); p.setBrush(Qt::NoBrush); p.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5));
+    p.setFont(eco::mono(9, QFont::Normal, 0.8)); p.setPen(C("#6d6b62"));
+    p.drawText(QRectF(L() + 9, top, 300, 26), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("economy", "BANK · COMMITTEE"));
+    p.drawText(QRectF(xR - 200, top, 200, 26), Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("economy", "HEAD"));
+    y = top + 26;
+    const qreal leftW = W() * 0.56;
+    for (const auto& b : banks) {
+      const int n = int(std::min<qsizetype>(2, b.decisions.size()));
+      const qreal gh = commGroupH(b);
+      const QRectF g(L() + 1, y, W() - 2, gh);
+      if (b.id == selected) p.fillRect(g, C("#332901"));
+      else if (under(g)) p.fillRect(g, C("#161204"));
+      p.fillRect(QRectF(g.left(), y, g.width(), 1), C("#292518"));
+      p.setFont(eco::sans(12, QFont::DemiBold)); p.setPen(b.id == selected ? C("#e0ca76") : C("#e5dfcd"));
+      p.drawText(QPointF(L() + 9, y + 20), QFontMetricsF(eco::sans(12, QFont::DemiBold)).elidedText(trData(b.name), Qt::ElideRight, leftW));
+      p.setFont(eco::sans(9)); p.setPen(C("#645c3b"));
+      p.drawText(QPointF(L() + 9, y + 37), QFontMetricsF(eco::sans(9)).elidedText(trData(b.committee), Qt::ElideRight, leftW));
+      p.setFont(eco::mono(8)); p.setPen(C("#918a6f"));
+      p.drawText(QRectF(L() + leftW + 16, y + 6, xR - L() - leftW - 16, 12), Qt::AlignRight | Qt::AlignVCenter,
+                 QFontMetricsF(eco::mono(8)).elidedText(trData(b.headTitle), Qt::ElideRight, xR - L() - leftW - 16));
+      p.setFont(eco::sans(12, QFont::DemiBold)); p.setPen(C("#e5dfcd"));
+      p.drawText(QRectF(L() + leftW + 16, y + 20, xR - L() - leftW - 16, 18), Qt::AlignRight | Qt::AlignVCenter,
+                 QFontMetricsF(eco::sans(12, QFont::DemiBold)).elidedText(b.head, Qt::ElideRight, xR - L() - leftW - 16));
+      if (n == 0) {
+        p.setFont(eco::sans(12)); p.setPen(C("#6a6961"));
+        p.drawText(QRectF(L() + 9, y + 50, W() - 18, 26), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("economy", "No decision read yet"));
+      }
+      for (int i = 0; i < n; ++i) {
+        const Decision& d = b.decisions[i];
+        const qreal ry = y + 50 + i * 60;
+        p.fillRect(QRectF(L() + 9, ry - 4, W() - 18, 1), C("#292518"));
+        p.setFont(eco::sans(12)); p.setPen(C("#c9c5b5"));
+        const QString ds = i18n::locale().toString(d.date, QCoreApplication::translate("economy", "MMM d, yyyy"));
+        p.drawText(QRectF(L() + 9, ry, 140, 22), Qt::AlignLeft | Qt::AlignVCenter, ds);
+        qreal vx = L() + 9 + std::max<qreal>(110, QFontMetricsF(eco::sans(12)).horizontalAdvance(ds) + 12);
+        const QString vl = QCoreApplication::translate("economy", "VOTE");
+        p.setFont(eco::mono(8, QFont::Normal, 0.8)); p.setPen(C("#6d6b62"));
+        p.drawText(QRectF(vx, ry, 100, 22), Qt::AlignLeft | Qt::AlignVCenter, vl);
+        vx += QFontMetricsF(eco::mono(8, QFont::Normal, 0.8)).horizontalAdvance(vl) + 6;
+        const QRectF lk(xR - 70, ry, 70, 22);
+        QString vote = d.vote.isEmpty() ? (b.id == "ECB" ? QCoreApplication::translate("economy", "Not published") : QString("—")) : d.vote;
+        p.setFont(eco::mono(12, QFont::Bold)); p.setPen(C("#f5f2eb"));
+        p.drawText(QRectF(vx, ry, lk.left() - vx - 4, 22), Qt::AlignLeft | Qt::AlignVCenter,
+                   QFontMetricsF(eco::mono(12, QFont::Bold)).elidedText(vote, Qt::ElideRight, lk.left() - vx - 4));
+        p.setFont(eco::sans(11)); p.setPen(under(lk) ? eco::amber() : C("#6e6440"));
+        p.drawText(lk, Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("economy", "Official ↗"));
+        m_links.append({lk, d.url.isEmpty() ? b.officialUrl : d.url});
+        const QRectF tr(L() + 9, ry + 21, W() - 18, 18);
+        p.setFont(eco::sans(12)); p.setPen(C("#9a968d"));
+        p.drawText(tr, Qt::AlignLeft | Qt::AlignVCenter, QFontMetricsF(eco::sans(12)).elidedText(d.text.isEmpty() ? QString("—") : d.text, Qt::ElideRight, tr.width()));
+        if (!d.text.isEmpty()) m_infos.append({tr, d.text});
+        const QString dl = QCoreApplication::translate("economy", "DISSENT");
+        const QRectF sr(L() + 9, ry + 38, W() - 18, 18);
+        p.setFont(eco::mono(8, QFont::Normal, 0.8)); p.setPen(C("#6d6b62"));
+        p.drawText(sr, Qt::AlignLeft | Qt::AlignVCenter, dl);
+        const qreal dx = QFontMetricsF(eco::mono(8, QFont::Normal, 0.8)).horizontalAdvance(dl) + 6;
+        p.setFont(eco::sans(11)); p.setPen(C("#888165"));
+        p.drawText(sr.adjusted(dx, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter,
+                   QFontMetricsF(eco::sans(11)).elidedText(d.dissent.isEmpty() ? QString("—") : d.dissent, Qt::ElideRight, sr.width() - dx));
+        if (!d.dissent.isEmpty()) m_infos.append({sr, d.dissent});
+      }
+      y += gh;
+    }
+  }
+
   void paintCommittees(QPainter& p) {
+    if (phone()) { paintCommitteesPhone(p); return; }
     const qreal s = S();
     eco::sectionHeading(p, L(), commTop(), L() + W(), QCoreApplication::translate("economy", "COMMITTEES & VOTES"));
     eco::micro(p, L(), commTop() + 27, QCoreApplication::translate("economy", "POLICY COMMITTEES — CHAIRS, DECISIONS & VOTES"), C("#726f6a"), 9, 3);

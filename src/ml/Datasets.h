@@ -19,7 +19,9 @@
 //          default, 1 000 000 at most): OHLC, volumes, trades, taker-buy share, the gap before each bar (bars the
 //          exchange lacks: flagged, never filled in), the 23 indicators of Charts' engine as stored, and their distance
 //          to the close (indicator levels follow the price, which rose 15-fold since 2017). Warm-up bars left out unless
-//          asked.
+//          asked. With orderFlow (Binance pairs that record a footprint, book depth or open interest): the order flow's
+//          columns too (technicaldata/OrderFlowFeatures.h), and only the bars they cover, so a model on the bars alone and
+//          one with those columns learn from the same rows (user's step 3, 2026-11-20).
 namespace ml {
 
 enum class SourceKind { Prices, Macro, Cot, Csv, TechnicalData };
@@ -30,6 +32,10 @@ struct DatasetSpec {
   QString interval;    // Prices: "1d" "1wk" "1h"; Market: "1m" "5m" "15m" "1h" "4h" "1D" "1W"
   int rows = 0;        // Market: newest bars to take (0 = 200 000; at most 1 000 000)
   bool keepWarm = false;   // Market: keep the warm-up bars (long averages not settled)
+  bool orderFlow = false;  // Market: the order flow's columns, and only the bars they cover
+  // Market, an AI environment in evaluation mode (ai::Slots::asOf, 2026-11-20): only the bars closed by then (Unix s);
+  // the file's id ends with "-asof-<yyyyMMddHHmm>" and its title with "· as of …", apart from the present's data sets
+  qint64 asOf = 0;
   QString id() const;  // file name without .csv
 };
 constexpr qint64 DATASETS_MAX_BYTES = 5LL << 30;
@@ -37,6 +43,9 @@ constexpr int TECHNICAL_DATA_ROWS_DEFAULT = 200000, TECHNICAL_DATA_ROWS_MAX = 10
 // The page's choices of rows (50 000, 200 000, 500 000, 1 000 000): any other number goes up to the next one, so a model
 // asking for every row count in turn does not write one large file per count. 0 = the default.
 int snapTechnicalDataRows(int rows);
+// The evaluation moment a data set was cut at (its id's "-asof-yyyyMMddHHmm"; 0: a present data set, it may hold any
+// later row). A path or an id.
+qint64 datasetAsOf(const QString& pathOrId);
 
 // Columns that are price or volume levels: left out of the default features (a model that sees the level mostly learns
 // the period). Shared by the ML page and the cubes' ML tools.

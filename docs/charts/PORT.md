@@ -96,3 +96,8 @@ UI contracts (binding, add members but don't change existing ones): src/pages/ch
   with setVisibleLogicalRange). Rules: src/charts/core/RangeWindow (tests/charts/core/range_window_tests.cpp); widget:
   src/pages/charts/pane/Navigator; wiring in ChartPane (fresh view constants kFreshBars / kFreshRightPad,
   minBarSpacing 0.05 so the whole history fits). UI step `nav:` (press/move/release/hover/drag/log/perf).
+  2026-11-20 (user): the mini curve never zooms (always the whole history), only the window changes width; the
+  window's width is the zoom (nav::ZoomMap): 30 px = the chart's deepest zoom, 5 bars (TimeScaleOptions::minVisibleBars,
+  the wheel stops there too), from 120 px the plain map, geometric between; a narrow window is placed by the view's
+  position in the data (nav::windowOf / viewOf). Also fixed: the curve was drawn at twice its size on Retina (device
+  pixels painted through a logical painter), so most of it fell outside the strip.

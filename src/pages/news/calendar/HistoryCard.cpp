@@ -36,7 +36,13 @@ void HistoryCard::setSeries(const news::Series& s) {
   if (!s.country.isEmpty()) m_country = s.country;
 }
 
-QRectF HistoryCard::plotRect(const QRectF& c) const { return QRectF(c.x() + 11, c.y() + 59, c.width() - 23, 382); }
+// Phones (card under 520 px): the header takes four rows (country, title + latest value, avg/low/high, buttons
+// 26 px high), so the plot starts lower and is shorter; the card keeps its height.
+static bool phoneCard(const QRectF& c) { return c.width() < 520; }
+QRectF HistoryCard::plotRect(const QRectF& c) const {
+  if (phoneCard(c)) return QRectF(c.x() + 11, c.y() + 112, c.width() - 23, 329);
+  return QRectF(c.x() + 11, c.y() + 59, c.width() - 23, 382);
+}
 QRectF HistoryCard::barsRect(const QRectF& c) const {
   const QRectF p = plotRect(c);
   return QRectF(p.x() + 25, p.y() + 14, p.width() - 25 - 67, p.height() - 14 - 30);
@@ -64,7 +70,8 @@ int HistoryCard::indexAt(const QRectF& card, double x) const {
 
 QList<HistoryCard::Btn> HistoryCard::buttons(const QRectF& c) const {
   QList<Btn> out;
-  const double y = c.y() + 22, h = 19;
+  const bool phone = phoneCard(c);
+  const double y = c.y() + (phone ? 78 : 22), h = phone ? 26 : 19;
   double x = c.right() - 12;
   const QList<QPair<int, QString>> spans{{Max, QCoreApplication::translate("news", "MAX")}, {Y20, QCoreApplication::translate("news", "20Y")}, {Y10, QCoreApplication::translate("news", "10Y")}, {Y5, QCoreApplication::translate("news", "5Y")}};
   for (const auto& [id, t] : spans) {
@@ -75,6 +82,7 @@ QList<HistoryCard::Btn> HistoryCard::buttons(const QRectF& c) const {
   const QFontMetricsF bfm(theme::mono(10, QFont::Bold, 1.6));   // widths follow the text (French is longer)
   const QString line = QCoreApplication::translate("news", "LINE"), bars = QCoreApplication::translate("news", "BARS");
   const double lw = std::max(45.0, bfm.horizontalAdvance(line) + 12), bw = std::max(45.0, bfm.horizontalAdvance(bars) + 12);
+  if (phone) { x = c.x() + 11; out << Btn{QRectF(x + bw, y, lw, h), 1, line} << Btn{QRectF(x, y, bw, h), 0, bars}; return out; }
   x -= lw; out << Btn{QRectF(x, y, lw, h), 1, line};
   x -= bw; out << Btn{QRectF(x, y, bw, h), 0, bars};
   return out;
@@ -102,16 +110,28 @@ void HistoryCard::paint(QPainter& p, const QRectF& c) const {
   p.setFont(theme::condensed(16, QFont::Bold)); p.setPen(kWhite);
   p.drawText(QRectF(c.x() + 11, c.y() + 28, 200, 20), Qt::AlignLeft | Qt::AlignVCenter, m_title);
 
-  const double lx = c.x() + std::max(216.0, 11 + QFontMetricsF(theme::mono(10, QFont::Bold, 2.4)).horizontalAdvance(QCoreApplication::translate("news", "%1 · RELEASE HISTORY").arg(country)) + 22);
+  const bool phone = phoneCard(c);
+  const double lx = phone ? c.x() + 11 : c.x() + std::max(216.0, 11 + QFontMetricsF(theme::mono(10, QFont::Bold, 2.4)).horizontalAdvance(QCoreApplication::translate("news", "%1 · RELEASE HISTORY").arg(country)) + 22);
   if (!m_s.values.isEmpty()) {
     const QDate last = m_s.dates.last();
     const QString when = m_s.quarterly ? QCoreApplication::translate("news", "Q%1 %2").arg((last.month() - 1) / 3 + 1).arg(last.year())
                          : m_s.recorded ? en(last, "dd MMM yyyy").toUpper() : en(last, "MMM yyyy").toUpper();
+    const int dec = m_s.unit == "K" ? 0 : 1;
+    if (phone) {   // latest value right-aligned on the title row, its date above it when the country title leaves room
+      const QFont lf = theme::mono(9, QFont::Normal, 2.4);
+      const QString lt = QCoreApplication::translate("news", "LATEST · %1").arg(when);
+      const double titleW = QFontMetricsF(theme::mono(10, QFont::Bold, 2.4)).horizontalAdvance(QCoreApplication::translate("news", "%1 · RELEASE HISTORY").arg(country));
+      p.setFont(lf); p.setPen(kDimLbl);
+      if (c.x() + 11 + titleW + 16 + QFontMetricsF(lf).horizontalAdvance(lt) < c.right() - 12)
+        p.drawText(QRectF(c.right() - 312, c.y() + 12, 300, 14), Qt::AlignRight | Qt::AlignVCenter, lt);
+      p.setFont(theme::mono(20, QFont::Bold)); p.setPen(kWhite);
+      p.drawText(QRectF(c.right() - 152, c.y() + 27, 140, 26), Qt::AlignRight | Qt::AlignVCenter, fmtV(m_s.values.last(), m_s.unit, dec));
+    } else {
     p.setFont(theme::mono(9, QFont::Normal, 2.4)); p.setPen(kDimLbl);
     p.drawText(QRectF(lx, c.y() + 12, 200, 14), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "LATEST · %1").arg(when));
-    const int dec = m_s.unit == "K" ? 0 : 1;
     p.setFont(theme::mono(20, QFont::Bold)); p.setPen(kWhite);
     p.drawText(QRectF(lx, c.y() + 27, 140, 26), Qt::AlignLeft | Qt::AlignVCenter, fmtV(m_s.values.last(), m_s.unit, dec));
+    }
     // avg / low / high over the visible range
     int a, b; visible(a, b);
     double sum = 0; int lo = a, hi = a;
@@ -119,9 +139,9 @@ void HistoryCard::paint(QPainter& p, const QRectF& c) const {
     if (b > a) {
       QFont f = theme::mono(12); p.setFont(f);
       const QFontMetricsF fm(f); const QFont fb = theme::mono(12, QFont::Bold); const QFontMetricsF fmb(fb);
-      double x = lx + 141; const double y = c.y() + 23, h = 18;
+      double x = phone ? lx : lx + 141; const double y = c.y() + (phone ? 54 : 23), h = 18;
       // stop before the BARS/LINE buttons (narrow windows, longer French labels): later items are dropped
-      const double limit = buttons(c).last().r.left() - 12;
+      const double limit = phone ? c.right() - 12 : buttons(c).last().r.left() - 12;
       bool full = false;
       auto put = [&](const QString& t, const QColor& col, bool bold, double gap = 6) {
         if (full || x + (bold ? fmb : fm).horizontalAdvance(t) > limit) { full = true; return; }
@@ -239,11 +259,19 @@ void HistoryCard::paint(QPainter& p, const QRectF& c) const {
                                              .arg((m_s.dates[b - 1].month() - 1) / 3 + 1).arg(m_s.dates[b - 1].year())
                                        : en(m_s.dates[a], "MMM yyyy").toUpper() + " ⟶ " + en(m_s.dates[b - 1], "MMM yyyy").toUpper();
   p.setFont(theme::mono(9, QFont::Normal, 1.8)); p.setPen(kFoot);
+  // phones: the zoom hint goes (a finger drag scrolls the page) and the range line gets the width, elided
+  if (phone) {
+    const QString t = (m_s.recorded ? QCoreApplication::translate("news", "%1 RELEASES · %2 · %3") : m_s.quarterly ? QCoreApplication::translate("news", "%1 QUARTERS · %2 · %3") : QCoreApplication::translate("news", "%1 MONTHS · %2 · %3"))
+                          .arg(n).arg(fromTo, QCoreApplication::translate("news", m_s.source.toUtf8().constData()).toUpper());
+    p.drawText(QRectF(c.x() + 11, c.y() + 447, c.width() - 22, 14), Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetricsF(p.font()).elidedText(t, Qt::ElideRight, c.width() - 22));
+  } else {
   p.drawText(QRectF(c.x() + 11, c.y() + 447, c.width() * 0.7, 14), Qt::AlignLeft | Qt::AlignVCenter,
              (m_s.recorded ? QCoreApplication::translate("news", "%1 RELEASES · %2 · %3") : m_s.quarterly ? QCoreApplication::translate("news", "%1 QUARTERS · %2 · %3") : QCoreApplication::translate("news", "%1 MONTHS · %2 · %3"))
                  .arg(n).arg(fromTo, QCoreApplication::translate("news", m_s.source.toUtf8().constData()).toUpper()));
   p.drawText(QRectF(c.right() - 400, c.y() + 447, 389, 14), Qt::AlignRight | Qt::AlignVCenter,
              m_zoomA >= 0 ? QCoreApplication::translate("news", "DOUBLE-CLICK TO RESET ZOOM") : QCoreApplication::translate("news", "DRAG ON THE CHART TO ZOOM"));
+  }
 
   // tooltip
   if (m_hover >= a && m_hover < b && m_dragFrom < 0) {

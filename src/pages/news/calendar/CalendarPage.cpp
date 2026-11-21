@@ -6,6 +6,9 @@
 #include "ui/Theme.h"
 #include "pages/news/ThemeColor.h"
 #include "core/I18n.h"
+#include "global/PageScroll.h"
+#include "ui/Touch.h"
+#include <QScrollBar>
 #include <QCoreApplication>
 #include <QVariantAnimation>
 #include <QKeyEvent>
@@ -42,6 +45,7 @@ CalendarPage::CalendarPage(QWidget* parent) : QWidget(parent) {
     else openPanel(e, col);
   });
   connect(m_panel, &RangePanel::closeRequested, this, &CalendarPage::closePanel);
+  connect(m_table, &CalendarTable::contentChanged, this, [this] { if (m_pageScroll) m_pageScroll->relayout(); });
 
   QDate w = news::Calendar::currentWeek();
   const QByteArray hw = qgetenv("DW_CAL_WEEK");
@@ -106,6 +110,16 @@ void CalendarPage::closePanel() {
 
 void CalendarPage::layoutChildren() {
   const int W = width(), H = height();
+  // phone upright, or a page this short (phone sideways: 382 px): one scrolling column
+  setScrollMode(ui::compact(W) || H < 420);
+  if (m_pageScroll) {
+    const int pw = ui::compact(W) ? W : std::clamp(int(W * 0.2825), 380, 452);
+    const int shift = int(std::round(pw * m_progress));
+    m_pageScroll->setGeometry(0, 0, W, H);
+    m_panel->setGeometry(W - shift, 0, pw, H);
+    m_panel->raise();
+    return;
+  }
   const int pw = std::clamp(int(W * 0.2825), 380, W >= 2400 ? 560 : 452);
   // wide windows: the table reflows beside the panel (reference); below 1300 px the panel slides OVER the table
   // so the table keeps its columns.
@@ -121,6 +135,49 @@ void CalendarPage::layoutChildren() {
   m_footer->setGeometry(0, H - 31, lw, 31);
   m_panel->setGeometry(W - shift, 0, pw, H);
   m_panel->raise();
+}
+
+void CalendarPage::setScrollMode(bool on) {
+  if (on == (m_pageScroll != nullptr)) return;
+  if (on) {
+    m_pageScroll = new global::PageScroll(m_left, this);
+    m_pageScroll->layout = [this](int w, int vh) { return layoutScroll(w, vh); };
+    // the table pins its column and day headers at the top of the part the page shows
+    auto band = [this] {
+      if (!m_pageScroll) return;
+      m_table->setVisibleBand(m_pageScroll->verticalScrollBar()->value() - m_table->y(), m_pageScroll->viewport()->height());
+    };
+    connect(m_pageScroll->verticalScrollBar(), &QScrollBar::valueChanged, this, band);
+    connect(m_pageScroll->verticalScrollBar(), &QScrollBar::rangeChanged, this, band);
+    m_pageScroll->show();
+    m_panel->raise();
+  } else {
+    m_pageScroll->takeWidget();
+    m_left->setParent(this);
+    m_left->show();
+    m_pageScroll->hide();
+    m_pageScroll->deleteLater();
+    m_pageScroll = nullptr;
+    m_table->setFullHeight(false);
+    m_filters->setPhone(false);
+    m_panel->raise();
+  }
+}
+
+int CalendarPage::layoutScroll(int w, int vh) {
+  const bool phone = ui::compact(w);
+  m_filters->setPhone(phone);
+  int fh;
+  if (phone) { fh = m_filters->phoneHeight(w); m_filters->setFixedHeight(fh); }
+  else { m_filters->setCompact(true); fh = m_filters->height(); }
+  m_filters->setGeometry(0, 0, w, fh);
+  m_table->setFullHeight(true);
+  m_table->resize(w, std::max(1, m_table->height()));   // rows laid out at this width first (two-line rows on phones)
+  const int th = std::max(m_table->fullHeight(), vh - fh - 31);   // loading / empty: the note fills the screen
+  m_table->setGeometry(0, fh, w, th);
+  m_footer->setGeometry(0, fh + th, w, 31);
+  m_table->setVisibleBand(m_pageScroll->verticalScrollBar()->value() - fh, vh);
+  return fh + th + 31;
 }
 
 void CalendarPage::resizeEvent(QResizeEvent*) { layoutChildren(); }

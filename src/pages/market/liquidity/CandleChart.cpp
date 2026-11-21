@@ -298,13 +298,19 @@ void CandleChart::renderStatic() {
   }
 
   // legend (overlay, top-left)
-  const QFont lf = theme::mono(10, QFont::Medium, 3.0);
-  p.setFont(lf);
-  double x = 10; const double ly = 14;
+  QFont lf = theme::mono(10, QFont::Medium, 3.0);
+  double x = 10; double ly = 14;
   const struct { const char* t; QColor c; QColor sw; int style; } items[] = {
     {QT_TRANSLATE_NOOP("technical", "BSL BUY-SIDE POOL"), theme::map("#c78e8e"), kDown(), 0}, {QT_TRANSLATE_NOOP("technical", "SSL SELL-SIDE POOL"), theme::map("#81b8bc"), kUp(), 0},
     {"PDH / PDL", theme::map("#e3d27b"), kGold(), 1}};
+  // narrow charts (phones): tighter letter spacing, and an item that does not fit goes to a second line
+  double legendW = 0;
+  for (const auto& it : items) legendW += 24 + mkit::textWidth(lf, QCoreApplication::translate("technical", it.t)) + 12;
+  const bool wrapLegend = legendW > pl.width() - 10;
+  if (wrapLegend) lf = theme::mono(10, QFont::Medium, 1.0);
+  p.setFont(lf);
   for (const auto& it : items) {
+    if (wrapLegend && x > 10 && x + 24 + mkit::textWidth(lf, QCoreApplication::translate("technical", it.t)) > pl.right() - 4) { x = 10; ly += 17; }
     QPen pen(it.sw, it.style ? 2 : 1.4); pen.setCapStyle(Qt::FlatCap);
     if (it.style) { pen.setStyle(Qt::CustomDashLine); pen.setDashPattern({1, 2}); }
     else { pen.setStyle(Qt::CustomDashLine); pen.setDashPattern({4, 1.5}); }

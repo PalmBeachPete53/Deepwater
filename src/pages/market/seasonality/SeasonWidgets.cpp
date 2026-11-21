@@ -54,6 +54,17 @@ void drawCardTitle(QPainter& p, const QPointF& at, const QString& text, bool cen
   else p.drawText(QRectF(at.x(), at.y() - 10, 2000, 20), Qt::AlignLeft | Qt::AlignVCenter, text);
 }
 
+void drawCardTitleFit(QPainter& p, const QPointF& at, const QString& text, qreal maxWidth) {
+  QFont f = mono(14, QFont::Bold, 2.2);
+  for (const auto& [px, sp] : {std::pair{14, 1.2}, std::pair{13, 0.6}, std::pair{12, 0.3}, std::pair{11, 0.0}}) {
+    if (QFontMetricsF(f).horizontalAdvance(text) <= maxWidth) break;
+    f = mono(px, QFont::Bold, sp);
+  }
+  p.setFont(f); p.setPen(col().title);
+  p.drawText(QRectF(at.x(), at.y() - 10, maxWidth, 20), Qt::AlignLeft | Qt::AlignVCenter,
+             QFontMetricsF(f).elidedText(text, Qt::ElideRight, maxWidth));
+}
+
 static void chevron(QPainter& p, const QPointF& c, bool up, const QColor& color) {
   p.save();
   p.setRenderHint(QPainter::Antialiasing);
@@ -80,33 +91,59 @@ void ToolBar::setToggles(bool a, bool i) { m_actual = a; m_index = i; update(); 
 QRect ToolBar::itemRect(int item) const { return (item >= 0 && item < m_rects.size()) ? m_rects[item] : QRect(); }
 
 void ToolBar::relayout() {
+  const int h = place(width(), m_rects);
+  if (m_wrap && height() != h) setFixedHeight(h);
+  else if (!m_wrap && height() != 39) setFixedHeight(39);
+  update();
+}
+
+int ToolBar::place(int width, QVector<QRect>& rects) const {
   const QFontMetrics fm(ui(12));
-  const int top = 6, h = 26;
-  int x = 14;
+  // phones: 32 px buttons on 40 px rows; an item that would cross the right edge starts the next row (the first
+  // row keeps room for the refresh icon at its right end)
+  const int h = m_wrap ? 32 : 26, rowH = 40;
+  int top = 6, x = 14;
+  auto room = [&](int w) {
+    if (!m_wrap) return;
+    const int right = top == 6 ? width - 44 : width - 10;
+    if (x > 14 && x + w > right) { x = 14; top += rowH; }
+  };
   auto button = [&](int item, const QString& text, bool chev) {
-    const int w = fm.horizontalAdvance(text) + 16 + (chev ? 14 : 0);
-    m_rects[item] = QRect(x, top, w, h); x += w + 7;
+    const int w = fm.horizontalAdvance(text) + (m_wrap ? 22 : 16) + (chev ? 14 : 0);
+    room(w);
+    rects[item] = QRect(x, top, w, h); x += w + 7;
   };
   button(Asset, QCoreApplication::translate("seasonal", "Seasonality: %1").arg(m_asset), true);
-  x += 2; m_rects[Help] = QRect(x, top + 5, 16, 16); x += 26;
-  x += 9; m_rects[Prev] = QRect(x - 2, top, 16, h); x += 22;
-  m_rects[Next] = QRect(x - 2, top, 16, h); x += 20;
+  if (m_wrap) {   // help, previous / next as 32 px targets right after the asset
+    room(2 + 32 + 9 + 32 + 32);
+    x += 2; rects[Help] = QRect(x, top, 32, h); x += 32 + 9;
+    rects[Prev] = QRect(x, top, 32, h); x += 32;
+    rects[Next] = QRect(x, top, 32, h); x += 32 + 7;
+  } else {
+    x += 2; rects[Help] = QRect(x, top + 5, 16, 16); x += 26;
+    x += 9; rects[Prev] = QRect(x - 2, top, 16, h); x += 22;
+    rects[Next] = QRect(x - 2, top, 16, h); x += 20;
+  }
   button(Years, m_years, true);
   button(Filter, QCoreApplication::translate("seasonal", "Filter"), true);
   // segmented group: Full H1 H2 Q1 Q2 Q3 Q4
   const QStringList seg = QStringList{QCoreApplication::translate("seasonal", "Full"), QCoreApplication::translate("seasonal", "H1"), QCoreApplication::translate("seasonal", "H2"), QCoreApplication::translate("seasonal", "Q1"), QCoreApplication::translate("seasonal", "Q2"), QCoreApplication::translate("seasonal", "Q3"), QCoreApplication::translate("seasonal", "Q4")};
   const QFontMetrics sm(ui(12));
+  if (m_wrap) {
+    int gw = 0; for (const auto& s : seg) gw += qMax(34, sm.horizontalAdvance(s) + 14) + 3;
+    room(gw + 4);
+  }
   int sx = x + 3;
   for (int i = 0; i < 7; ++i) {
-    const int w = qMax(17, sm.horizontalAdvance(seg[i]) + 7);
-    m_rects[Seg + i] = QRect(sx, top + 3, w, h - 6); sx += w + 3;
+    const int w = m_wrap ? qMax(34, sm.horizontalAdvance(seg[i]) + 14) : qMax(17, sm.horizontalAdvance(seg[i]) + 7);
+    rects[Seg + i] = QRect(sx, top + 3, w, h - 6); sx += w + 3;
   }
   x = sx - 3 + 4 + 7;
   button(Compare, m_compare.isEmpty() ? QCoreApplication::translate("seasonal", "Compare") : QCoreApplication::translate("seasonal", "vs %1").arg(m_compare), true);
   button(Actual, m_actualLabel, false);
   button(Index, QCoreApplication::translate("seasonal", "Index (100)"), false);
-  m_rects[Refresh] = QRect(width() - 30, top + 4, 18, 18);
-  update();
+  rects[Refresh] = m_wrap ? QRect(width - 40, 6, 32, h) : QRect(width - 30, top + 4, 18, 18);
+  return m_wrap ? top + h + 7 : 39;
 }
 
 int ToolBar::hit(const QPoint& p) const {
@@ -156,12 +193,13 @@ void ToolBar::paintEvent(QPaintEvent*) {
   boxed(Asset, QCoreApplication::translate("seasonal", "Seasonality: %1").arg(m_asset), true, false);
   // help circle
   {
-    const QRectF r = QRectF(m_rects[Help]).adjusted(2, 2, -2, -2);
+    const QRectF r = m_wrap ? QRectF(QRectF(m_rects[Help]).center() - QPointF(6, 6), QSizeF(12, 12)) : QRectF(m_rects[Help]).adjusted(2, 2, -2, -2);
     const QColor hc = m_hover == Help ? c.title : theme::map("#8a877e");
     p.setPen(QPen(hc, 1)); p.setBrush(Qt::NoBrush); p.drawEllipse(r);
     p.setFont(ui(10, QFont::Bold)); p.drawText(r, Qt::AlignCenter, "?");
   }
-  p.fillRect(QRect(m_rects[Help].right() + 10, 10, 1, 20), c.btnBorder);
+  if (m_wrap) p.fillRect(QRect(m_rects[Help].right() + 4, m_rects[Help].top() + 6, 1, m_rects[Help].height() - 12), c.btnBorder);
+  else p.fillRect(QRect(m_rects[Help].right() + 10, 10, 1, 20), c.btnBorder);
   p.setFont(ui(16));
   for (int it : {int(Prev), int(Next)}) {
     p.setPen(m_hover == it ? c.title : c.btnText);
@@ -198,7 +236,7 @@ void ToolBar::paintEvent(QPaintEvent*) {
   boxed(Index, QCoreApplication::translate("seasonal", "Index (100)"), false, m_index);
   // refresh icon: circular arrows
   {
-    const QRectF r = QRectF(m_rects[Refresh]).adjusted(4, 4, -4, -4);
+    const QRectF r = m_wrap ? QRectF(QRectF(m_rects[Refresh]).center() - QPointF(5, 5), QSizeF(10, 10)) : QRectF(m_rects[Refresh]).adjusted(4, 4, -4, -4);
     QPen pen(m_hover == Refresh ? c.title : theme::map("#8a877e"), 1.2); pen.setCapStyle(Qt::RoundCap);
     p.setPen(pen); p.setBrush(Qt::NoBrush);
     p.drawArc(r, 30 * 16, 150 * 16);
@@ -362,7 +400,9 @@ bool Menu::eventFilter(QObject* o, QEvent* e) {
 // ================================================================ TrendCard
 TrendCard::TrendCard(QWidget* parent) : QWidget(parent) { setMouseTracking(true); }
 
-QRectF TrendCard::plot() const { return QRectF(50, 77, width() - 70, height() - 114); }   // 379 at the reference height 493
+QRectF TrendCard::plot() const {   // 379 at the reference height 493; phones keep two lines for the footnote
+  return QRectF(50, 77, width() - 70, height() - (width() < 520 ? 126 : 114));
+}
 double TrendCard::xOf(double slot) const { const QRectF r = plot(); return r.left() + (slot + 0.5) * r.width() / kSlots; }
 int TrendCard::slotAt(double x) const {
   const QRectF r = plot();
@@ -404,9 +444,12 @@ void TrendCard::paintEvent(QPaintEvent*) {
   QPainter p(this);
   const auto& c = col();
   drawCardFrame(p, rect());
-  drawCardTitle(p, QPointF(11, 21), m_title);
+  const bool narrow = width() < 520;   // phone held upright
+  if (narrow) drawCardTitleFit(p, QPointF(11, 21), m_title, width() - 22);
+  else drawCardTitle(p, QPointF(11, 21), m_title);
   p.setFont(ui(11)); p.setPen(c.sub);
-  p.drawText(QRectF(11, 33, 900, 16), Qt::AlignLeft | Qt::AlignVCenter, m_sub);
+  p.drawText(QRectF(11, 33, narrow ? width() - 22 : 900, 16), Qt::AlignLeft | Qt::AlignVCenter,
+             narrow ? QFontMetricsF(ui(11)).elidedText(m_sub, Qt::ElideRight, width() - 22) : m_sub);
 
   const QRectF pr = plot();
   // month bands and labels
@@ -420,8 +463,9 @@ void TrendCard::paintEvent(QPaintEvent*) {
   }
   // footnote
   p.setFont(ui(11)); p.setPen(c.dim);
-  p.drawText(QRectF(11, height() - 26, width() - 22, 14), Qt::AlignLeft | Qt::AlignVCenter,
-             QCoreApplication::translate("seasonal", "Shown as a 3-day Gaussian-weighted moving average of the real cumulative return, for readability."));
+  const QString foot = QCoreApplication::translate("seasonal", "Shown as a 3-day Gaussian-weighted moving average of the real cumulative return, for readability.");
+  if (narrow) p.drawText(QRectF(11, height() - 38, width() - 22, 30), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, foot);
+  else p.drawText(QRectF(11, height() - 26, width() - 22, 14), Qt::AlignLeft | Qt::AlignVCenter, foot);
 
   if (!m_status.isEmpty() || m_smooth.isEmpty()) {
     p.setFont(mono(11)); p.setPen(c.sub);
@@ -833,7 +877,10 @@ void BarCard::paintEvent(QPaintEvent*) {
   QPainter p(this);
   const auto& c = col();
   drawCardFrame(p, rect());
-  drawCardTitle(p, QPointF(11, 21), m_title);
+  if (width() < 520) {   // phone: the title shrinks to leave the period pill its room
+    const double pw = m_pill.isEmpty() ? 0 : QFontMetricsF(mono(10, QFont::Normal, 1.5)).horizontalAdvance(m_pill) + 12 + 10;
+    drawCardTitleFit(p, QPointF(11, 21), m_title, width() - 22 - pw);
+  } else drawCardTitle(p, QPointF(11, 21), m_title);
   if (!m_pill.isEmpty()) drawPeriodPill(p, width() - 12, 14, m_pill);
   const QRectF pr = plot();
   if (!m_status.isEmpty() || m_values.isEmpty()) {
@@ -897,7 +944,8 @@ void RiskCard::paintEvent(QPaintEvent*) {
   QPainter p(this);
   const auto& c = col();
   drawCardFrame(p, rect());
-  drawCardTitle(p, QPointF(11, 21), QCoreApplication::translate("seasonal", "RISK METRICS"));
+  if (width() < 520) drawCardTitleFit(p, QPointF(11, 21), QCoreApplication::translate("seasonal", "RISK METRICS"), width() - 22 - (m_has && !m_s.period.isFull() ? 70 : 0));
+  else drawCardTitle(p, QPointF(11, 21), QCoreApplication::translate("seasonal", "RISK METRICS"));
   if (m_has && !m_s.period.isFull()) drawPeriodPill(p, width() - 12, 14, m_s.period.pill());
   if (!m_has) {
     p.setFont(mono(11)); p.setPen(c.sub);
@@ -931,9 +979,16 @@ void RiskCard::paintEvent(QPaintEvent*) {
   }
   p.setFont(ui(10)); p.setPen(c.dim);
   const QString per = m_s.period.isFull() ? QCoreApplication::translate("seasonal", "full-year") : m_s.period.pill();
-  const QString foot = QCoreApplication::translate("seasonal", "Volatility = std. dev. of real %1 period returns. Max drawdown = largest peak-to-trough drop on the real "
+  p.drawText(QRectF(11, 264, width() - 22, width() < 520 ? height() - 264 - 6 : 40), Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, footnote(per));
+}
+QString RiskCard::footnote(const QString& per) {
+  return QCoreApplication::translate("seasonal", "Volatility = std. dev. of real %1 period returns. Max drawdown = largest peak-to-trough drop on the real "
                                "average seasonal path, restricted to this period. Cumulative profit = the %1 return compounded over "
                                "every complete year. Return/Risk is a plain ratio, not a risk-free-rate-adjusted Sharpe ratio.").arg(per);
-  p.drawText(QRectF(11, 264, width() - 22, 40), Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, foot);
+}
+int RiskCard::heightFor(int w) const {
+  const QString per = m_s.period.isFull() ? QCoreApplication::translate("seasonal", "full-year") : m_s.period.pill();
+  const int th = QFontMetrics(ui(10)).boundingRect(QRect(0, 0, w - 22, 1000), Qt::TextWordWrap, footnote(per)).height();
+  return qMax(315, 264 + th + 12);
 }
 }

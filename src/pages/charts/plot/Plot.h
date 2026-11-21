@@ -194,6 +194,7 @@ struct TimeScaleOptions {
   double barSpacing = 6;
   double minBarSpacing = 0.5;
   double maxBarSpacing = 0;           // 0 = half the width
+  double minVisibleBars = 0;          // > 0: the deepest zoom shows that many bars (Deepwater; wins over maxBarSpacing)
   bool fixLeftEdge = false, fixRightEdge = false;
   bool lockVisibleTimeRangeOnResize = false;
   bool rightBarStaysOnScroll = false;

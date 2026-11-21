@@ -60,6 +60,44 @@ void CalendarFilters::setCompact(bool on) {
   m_hover = -1;
   update();
 }
+void CalendarFilters::setPhone(bool on) {
+  if (on == m_phone) return;
+  m_phone = on;
+  m_hover = -1;
+  if (!on) setFixedHeight(m_compact ? kCompactHeight : kHeight);
+  update();
+}
+int CalendarFilters::phoneHeight(int w) const {
+  const auto hs = phoneHits(w);
+  return int(hs.last().r.bottom()) + 7;
+}
+// Phone layout: search (7–36), week navigator (43–75, chevrons with 36x32 targets around the same centres), the
+// country chips 30 px high wrapping over rows 36 px apart, then IMPACT. No COUNTRIES label: the flags say it.
+QList<CalendarFilters::Hit> CalendarFilters::phoneHits(double W) const {
+  QList<Hit> out;
+  const double tw = QFontMetricsF(theme::mono(13, QFont::DemiBold)).horizontalAdvance(weekText(m_week));
+  out << Hit{QRectF(3, 43, 36, 32), 0, {}} << Hit{QRectF(36 + tw + 13 - 18, 43, 36, 32), 1, {}};
+  const QFontMetricsF fm(theme::condensed(12, QFont::Bold));
+  double x = 10, y = 81;
+  auto place = [&](double w) {
+    if (x > 10 && x + w > W - 10) { x = 10; y += 36; }
+    const QRectF r(x, y, w, 30);
+    x += w + 6;
+    return r;
+  };
+  for (const auto& c : kMajors) out << Hit{place(5 + 21 + 4 + fm.horizontalAdvance(c) + 9), 2, c};
+  out << Hit{place(80), 3, {}};
+  const double iy = y + 30 + 9;
+  x = 48;
+  const QStringList names{QCoreApplication::translate("news", "All"), QCoreApplication::translate("news", "High"), QCoreApplication::translate("news", "Medium"), QCoreApplication::translate("news", "Low")};
+  const QFont sf = theme::condensed(13, QFont::Medium);
+  for (int i = 0; i < 4; ++i) {
+    const double w = QFontMetricsF(sf).horizontalAdvance(names[i]) + QFontMetricsF(sf).horizontalAdvance(QString::number(m_counts[i])) + 4 + 18;
+    out << Hit{QRectF(x, iy, w, 30), 4, QString::number(i)};
+    x += w + 2;
+  }
+  return out;
+}
 double CalendarFilters::impactX() const {
   if (!m_compact) return 10;
   const double tw = QFontMetricsF(theme::mono(13, QFont::DemiBold)).horizontalAdvance(weekText(m_week));
@@ -69,6 +107,7 @@ double CalendarFilters::impactX() const {
 void CalendarFilters::resizeEvent(QResizeEvent*) { m_search->setGeometry(36, 9, width() - 36 - 20, 25); }
 
 QList<CalendarFilters::Hit> CalendarFilters::hits() const {
+  if (m_phone) return phoneHits(width());
   QList<Hit> out;
   const QString wt = weekText(m_week);
   const double tw = QFontMetricsF(theme::mono(13, QFont::DemiBold)).horizontalAdvance(wt);
@@ -104,9 +143,13 @@ void CalendarFilters::paintEvent(QPaintEvent*) {
   p.setPen(QPen(theme::map("#5e5a50"), 1.3)); p.setBrush(Qt::NoBrush);
   p.drawEllipse(QPointF(23, 20.5), 4.2, 4.2); p.drawLine(QPointF(26, 23.5), QPointF(29, 26.5));
   p.setRenderHint(QPainter::Antialiasing, false);
+  const auto hs = hits();
+  if (m_phone) {   // rules above the week, the chips and IMPACT
+    p.fillRect(QRectF(0, 43, W, 1), kSep); p.fillRect(QRectF(0, 75, W, 1), kSep);
+    for (const auto& h : hs) if (h.kind == 4) { p.fillRect(QRectF(0, h.r.top() - 5, W, 1), kSep); break; }
+  } else
   for (double y : {43.0, 75.0, 109.0}) if (y < height()) p.fillRect(QRectF(0, y, W, 1), kSep);
 
-  const auto hs = hits();
   // week navigator
   p.setFont(theme::mono(13, QFont::DemiBold)); p.setPen(kWeek);
   p.drawText(QRectF(36, 49, 400, 20), Qt::AlignLeft | Qt::AlignVCenter, weekText(m_week));
@@ -121,7 +164,7 @@ void CalendarFilters::paintEvent(QPaintEvent*) {
 
   // countries
   p.setFont(theme::mono(8, QFont::Normal, 0.4)); p.setPen(kLabel);
-  p.drawText(QRectF(10, 81, 60, 22), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "COUNTRIES"));
+  if (!m_phone) p.drawText(QRectF(10, 81, 60, 22), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "COUNTRIES"));
   const QFont cf = theme::condensed(12, QFont::Bold);
   for (int i = 0; i < hs.size(); ++i) {
     const Hit& h = hs[i];
@@ -163,7 +206,8 @@ void CalendarFilters::paintEvent(QPaintEvent*) {
     }
   }
   p.setFont(theme::mono(8, QFont::Normal, 0.4)); p.setPen(kLabel);
-  p.drawText(QRectF(impactX(), impactY(), 40, 21), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "IMPACT"));
+  if (m_phone) { for (const auto& h : hs) if (h.kind == 4) { p.drawText(QRectF(10, h.r.y(), 40, h.r.height()), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "IMPACT")); break; } }
+  else p.drawText(QRectF(impactX(), impactY(), 40, 21), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "IMPACT"));
 }
 
 void CalendarFilters::mouseMoveEvent(QMouseEvent* e) {

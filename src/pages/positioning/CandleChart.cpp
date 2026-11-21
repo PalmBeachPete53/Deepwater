@@ -210,8 +210,11 @@ void CandleChart::paintEvent(QPaintEvent*) {
     const QFontMetricsF tm2(m_s.legendFont);
     if (x + tm2.horizontalAdvance(title) + 14 + partsW > width() - 8 && !m_shortTitle.isEmpty()) title = m_shortTitle;
     const bool showChange = x + tm2.horizontalAdvance(title) + 14 + partsW <= width() - 8;
+    // phone-wide charts (< 520 px): when even the short title leaves no room for O H L C, the values alone
+    const qreal ohlcW = partsW - (lm.horizontalAdvance("OO" + vals[4]) + 7);
+    const bool showTitle = width() >= 520 || x + tm2.horizontalAdvance(title) + 14 + ohlcW <= width() - 8;
     p.setFont(m_s.legendFont); p.setPen(m_s.legendText);
-    p.drawText(QPointF(x, base), title); x += tm2.horizontalAdvance(title) + 14;
+    if (showTitle) { p.drawText(QPointF(x, base), title); x += tm2.horizontalAdvance(title) + 14; }
     p.setFont(lf);
     auto part = [&](const QString& k, const QString& v) {
       p.setPen(m_s.legendLabel); p.drawText(QPointF(x, base), k); x += lm.horizontalAdvance(k);

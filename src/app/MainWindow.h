@@ -3,7 +3,9 @@
 #include <QHash>
 
 class Header;
+class HelpWindow;
 class QStackedWidget;
+namespace app { class NavDrawer; }
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -14,6 +16,9 @@ public:
   void open(int main, int sub);
   QString currentPageId() const;
   void showOptions();
+  // The documentation, on `chapter` (a main tab id or "start"; empty: the chapter of the tab shown), optionally at the
+  // section titled `section`.
+  void showHelp(const QString& chapter = {}, const QString& section = {});
   // Re-create every page (after a language change); the current page is re-opened.
   void rebuildPages();
   // The slow pages built and loaded in the background after launch (app::Preloadable); off for the audits, which
@@ -23,6 +28,8 @@ public:
   // (a QStackedWidget's minimum is the largest of all its pages).
   QWidget* currentPage() const;
   void dropPagesExcept(const QString& id);
+protected:
+  void resizeEvent(QResizeEvent* e) override;
 private:
   QWidget* ensurePage(const QString& id);   // made on first use, not shown
   // Paper orders fill from the Charts page's quotes and pages are made on first visit: when the saved paper account
@@ -35,5 +42,7 @@ private:
   int m_preloadGen = 0;     // a rebuild restarts the chain: an older chain's timer stops
   Header* m_header;
   QStackedWidget* m_stack;
+  HelpWindow* m_help = nullptr;   // made on first use, then kept (its chapters stay parsed)
+  app::NavDrawer* m_drawer;   // the phone menu (☰ of the compact header)
   QHash<QString, QWidget*> m_pages;
 };

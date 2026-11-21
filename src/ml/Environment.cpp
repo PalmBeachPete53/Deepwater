@@ -6,14 +6,14 @@
 #include <QFutureWatcher>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QProcess>
+#include "core/Process.h"
 #include <QSaveFile>
 #include <QtConcurrent>
 
 namespace ml {
 namespace {
 QString runPython(const QString& py, const QStringList& args, int ms = 20000) {
-  QProcess p;
+  dw::Process p;
   p.start(py, args);
   if (!p.waitForFinished(ms)) { p.kill(); p.waitForFinished(1000); return {}; }
   return QString::fromUtf8(p.readAllStandardOutput()).trimmed();
@@ -140,8 +140,8 @@ void Environment::runStep() {
       args << "-r" << path;
     }
   }
-  m_install = new QProcess(this);
-  m_install->setProcessChannelMode(QProcess::MergedChannels);
+  m_install = new dw::Process(this);
+  m_install->setProcessChannelMode(dw::Process::MergedChannels);
   // Deepwater closing: pip (or venv) would go on alone, half-installing the environment with nobody to report it; the
   // environment is never destroyed (a leaked singleton), so its child process is ended here. Disconnected first: the
   // finished handler would report a failure and start a probe while the app quits. The next probe shows what is missing.
@@ -150,7 +150,7 @@ void Environment::runStep() {
     p->kill();
     p->waitForFinished(2000);
   });
-  connect(m_install, &QProcess::readyRead, this, [this] {
+  connect(m_install, &dw::Process::readyRead, this, [this] {
     const QStringList lines = QString::fromUtf8(m_install->readAll()).split('\n', Qt::SkipEmptyParts);
     for (const QString& l : lines) {
       m_log += l + "\n";
@@ -158,10 +158,10 @@ void Environment::runStep() {
       emit installLine(l.trimmed());
     }
   });
-  connect(m_install, &QProcess::finished, this, [this](int code, QProcess::ExitStatus st) {
+  connect(m_install, &dw::Process::finished, this, [this](int code, dw::Process::ExitStatus st) {
     m_install->deleteLater();
     m_install = nullptr;
-    if (st != QProcess::NormalExit || code != 0) {
+    if (st != dw::Process::NormalExit || code != 0) {
       const QString tail = m_log.trimmed().section('\n', -2);
       emit installFinished(false, (m_step == 0 ? QCoreApplication::translate("ai", "Creating the environment failed.") : QCoreApplication::translate("ai", "Installing the packages failed.")) +
                                   (tail.isEmpty() ? QString() : "\n" + tail));

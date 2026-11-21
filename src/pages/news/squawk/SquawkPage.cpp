@@ -15,15 +15,32 @@
 #include <QCoreApplication>
 #include <QPainter>
 #include "core/I18n.h"
+#include "global/PageScroll.h"
+#include "ui/Touch.h"
 #include <QScrollBar>
 #include <QTimer>
 #include <QVBoxLayout>
 
 namespace wire::squawk {
+// Holds the three blocks (wire, TV, calendar). On the desktop it covers the page and paints nothing; in scroll mode
+// (phones) it is the scrolling content and paints the divider colour in the 2 px gaps between the blocks.
+class SquawkCanvas : public QWidget {
+public:
+  using QWidget::QWidget;
+  bool scrollMode = false;
+protected:
+  void paintEvent(QPaintEvent*) override {
+    if (!scrollMode) return;
+    QPainter p(this);
+    p.fillRect(rect(), look().divider);
+  }
+};
+
 class SquawkPage : public QWidget {
 public:
   explicit SquawkPage(QWidget* parent) : QWidget(parent) {
-    m_left = new QWidget(this);
+    m_canvas = new SquawkCanvas(this);
+    m_left = new QWidget(m_canvas);
     auto* lv = new QVBoxLayout(m_left);
     lv->setContentsMargins(0, 0, 0, 0); lv->setSpacing(0);
     m_header = new Header(m_left);
@@ -32,9 +49,9 @@ public:
     m_list = new WireList(m_left);
     m_footer = new Footer(m_left);
     lv->addWidget(m_header); lv->addWidget(m_ticker); lv->addWidget(m_tabs); lv->addWidget(m_list, 1); lv->addWidget(m_footer);
-    m_tv = new TvPane(this);
-    m_tv->onIdleChanged = [this] { resizeEvent(nullptr); };
-    m_cal = new CalendarPane(this);
+    m_tv = new TvPane(m_canvas);
+    m_tv->onIdleChanged = [this] { if (m_scroll) m_scroll->relayout(); else resizeEvent(nullptr); };
+    m_cal = new CalendarPane(m_canvas);
 
     m_tabs->setCurrent(qBound(0, qEnvironmentVariableIsSet("DW_SQUAWK_TAB") ? qEnvironmentVariableIntValue("DW_SQUAWK_TAB")
                                                                              : settings::value("news.squawk.filter", 1).toInt(), 3));
@@ -67,6 +84,10 @@ protected:
     // with its column up to 42 % of the height, and shrinks (down to 120 px of video) so the calendar always keeps
     // its filters and two rows. On very wide windows the calendar is capped at 1200 px and centred under the TV.
     const int W = width(), H = height();
+    // phone upright, or a page this short (phone sideways: 382 px): the blocks scroll as one page
+    setScrollMode(ui::compact(W) || H < 420);
+    if (m_scroll) { m_scroll->setGeometry(rect()); update(); return; }
+    m_canvas->setGeometry(rect());
     int lw = qBound(520, int(std::round(W * 933.0 / 1600.0)), 1180);
     lw = qMin(lw, W - 462);
     m_left->setGeometry(0, 0, lw, H);
@@ -83,6 +104,7 @@ protected:
   void paintEvent(QPaintEvent*) override {
     QPainter p(this);
     p.fillRect(rect(), look().page);
+    if (m_scroll) return;
     p.fillRect(QRect(m_left->width(), 0, 2, height()), look().divider);
     p.fillRect(QRect(m_tv->x(), m_tv->height(), m_tv->width(), 2), theme::map("#100c06"));
   }
@@ -106,6 +128,50 @@ protected:
   }
 
 private:
+  void setScrollMode(bool on) {
+    if (on == (m_scroll != nullptr)) return;
+    if (on) {
+      m_canvas->scrollMode = true;
+      m_scroll = new global::PageScroll(m_canvas, this);
+      m_scroll->layout = [this](int w, int vh) { return layoutScroll(w, vh); };
+      // the TV's native player is not a Qt widget: it follows the scrolling and hides while partly out of view
+      m_tv->viewClip = [this] { return m_scroll ? QRect(m_scroll->viewport()->mapTo(window(), QPoint(0, 0)), m_scroll->viewport()->size()) : QRect(); };
+      connect(m_scroll->verticalScrollBar(), &QScrollBar::valueChanged, m_tv, [this] { m_tv->syncView(); });
+      m_scroll->show();
+    } else {
+      m_scroll->takeWidget();
+      m_canvas->setParent(this);
+      m_canvas->scrollMode = false;
+      m_canvas->show();
+      m_tv->viewClip = nullptr;
+      m_scroll->hide();
+      m_scroll->deleteLater();
+      m_scroll = nullptr;
+      m_tv->syncView();
+    }
+  }
+  // Scroll mode. Phone upright: wire (header, ticker, tabs, list, footer) almost a screen high, then the TV at 16:9
+  // (or its message band), then the calendar. Phone sideways: the desktop's two columns, 760 px high (the calendar keeps ≥ 470 px).
+  int layoutScroll(int W, int VH) {
+    if (ui::compact(W)) {
+      int y = 0;
+      const int leftH = qBound(460, VH - 56, 760);
+      m_left->setGeometry(0, y, W, leftH); y += leftH + 2;
+      const int tvh = m_tv->idle() ? m_tv->idleHeight() : m_tv->minimumHeightFor() - 100 + W * 9 / 16;
+      m_tv->setGeometry(0, y, W, tvh); y += tvh + 2;
+      const int calH = qBound(520, VH - 30, 760);
+      m_cal->setGeometry(0, y, W, calH); y += calH;
+      return y;
+    }
+    const int H = qMax(VH, 760);
+    const int lw = qMin(qBound(520, int(std::round(W * 933.0 / 1600.0)), 1180), W - 462);
+    m_left->setGeometry(0, 0, lw, H);
+    const int rx = lw + 2, rw = W - rx;
+    const int tvh = m_tv->idle() ? m_tv->idleHeight() : qMax(m_tv->minimumHeightFor(), qMin(m_tv->preferredHeight(rw, H), H - 2 - 470));
+    m_tv->setGeometry(rx, 0, rw, tvh);
+    m_cal->setGeometry(rx, tvh + 2, rw, H - tvh - 2);
+    return H;
+  }
   wire::Filter filter() const { return wire::Filter(m_tabs->current()); }
   void refresh() {
     m_dirty = false;
@@ -183,6 +249,8 @@ private:
     }
   }
 
+  SquawkCanvas* m_canvas;
+  global::PageScroll* m_scroll = nullptr;   // scroll mode only (it then holds m_canvas)
   QWidget* m_left;
   Header* m_header;
   Ticker* m_ticker;

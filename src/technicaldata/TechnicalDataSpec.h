@@ -38,6 +38,19 @@ struct PairSpec {
   qint64 start = 0;            // Unix seconds UTC; 0 = from the exchange's first bar
   QVector<IndSpec> indicators;
   bool paused = false;         // collection paused (Store::setPaused; kept as the store has it when the spec is saved)
+  // Footprint history (user's request 2026-11-20, FootprintArchive.h): the markets whose 1-minute footprint is built
+  // from Binance's daily archives ("spot", "perp"; none = no footprint), from this day (Unix seconds UTC, 0 = each
+  // market's first archive). JSON: "footprint": {"venues": ["spot", "perp"], "start": 1786060800}.
+  QStringList footprint;
+  qint64 footprintStart = 0;
+  // The perpetual's order book and positioning (user's choice 2026-11-20, PerpArchive.h), each from its first archive:
+  // depth = bookDepth (±0.2 … ±5 %, every ~30 s, from 2023-01-01); openInterest = metrics (open interest and
+  // long/short ratios, every 5 min, from 2020-09-01). JSON: "perp": {"depth": true, "oi": true}.
+  bool depth = false, openInterest = false;
+  // The live order book of the pair (spot and perpetual) kept in memory while Deepwater runs, never written to disk
+  // (user's rule 2026-11-20: "il ne faut pas stocker les données en direct, seulement en mémoire cache", for live
+  // trading). JSON: "liveBook": true.
+  bool liveBook = false;
   bool valid() const { return !timeframes.isEmpty(); }
 };
 

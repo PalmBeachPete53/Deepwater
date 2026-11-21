@@ -23,10 +23,16 @@
 // its recording last asked for (pruneAllRecordings). The GUI keeps two rings of encoded columns:
 // live (100 ms, the last 10 minutes) and history (1 s, the last 6 hours: read from the files at start, then fed live).
 //
+// Bands (user's request 2026-11-20, the live book for live trading, in memory only): on every whole second of a synced
+// book the depth thread also reduces the whole local book to Binance's bookDepth bands (charts/core/BookBands.h:
+// cumulative depth out to ±0.2 … ±5 % of the mid, and how far the REST snapshot reached) and hands them to the GUI
+// through a fifth SPSC ring; the GUI keeps the last 24 hours (bands()). Never written anywhere.
+//
 // Snapshots (Binance's weights: spot 5000 levels = 250, futures 1000 = 20 of the per-minute budget): at most one every
 // 10 s, 20 s, 40 s … 5 min while they keep failing; one older than the stream's first buffered event (Binance's
 // REST lagging its stream) is asked again after 3 s, 6 s, 12 s … 5 min. A book that is not synced gives Missing
 // columns (holes in the heatmap). Reconnects back off 1 s … 60 s; the socket is renewed at 23 h 50 (Binance cuts at 24 h; a resync follows).
+#include "charts/core/BookBands.h"
 #include "charts/core/Heatmap.h"
 #include "charts/core/HeatmapStore.h"
 #include "charts/core/Spsc.h"
@@ -72,6 +78,9 @@ public:
   // 6 hours (the recorded files at start, then the live columns on whole seconds).
   const flow::ColumnRing<flow::DepthRecord>& live() const { return *live_; }
   const flow::ColumnRing<flow::DepthRecord>& history() const { return *history_; }
+  // The book reduced to bookDepth's bands, one a second while synced, the last 24 hours, oldest first (memory only).
+  const std::deque<flow::BookBands>& bands() const { return bands_; }
+  static constexpr size_t kBandsKept = 24 * 3600;
   QString recordDir() const;   // where this market's files go
   qint64 recorded() const { return recorded_.load(std::memory_order_relaxed); }   // records written since start
 
@@ -138,6 +147,8 @@ private:
   std::unique_ptr<flow::SpscRing<SnapshotMsg, 4>> snapshotRing_;       // GUI → depth: snapshot bodies
   std::atomic<bool> wantSnapshot_{false};                              // depth → GUI
   std::unique_ptr<Ring> recRing_;                                      // depth → writer: whole-second columns
+  std::unique_ptr<flow::SpscRing<flow::BookBands, 16>> bandRing_;      // depth → GUI: the bands, once a second
+  std::deque<flow::BookBands> bands_;                                  // GUI: the last kBandsKept
   std::thread writer_;
   std::atomic<bool> stopWriter_{false};
   std::atomic<qint64> recorded_{0};

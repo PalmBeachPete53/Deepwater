@@ -37,13 +37,18 @@ public:
   QHBoxLayout* rightLayout() const { return m_right; }
   QHBoxLayout* afterTitleLayout() const { return m_after; }
   int titleRight() const;          // x just after the block cursor
+  // Phones: the title is elided to `px` (0 = no title and no cursor, the widgets after it move left); < 0 = whole
+  // title (default, every desktop width).
+  void setTitleRoom(int px);
 protected:
   void paintEvent(QPaintEvent*) override;
   void showEvent(QShowEvent*) override;
   void hideEvent(QHideEvent*) override;
 private:
   void paintStatic(QPainter& p);
-  QString m_title; Glyph m_glyph; QTimer m_tick; qint64 m_t0; bool m_cursorOn = true; int m_frame = 0;
+  QString shownTitle() const;
+  QString m_title; Glyph m_glyph; QTimer m_tick; qint64 m_t0; bool m_cursorOn = true; int m_frame = 0; int m_room = -1;
+  QHBoxLayout* m_row;
   QImage m_static;   // gradient, glyph, title: the 10 fps dot and the cursor are drawn over it
   QHBoxLayout* m_right; QHBoxLayout* m_after;
 };
@@ -97,6 +102,9 @@ public:
   int current() const { return m_cur; }
   QSize sizeHint() const override;
   QRectF chipRect(int i) const;
+  // Phones: chips flow onto rows `rowH` tall within `width` (each row stretched to the full width, finger-sized),
+  // the group's height follows. width 0 = one row 27 px tall (default).
+  void setWrap(int width, int rowH);
 signals:
   void changed(int i);
 protected:
@@ -107,6 +115,8 @@ protected:
 private:
   QList<QRectF> rects() const;
   QList<Chip> m_chips; int m_cur = 0, m_hover = -1;
+  int m_wrapW = 0, m_rowH = 27;
+  void fitWrap();
 };
 
 // Search field drawn like the reference (magnifier + letter-spaced uppercase placeholder).

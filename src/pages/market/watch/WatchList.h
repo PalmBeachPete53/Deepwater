@@ -50,6 +50,8 @@ public:
   void setCurrent(int i);
   int current() const { return m_cur; }
   QSize sizeHint() const override;
+  // phones: pills wrap onto several rows within `width` and grow to finger height (0 = one row, desktop)
+  void setWrap(int width) { if (width != m_wrapW) { m_wrapW = width; updateGeometry(); update(); } }
 signals:
   void changed(int);
 protected:
@@ -59,7 +61,7 @@ protected:
   void leaveEvent(QEvent*) override;
 private:
   QList<QRectF> rects() const;
-  QStringList m_labels; QList<int> m_counts; int m_cur = 0, m_hover = -1;
+  QStringList m_labels; QList<int> m_counts; int m_cur = 0, m_hover = -1, m_wrapW = 0;
 };
 
 // "LABEL [A|B|C]" segmented control (gold fill on the active segment).
@@ -70,6 +72,8 @@ public:
   void setCurrent(int i);
   int current() const { return m_cur; }
   QSize sizeHint() const override;
+  // phones: finger-sized segments (30 px tall in a 36 px group, wider padding)
+  void setTall(bool on) { if (on != m_tall) { m_tall = on; updateGeometry(); update(); } }
 signals:
   void changed(int);
 protected:
@@ -80,7 +84,7 @@ protected:
 private:
   QList<QRectF> rects() const;
   qreal labelWidth() const;
-  QString m_label; QStringList m_items; int m_cur = 0, m_hover = -1;
+  QString m_label; QStringList m_items; int m_cur = 0, m_hover = -1; bool m_tall = false;
 };
 
 // One of the four "today" cards.
@@ -94,9 +98,12 @@ public:
   void setAverage(double pct, int n);
   void setMarket(const QString& symbol, const QString& name, double pct);
   void clear();
+  // phones (2 x 2 cards): the leader / laggard symbol takes the room the percentage leaves instead of a fixed 120 px
+  void setPhone(bool on) { if (on != m_phone) { m_phone = on; update(); } }
 protected:
   void paintEvent(QPaintEvent*) override;
 private:
+  bool m_phone = false;
   Kind m_kind; QString m_period = "TODAY";
   int m_up = 0, m_down = 0, m_flat = 0, m_n = 0; double m_pct = NAN; QString m_sym, m_name; bool m_has = false;
 };

@@ -28,6 +28,8 @@ protected:
   bool event(QEvent*) override;
 private:
   QRectF plotRect() const;
+  bool phone() const;
+  qreal subY() const;   // the subtitle's baseline
   QRectF hoverRect() const;
   QRectF dropdownRect() const;
   QList<QRectF> tfRects() const;

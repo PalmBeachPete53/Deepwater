@@ -99,7 +99,9 @@ void PricePanel::setBars(const QVector<market::Bar>& bars, int dec, const QStrin
 }
 void PricePanel::setHover(const QPoint& p) { m_chart->setHover(m_chart->mapFrom(this, p)); }
 void PricePanel::resizeEvent(QResizeEvent*) {
-  m_mode->move(width() - m_mode->sizeHint().width() - 9, 6);
+  const bool phone = m_phone;   // finger-sized Unweighted | Futures, still inside the 28 px title bar
+  m_mode->setPadding(phone ? 8 : 5, phone ? 24 : 16);
+  m_mode->move(width() - m_mode->sizeHint().width() - 9, phone ? 2 : 6);
   m_chart->setGeometry(1, 52, width() - 14, height() - 52 - 125);   // 318 at the reference height 495
 }
 void PricePanel::paintEvent(QPaintEvent*) {
@@ -180,8 +182,10 @@ SplitPanel::SplitPanel(QWidget* parent) : Panel(QCoreApplication::translate("pos
   m_cats->setPadding(5, 16); m_cats->setGap(1); m_cats->setInactiveColor(theme::map(0x61, 0x5f, 0x58));
   connect(m_cats, &pk::Segmented::changed, this, [this](int i) { m_cat = i; update(); emit categoryChanged(i); });
 }
-QRectF SplitPanel::plot() const { return QRectF(8, 65, width() - 17, height() - 65 - 25); }
+// phone: taller category buttons, the plot 10 px lower
+QRectF SplitPanel::plot() const { const int top = m_phone ? 75 : 65; return QRectF(8, top, width() - 17, height() - top - 25); }
 void SplitPanel::resizeEvent(QResizeEvent*) {
+  m_cats->setPadding(5, m_phone ? 26 : 16);
   // short labels when the full names do not fit
   QStringList full; for (const auto& n : m_h.secondNames().mid(0, 4)) full << catTr(n);
   full << catTr("Nonreportable");
@@ -302,9 +306,19 @@ void NetChart::render(QPainter& p) {
   // legend
   const QFont lf = theme::condensed(13, QFont::Medium);
   const QFontMetricsF lm(lf);
-  qreal total = 0; for (const auto& s : ser) total += 16 + lm.horizontalAdvance(catTr(s.name)) + 14;
-  qreal x = (width() - total) / 2; const qreal ly = kHead + 16;
-  for (const auto& s : ser) {
+  // one centred line; a phone-wide panel breaks it into lines of what fits (the plot moves down by the extra lines)
+  QList<QPair<int, qreal>> lines{{0, 0}};   // (first series of the line, width)
+  for (int k = 0; k < ser.size(); ++k) {
+    const qreal iw = 16 + lm.horizontalAdvance(catTr(ser[k].name)) + 14;
+    if (m_phone && lines.last().second > 0 && lines.last().second + iw > width() - 16) lines << qMakePair(k, 0.0);
+    lines.last().second += iw;
+  }
+  const qreal extra = (lines.size() - 1) * 20;
+  int line = 0;
+  qreal x = (width() - lines[0].second) / 2, ly = kHead + 16;
+  for (int k = 0; k < ser.size(); ++k) {
+    const auto& s = ser[k];
+    if (line + 1 < lines.size() && lines[line + 1].first == k) { ++line; x = (width() - lines[line].second) / 2; ly += 20; }
     const QPointF c(x + 5, ly);
     p.setPen(Qt::NoPen); p.setBrush(theme::alpha(s.c, 60)); p.drawEllipse(c, 7, 4.5);
     QPolygonF d{{c.x() - 5, c.y()}, {c.x(), c.y() - 3.5}, {c.x() + 5, c.y()}, {c.x(), c.y() + 3.5}};
@@ -329,7 +343,7 @@ void NetChart::render(QPainter& p) {
   if (ticks.first() > lo) ticks.prepend(ticks.first() - step);
   if (ticks.last() < hi) ticks.append(ticks.last() + step);
   lo = ticks.first(); hi = ticks.last();
-  const QRectF pl(72, kHead + 38, width() - 72 - 16, height() - kHead - 38 - 30);
+  const QRectF pl(72, kHead + 38 + extra, width() - 72 - 16, height() - kHead - 38 - 30 - extra);
   auto Y = [&](double v) { return pl.bottom() - (v - lo) / (hi - lo) * pl.height(); };
   p.setRenderHint(QPainter::Antialiasing, false);
   p.setFont(theme::condensed(13, QFont::Medium));
@@ -342,8 +356,12 @@ void NetChart::render(QPainter& p) {
   const int n = ws.size();
   auto X = [&](int i) { return pl.left() + pl.width() * i / (n - 1); };
   const QLocale loc = i18n::locale();
+  const bool narrow = m_phone;   // phone: month labels closer than 34 px are skipped (they ran into each other)
+  qreal lastLabel = -1e9;
   for (int i = 1; i < n; ++i) {
     if (ws[i].date.month() == ws[i - 1].date.month()) continue;
+    if (narrow && X(i) - lastLabel < 34) continue;
+    lastLabel = X(i);
     const bool jan = ws[i].date.month() == 1;
     QFont f = theme::condensed(13, jan ? QFont::Bold : QFont::Medium);
     QString t = jan ? QString::number(ws[i].date.year()) : loc.monthName(ws[i].date.month(), QLocale::ShortFormat).remove('.');
@@ -387,6 +405,34 @@ void ReportTable::paintEvent(QPaintEvent*) {
     for (const auto& r : rs) { text(p, QRectF(x, 0, 400, kHead), Qt::AlignVCenter | Qt::AlignLeft, r.t, f, r.c); x += fm.horizontalAdvance(r.t); }
   }
   const auto& cats = m_second ? w.second : w.legacy;
+  auto chgCol = [](double v) { return !std::isfinite(v) ? theme::map(kDim) : v < 0 ? theme::map(kNeg) : theme::map(kPos); };
+  auto chgTxt = [](double v) { return std::isfinite(v) ? fmt::num(v, 0) : fmt::dash(); };
+  auto dimIf = [&](double v) { return std::isfinite(v) ? theme::map(kNum) : theme::map(kDim); };
+  if (m_phone) {   // phone: name on its own line, five numbers under it (see kPhonePitch)
+    const QFont h1 = theme::mono(8, QFont::Bold, 1.0), h2 = theme::mono(7, QFont::Normal, 0.6);
+    const qreal cw = (width() - 18) / 5.0;
+    auto E = [&](int i) { return 9 + cw * (i + 1); };
+    text(p, QRectF(9, 30, 200, 14), Qt::AlignVCenter | Qt::AlignLeft, QCoreApplication::translate("positioning", "CATEGORY"), h1, theme::map(0x84, 0x80, 0x76));
+    text(p, QRectF(E(1) - 100, 30, 100, 14), Qt::AlignVCenter | Qt::AlignRight, QCoreApplication::translate("positioning", "LONG"), h1, theme::map(kCyan));
+    text(p, QRectF(E(3) - 100, 30, 100, 14), Qt::AlignVCenter | Qt::AlignRight, QCoreApplication::translate("positioning", "SHORT"), h1, theme::map(kRed));
+    text(p, QRectF(E(4) - 100, 30, 100, 14), Qt::AlignVCenter | Qt::AlignRight, QCoreApplication::translate("positioning", "NET"), h1, theme::map(0x84, 0x80, 0x76));
+    const QString pos = QCoreApplication::translate("positioning", "POSITIONS"), chg = QCoreApplication::translate("positioning", "CHG");
+    const QStringList sub{pos, chg, pos, chg, QCoreApplication::translate("positioning", "L-S")};
+    for (int i = 0; i < 5; ++i) text(p, QRectF(E(i) - cw + 4, 50, cw - 4, 14), Qt::AlignVCenter | Qt::AlignRight, sub[i], h2, theme::map(kDim));
+    const QFont lf = theme::condensed(13, QFont::Medium), nf = theme::mono(12);
+    for (int r = 0; r < cats.size(); ++r) {
+      const auto& c = cats[r];
+      const qreal y = 66 + r * kPhonePitch;
+      p.fillRect(QRectF(1, y, width() - 2, 1), theme::map(0x24, 0x24, 0x15));
+      text(p, QRectF(9, y + 2, width() - 18, 18), Qt::AlignVCenter | Qt::AlignLeft, catTr(c.name), lf, theme::map(kRowText));
+      auto cell = [&](int i, const QString& t, const QColor& col) { text(p, QRectF(E(i) - cw, y + 20, cw, 20), Qt::AlignVCenter | Qt::AlignRight, t, nf, col); };
+      cell(0, n0(c.lng.pos), dimIf(c.lng.pos)); cell(1, chgTxt(c.lng.chg), chgCol(c.lng.chg));
+      cell(2, n0(c.sht.pos), dimIf(c.sht.pos)); cell(3, chgTxt(c.sht.chg), chgCol(c.sht.chg));
+      const double net = c.net();
+      cell(4, chgTxt(net), chgCol(net));
+    }
+    return;
+  }
   static const double kEdges[10] = {198, 271, 326, 376, 449, 522, 577, 627, 698, 781};
   const qreal sx = width() / 788.0;
   auto E = [&](int i) { return kEdges[i] * sx; };
@@ -588,7 +634,10 @@ ReadPanel::ReadPanel(QWidget* parent) : Panel(QCoreApplication::translate("posit
 }
 void ReadPanel::setLanguage(int l) { m_lang = l; m_langSel->setCurrent(l); update(); }
 void ReadPanel::setData(const CotHistory& h) { m_h = h; update(); }
-void ReadPanel::resizeEvent(QResizeEvent*) { m_langSel->resize(m_langSel->sizeHint()); m_langSel->move(width() - m_langSel->width() - 8, 3); }
+void ReadPanel::resizeEvent(QResizeEvent*) {
+  m_langSel->setPadding(m_phone ? 8 : 5, m_phone ? 22 : 15);   // phone: finger-sized EN | FR
+  m_langSel->resize(m_langSel->sizeHint()); m_langSel->move(width() - m_langSel->width() - 8, m_phone ? 0 : 3);
+}
 void ReadPanel::paintEvent(QPaintEvent*) {
   QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
   // frame with the sparkle icon before the title
@@ -605,9 +654,18 @@ void ReadPanel::paintEvent(QPaintEvent*) {
   const auto& w = m_h.weeks.last();
   const QString src = (m_lang == 1 ? "RAPPORT DU " : "REPORT OF ") + w.date.toString("yyyy-MM-dd") +
                       (m_lang == 1 ? " · RÈGLES APPLIQUÉES AUX CHIFFRES CFTC" : " · RULES APPLIED TO THE CFTC FIGURES");
-  text(p, QRectF(0, 0, m_langSel->x() - 10, kHead), Qt::AlignVCenter | Qt::AlignRight, src, theme::mono(9, QFont::Normal, 0.8), theme::map(0x45, 0x43, 0x3b));
+  // phone: the texts take the full width and the range bars go under them
+  const bool phone = m_phone;
+  if (phone) {
+    const QFont sf = theme::mono(9, QFont::Normal, 0.8);
+    const qreal x0 = 9 + QFontMetricsF(theme::mono(10, QFont::Bold, 0.6)).horizontalAdvance(m_title) + 12;
+    text(p, QRectF(x0, 0, std::max<qreal>(0, m_langSel->x() - 10 - x0), kHead), Qt::AlignVCenter | Qt::AlignRight,
+         QFontMetricsF(sf).elidedText(src, Qt::ElideRight, std::max<qreal>(0, m_langSel->x() - 10 - x0)), sf, theme::map(0x45, 0x43, 0x3b));
+  } else {
+    text(p, QRectF(0, 0, m_langSel->x() - 10, kHead), Qt::AlignVCenter | Qt::AlignRight, src, theme::mono(9, QFont::Normal, 0.8), theme::map(0x45, 0x43, 0x3b));
+  }
   const CotRead r = writeRead(m_h, m_lang);
-  const qreal lw = width() * 0.505 - 9;
+  const qreal lw = phone ? width() - 18 : width() * 0.505 - 9;
   qreal y = kHead + 10;
   {
     const QFont hf = theme::condensed(16, QFont::Bold);
@@ -632,15 +690,18 @@ void ReadPanel::paintEvent(QPaintEvent*) {
     p.fillRect(QRectF(9, y, 2, h), theme::map(0x38, 0x32, 0x18));
     y += h + 3;
   }
-  if (const int need = int(std::ceil(y + 10)); need != m_needed) { m_needed = need; emit neededHeightChanged(); }
-  // right column: net position vs its 52-week range
-  const qreal rx = width() * 0.53, rr = width() - 9;
-  text(p, QRectF(rx, kHead + 8, rr - rx, 14), Qt::AlignVCenter | Qt::AlignLeft,
-       m_lang == 1 ? "POSITION NETTE DANS SA FOURCHETTE 52 SEMAINES" : "NET POSITION VS ITS 52-WEEK RANGE", theme::mono(8, QFont::Normal, 0.6), theme::map(0x7c, 0x7a, 0x70));
   const auto cats = readCats(m_h);
+  // phone: the range block starts under the texts (oy shifts its rows from their reference y under the title bar)
+  const qreal oy = phone ? y + 10 - kHead : 0;
+  const qreal endY = phone ? kHead + 32 + cats.size() * 21.5 + oy + 8 : y;
+  if (const int need = int(std::ceil(endY + 10)); need != m_needed) { m_needed = need; emit neededHeightChanged(); }
+  // right column: net position vs its 52-week range
+  const qreal rx = phone ? 9 : width() * 0.53, rr = width() - 9;
+  text(p, QRectF(rx, oy + kHead + 8, rr - rx, 14), Qt::AlignVCenter | Qt::AlignLeft,
+       m_lang == 1 ? "POSITION NETTE DANS SA FOURCHETTE 52 SEMAINES" : "NET POSITION VS ITS 52-WEEK RANGE", theme::mono(8, QFont::Normal, 0.6), theme::map(0x7c, 0x7a, 0x70));
   const qreal tx0 = rr - (rr - rx) * 0.33, tx1 = rr;
   for (int k = 0; k < cats.size(); ++k) {
-    const qreal cy = kHead + 32 + k * 21.5;
+    const qreal cy = oy + kHead + 32 + k * 21.5;
     text(p, QRectF(rx, cy - 9, tx0 - rx, 18), Qt::AlignVCenter | Qt::AlignLeft, cats[k].label, theme::condensed(13, QFont::Medium), theme::map(0x8b, 0x88, 0x81));
     text(p, QRectF(rx, cy - 9, tx0 - rx - 10, 18), Qt::AlignVCenter | Qt::AlignRight, fmt::signedNum(cats[k].net, 0), theme::mono(12, QFont::Medium),
          cats[k].net < 0 ? theme::map(0xe8, 0x62, 0x60) : theme::map(0x3a, 0xcf, 0xe6));
@@ -652,7 +713,7 @@ void ReadPanel::paintEvent(QPaintEvent*) {
       p.setBrush(hot ? theme::map(0xef, 0xdd, 0x7c) : theme::map(0xe5, 0xe5, 0xe6)); p.drawRoundedRect(QRectF(x - 2, cy - 7, 4, 14), 1.5, 1.5);
     }
   }
-  const qreal fy = kHead + 32 + cats.size() * 21.5;
+  const qreal fy = oy + kHead + 32 + cats.size() * 21.5;
   const QFont ff = theme::mono(8, QFont::Normal, 0.4);
   text(p, QRectF(rx, fy - 6, 200, 14), Qt::AlignVCenter | Qt::AlignLeft, m_lang == 1 ? "BAS 52 SEM." : "52-WEEK LOW", ff, theme::map(0x3c, 0x3a, 0x33));
   text(p, QRectF(rx, fy - 6, rr - rx, 14), Qt::AlignVCenter | Qt::AlignRight, m_lang == 1 ? "HAUT 52 SEM." : "52-WEEK HIGH", ff, theme::map(0x3c, 0x3a, 0x33));

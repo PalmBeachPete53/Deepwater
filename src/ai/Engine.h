@@ -4,7 +4,7 @@
 #include <QDateTime>
 #include <QVector>
 #include <QJsonObject>
-#include <QProcess>
+#include "core/Process.h"
 #include "ai/Tools.h"
 
 // Runs the model of one AI › Agents environment: one deepwater-llm process per lit cube (helpers/llm), started inside
@@ -59,24 +59,45 @@ public:
   void clear();                       // empties the conversation
   bool isClaude() const;              // the environment holds the Claude Code integration
   bool pending() const { return m_pending; }   // a question waits for the model to load (cancel() forgets it)
+  QString questionId() const { return m_questionId; }   // the question being (or last) answered, in the journal
+  void freshContext() { syncClock(true); }   // the next question starts afresh (a "clock" line, a new Claude session)
+  // A message of the app's own in the conversation ("report": an evaluation's report, ai::Evaluation): shown in the
+  // chat, never sent to the model.
+  void appendNote(const QString& role, const QString& text);
 
   // Claude Code's tool calls arrive through ai::McpServer: toolGate() says why a call is refused (empty = go on, and
   // counts it), recordTool() adds the call and its result to the conversation and the journal.
   QString toolGate();
   void recordTool(const QJsonObject& call, const ToolResult& r);
+  // The tool call running now for this environment (empty when none) and since when: AI › Agents' activity panel.
+  void beginTool(const QJsonObject& call);
+  QJsonObject activeTool() const { return m_activeTool; }
+  QDateTime activeToolSince() const { return m_activeSince; }
 
 signals:
   void stateChanged();
   void messagesChanged();             // a message was added or removed
   void textArrived();                 // the last message grew (streaming)
+  void toolActivity();                // a tool call began or ended
 
 private:
   void onStdout();
-  void onFinished(int code, QProcess::ExitStatus st);
+  void onFinished(int code, dw::Process::ExitStatus st);
   void setState(State s, const QString& err = {});
   void sendPending();
   void runTools();                    // the last answer asked for tools: run them, then let the model go on
+  // The replayable journal, <env>/tool-journal.jsonl (step 7 of the roadmap, 2026-11-20): one line per question
+  // ("question": its fingerprint and text, the system prompt's fingerprint, the skills, the evaluation clock, the app's
+  // version), per tool call ("tool": arguments, the exact result's fingerprint, its clock class, how long it took) and
+  // per answer ("answer": its fingerprint, the model and its version), all tied by question_id. tools/replay_journal.py
+  // calls the tools again at the same clock and checks the fingerprints.
   void journal(const QJsonObject& call, bool ok, const QString& result);
+  void journalLine(QJsonObject o);
+  void journalQuestion(const QString& question);
+  void journalAnswer(const QString& reason);
+  QString m_questionId;
+  int m_questionCalls = 0;
+  void syncClock(bool force = false);   // a new context when the evaluation clock changed, or when forced (Engine.cpp)
   static constexpr int kMaxRounds = 6;
   int m_round = 0, m_failedRounds = 0;
   bool m_cancelTools = false;
@@ -88,21 +109,24 @@ private:
   // Claude Code
   void runClaude(bool freshSession = false);
   void onClaudeLine(const QJsonObject& j);
-  void onClaudeFinished(int code, QProcess::ExitStatus st);
+  void onClaudeFinished(int code, dw::Process::ExitStatus st);
   QString claudeSystemPrompt() const;
   QString claudeSession(bool* used) const;     // the conversation's Claude Code session id (created on demand)
   void setClaudeSession(const QString& id, bool used);
-  QProcess* m_cc = nullptr;
+  dw::Process* m_cc = nullptr;
   QByteArray m_ccBuf, m_ccErr;
   bool m_ccThinking = false, m_ccResult = false, m_ccRetried = false, m_ccStopped = false;
   int m_ccCalls = 0;
+  QJsonObject m_activeTool;
+  QDateTime m_activeSince;
+  void endTool();
   static constexpr int kMaxClaudeCalls = 20;   // tool calls per question
 
   int m_index;
-  QProcess* m_proc = nullptr;
-  QList<QProcess*> m_exiting;         // stopped processes still exiting (a model freeing its memory)
+  dw::Process* m_proc = nullptr;
+  QList<dw::Process*> m_exiting;         // stopped processes still exiting (a model freeing its memory)
   bool m_startWhenFree = false;       // start() waits for m_exiting to empty before loading a model
-  void retire(QProcess* p, bool wait);
+  void retire(dw::Process* p, bool wait);
   State m_state = State::Off;
   QString m_error, m_device, m_modelFile, m_modelPath;
   int m_ctx = 0, m_reqId = 0;

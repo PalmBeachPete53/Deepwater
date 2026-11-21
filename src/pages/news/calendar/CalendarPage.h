@@ -7,6 +7,8 @@
 class QLineEdit;
 class QVariantAnimation;
 
+namespace global { class PageScroll; }
+
 namespace news::pages {
 class CalendarTable;
 class RangePanel;
@@ -32,11 +34,16 @@ private:
   void openPanel(const news::Event& e, int col);
   void closePanel();
   void layoutChildren();
+  // Phones (ui::compact) and short windows (a phone held sideways): the filters, the whole table and the footer
+  // scroll as one page (finger scrolling needs a scroll area); the range panel still slides over it.
+  void setScrollMode(bool on);
+  int layoutScroll(int w, int viewportH);
   void applyHooks();
 
   QDate m_week;
   QList<news::Event> m_all;
   QWidget* m_left;
+  global::PageScroll* m_pageScroll = nullptr;   // only in scroll mode (it then holds m_left)
   CalendarFilters* m_filters;
   CalendarTable* m_table;
   NewsFooter* m_footer;

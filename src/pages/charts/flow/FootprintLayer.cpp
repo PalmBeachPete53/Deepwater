@@ -105,6 +105,21 @@ void FootprintLayer::draw(QPainter& p, const QSize& size, const ::charts::plot::
     if (autoRows) g = pickGroup(pxPerTick, 4, 3, 10, lastGColour_);
     if (pxPerTick * double(g) < 1.5) return;
   } else return;
+  // bars from the stored history have levels of one basis point: rows never finer (a 1-2-5 step at least that tall)
+  {
+    const int from = std::max(0, clampToInt(std::floor(range->from))), to = std::min(n - 1, clampToInt(std::ceil(range->to), -1));
+    bool stored = false;
+    for (int i = from; i <= to && !stored; ++i) stored = feed_->fromArchive(bars[i].time);
+    if (const int64_t lv = stored ? feed_->archiveMinGroup(*midPrice) : 0; lv > g) {
+      int64_t m = 1;
+      for (;; m *= 10) {
+        if (m >= lv) { g = m; break; }
+        if (2 * m >= lv) { g = 2 * m; break; }
+        if (5 * m >= lv) { g = 5 * m; break; }
+      }
+      if (pxPerTick * double(g) < 1.5) return;
+    }
+  }
   lastG_ = g;
   detail_ = detail;
   const bool numbers = detail == Detail::Numbers;

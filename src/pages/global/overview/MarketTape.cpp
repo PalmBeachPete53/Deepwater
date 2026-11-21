@@ -71,7 +71,9 @@ void MarketTape::resizeEvent(QResizeEvent* e) {
   update();
 }
 
-qreal MarketTape::clocksLeft() const { return width() - 277; }
+// a phone upright: no session clocks (the quotes take the whole bar; Market Hours has the sessions)
+bool MarketTape::showClocks() const { return width() >= 600; }
+qreal MarketTape::clocksLeft() const { return showClocks() ? width() - 277 : width(); }
 QRectF MarketTape::scrollRect() const { return QRectF(64, 1, clocksLeft() - 64 - 8, height() - 2); }
 
 void MarketTape::rebuildStrip() {
@@ -184,6 +186,7 @@ void MarketTape::paintEvent(QPaintEvent* e) {
   look::text(p, lp.left() + 16, lp.center().y() + 4.5, QCoreApplication::translate("global", "LIVE"), theme::mono(12, QFont::Bold), theme::onAccent());
 
   // session clocks: New York, London, Tokyo, Sydney
+  if (!showClocks()) return;
   const auto& ss = global::sessions();
   const int order[4] = {3, 2, 1, 0};
   const qreal xs[4] = {0, 78, 143, 207};

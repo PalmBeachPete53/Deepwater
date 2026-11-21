@@ -1,4 +1,6 @@
 #include "ai/Engine.h"
+#include "ai/Blind.h"
+#include <QCryptographicHash>
 #include "ai/ClaudeTranscripts.h"
 #include "core/Paths.h"
 #include "ai/ModelHub.h"
@@ -85,8 +87,41 @@ QString stateLabel(Engine::State s) {
   return {};
 }
 
-Engine::Engine(int index, QObject* parent) : QObject(parent), m_index(index) { load(); }
+Engine::Engine(int index, QObject* parent) : QObject(parent), m_index(index) {
+  load();
+  // The evaluation clock changed (on, off, another date): what the model read before must not follow it, or a
+  // conversation begun in the present would carry the future into the evaluation. A "clock" message marks the change;
+  // the model starts afresh after it (a new Claude Code session; a local model is sent only the messages after it).
+  connect(&Slots::instance(), &Slots::asOfChanged, this, [this](int i) {
+    if (i != m_index) return;
+    if (m_state == State::Busy || m_pending) cancel();
+    syncClock();
+  });
+}
+
+// The clock the conversation was held under (the last "clock" message's, 0 = the present) against the environment's
+// now: when they differ, a "clock" message and a new Claude Code session. Also called at each question, so that it holds
+// whatever the order in which the clock and this engine were set up.
+void Engine::syncClock(bool force) {
+  const qint64 now = Slots::instance().asOf(m_index);
+  const double blindNow = now > 0 ? double(Slots::instance().blindSeed(m_index)) : 0;   // blind or named: what it saw differs
+  qint64 held = 0;
+  double heldBlind = 0;
+  for (const auto& m : m_messages)
+    if (m.role == "clock") { held = qint64(m.stats.value("as_of").toDouble()); heldBlind = m.stats.value("blind").toDouble(); }
+  if (!force && held == now && heldBlind == blindNow) return;
+  setClaudeSession(QUuid::createUuid().toString(QUuid::WithoutBraces), false);
+  m_messages.append({"clock", {}, {}, QDateTime::currentDateTime(), QJsonObject{{"as_of", double(now)}, {"blind", blindNow}}});
+  save();
+  emit messagesChanged();
+}
 Engine::~Engine() { stop(true); }
+
+void Engine::appendNote(const QString& role, const QString& text) {
+  m_messages.append({role, text, {}, QDateTime::currentDateTime(), {}});
+  save();
+  emit messagesChanged();
+}
 
 void Engine::setState(State s, const QString& err) {
   if (s == State::Failed) m_pending = false;   // nothing will answer it; ask() takes a new question again
@@ -170,16 +205,16 @@ void Engine::start() {
   if (helper.isEmpty()) { setState(State::Failed, QCoreApplication::translate("ai", "The model runner (deepwater-llm) is missing from the app.")); return; }
   QDir().mkpath(Slots::instance().folder(m_index));
 
-  m_proc = new QProcess(this);
+  m_proc = new dw::Process(this);
   m_buf.clear(); m_err.clear(); m_device.clear(); m_ctx = 0;
-  connect(m_proc, &QProcess::readyReadStandardOutput, this, &Engine::onStdout);
-  connect(m_proc, &QProcess::readyReadStandardError, this, [this] {
+  connect(m_proc, &dw::Process::readyReadStandardOutput, this, &Engine::onStdout);
+  connect(m_proc, &dw::Process::readyReadStandardError, this, [this] {
     m_err += m_proc->readAllStandardError();
     if (m_err.size() > 8192) m_err = m_err.right(8192);
   });
-  connect(m_proc, &QProcess::finished, this, &Engine::onFinished);
-  connect(m_proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
-    if (e == QProcess::FailedToStart) setState(State::Failed, QCoreApplication::translate("ai", "The model runner could not start."));
+  connect(m_proc, &dw::Process::finished, this, &Engine::onFinished);
+  connect(m_proc, &dw::Process::errorOccurred, this, [this](dw::Process::ProcessError e) {
+    if (e == dw::Process::FailedToStart) setState(State::Failed, QCoreApplication::translate("ai", "The model runner could not start."));
   });
   m_proc->setWorkingDirectory(Slots::instance().folder(m_index));
   // a clean environment, as the ML trainer gets: the app's own may hold tokens or settings a model has no use for
@@ -201,30 +236,30 @@ void Engine::start() {
 // A stopped process exits on its own (the helper when its input closes, `claude` on SIGTERM); it is killed if it is
 // still there after 1.5 s. Waiting for that on the GUI thread froze the app up to 2.5 s on EJECT while the helper freed
 // a multi-GB model: only the app's quit still waits.
-void Engine::retire(QProcess* p, bool wait) {
+void Engine::retire(dw::Process* p, bool wait) {
   if (wait) {
     if (!p->waitForFinished(1500)) { p->kill(); p->waitForFinished(1000); }
     p->deleteLater();
     return;
   }
-  if (p->state() == QProcess::NotRunning) { p->deleteLater(); return; }
+  if (p->state() == dw::Process::NotRunning) { p->deleteLater(); return; }
   m_exiting << p;
-  connect(p, &QProcess::finished, this, [this, p] {
+  connect(p, &dw::Process::finished, this, [this, p] {
     m_exiting.removeAll(p);
     p->deleteLater();
     if (m_exiting.isEmpty() && m_startWhenFree) { m_startWhenFree = false; start(); }
   });
-  QTimer::singleShot(1500, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
+  QTimer::singleShot(1500, p, [p] { if (p->state() != dw::Process::NotRunning) p->kill(); });
 }
 
 void Engine::stop(bool wait) {
   ++m_gen;   // a tool round of the process that ends here must not go on with the next one
   m_pending = false;
   m_startWhenFree = false;
-  if (wait) for (QProcess* p : std::as_const(m_exiting)) { p->disconnect(this); retire(p, true); }
+  if (wait) for (dw::Process* p : std::as_const(m_exiting)) { p->disconnect(this); retire(p, true); }
   if (wait) m_exiting.clear();
   if (m_cc) {
-    QProcess* p = m_cc;
+    dw::Process* p = m_cc;
     m_cc = nullptr;
     p->disconnect(this);
     p->terminate();
@@ -235,7 +270,7 @@ void Engine::stop(bool wait) {
     return;
   }
   if (!m_proc) { if (m_state != State::Off) setState(State::Off); return; }
-  QProcess* p = m_proc;
+  dw::Process* p = m_proc;
   m_proc = nullptr;
   p->disconnect(this);
   p->closeWriteChannel();            // the helper exits when its input closes
@@ -245,7 +280,7 @@ void Engine::stop(bool wait) {
   setState(State::Off);
 }
 
-void Engine::onFinished(int code, QProcess::ExitStatus st) {
+void Engine::onFinished(int code, dw::Process::ExitStatus st) {
   if (!m_proc) return;
   m_proc->deleteLater();
   m_proc = nullptr;
@@ -254,7 +289,7 @@ void Engine::onFinished(int code, QProcess::ExitStatus st) {
   QString why = m_error;
   if (why.isEmpty()) {
     const QString tail = QString::fromUtf8(m_err).trimmed().section('\n', -3);
-    why = st == QProcess::CrashExit ? QCoreApplication::translate("ai", "The model runner stopped unexpectedly.")
+    why = st == dw::Process::CrashExit ? QCoreApplication::translate("ai", "The model runner stopped unexpectedly.")
                                     : QCoreApplication::translate("ai", "The model runner exited (code %1).").arg(code);
     if (!tail.isEmpty()) why += "\n" + tail;
   }
@@ -310,20 +345,56 @@ void Engine::onStdout() {
         runTools();
         continue;
       }
+      journalAnswer(reason);
       setState(State::Ready);
     }
   }
 }
 
-void Engine::journal(const QJsonObject& call, bool ok, const QString& result) {
+// the fingerprint of a text as the journal keeps it: SHA-256 of its UTF-8, the first 16 hex digits (replay_journal.py: same)
+static QString fingerprint16(const QString& text) {
+  return QString::fromLatin1(QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
+}
+
+void Engine::journalLine(QJsonObject o) {
   const QString path = Slots::instance().folder(m_index) + "/tool-journal.jsonl";
   paths::dropLink(path);   // an append follows a link (one left by an older runner that could write here)
   QFile f(path);
   if (!f.open(QIODevice::Append)) return;
-  QJsonObject o{{"at", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}, {"model", m_modelFile},
-                {"tool", call.value("name").toString()}, {"arguments", call.value("arguments")}, {"ok", ok},
-                {"result_chars", result.size()}};
+  o.insert("at", QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+  o.insert("question_id", m_questionId);
   f.write(QJsonDocument(o).toJson(QJsonDocument::Compact) + "\n");
+}
+
+void Engine::journalQuestion(const QString& question) {
+  m_questionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  m_questionCalls = 0;
+  const QString prompt = isClaude() ? claudeSystemPrompt() : systemPrompt();
+  journalLine({{"kind", "question"}, {"model", Slots::instance().slot(m_index).displayName()}, {"question", question.left(4000)},
+               {"question_sha", fingerprint16(question)}, {"system_prompt_sha", fingerprint16(prompt)},
+               {"skills", QJsonArray::fromStringList(Slots::instance().skills(m_index))},
+               {"as_of", double(Slots::instance().asOf(m_index))}, {"app_version", QCoreApplication::applicationVersion()}});
+}
+
+void Engine::journalAnswer(const QString& reason) {
+  if (m_questionId.isEmpty()) return;
+  QString text;
+  for (int i = int(m_messages.size()) - 1; i >= 0 && m_messages[i].role != "user"; --i)
+    if (m_messages[i].role == "assistant") text.prepend(m_messages[i].text);
+  journalLine({{"kind", "answer"}, {"model", m_modelFile}, {"device", m_device}, {"reason", reason},
+               {"answer_sha", fingerprint16(text)}, {"answer_chars", text.size()}, {"tool_calls", m_questionCalls}});
+}
+
+void Engine::journal(const QJsonObject& call, bool ok, const QString& result) {
+  const ToolDef* t = Tools::instance().find(call.value("name").toString());
+  ++m_questionCalls;
+  journalLine({{"kind", "tool"}, {"model", m_modelFile}, {"tool", call.value("name").toString()}, {"arguments", call.value("arguments")},
+               {"ok", ok}, {"result_chars", result.size()}, {"result_sha", fingerprint16(result)},
+               {"as_of", double(Slots::instance().asOf(m_index))},
+               {"clock", !t ? "unknown" : t->clock == Clock::AsOf ? "asof" : t->clock == Clock::Timeless ? "timeless" : "live"},
+               {"blind", maskFor(m_index).on},
+               {"external", t && t->external},
+               {"ms", m_activeSince.isValid() ? double(m_activeSince.msecsTo(QDateTime::currentDateTime())) : 0.0}});
 }
 
 void Engine::runTools() {
@@ -363,7 +434,10 @@ void Engine::runTools() {
     const QJsonObject call = queue->takeFirst();
     const QString name = call.value("name").toString();
     const ToolDef* tool = Tools::instance().find(name);
-    auto finish = [this, call, anyOk, next, gen](const ToolResult& r) {
+    const blind::Mask mask = maskFor(m_index);   // blind trials: masked both ways (ai/Blind.h)
+    auto finish = [this, call, anyOk, next, gen, mask](const ToolResult& r0) {
+      const ToolResult r{r0.ok, blind::out(mask, r0.text)};
+      endTool();
       if (gen != m_gen) { journal(call, r.ok, r.text); return; }   // the call ran: journaled, but its round is over
       ChatMessage m{"tool", r.text, {}, QDateTime::currentDateTime(), {}, call, r.ok};
       m_messages.append(m);
@@ -378,18 +452,38 @@ void Engine::runTools() {
                                     : "error: there is no tool named \"" + name + "\""});
     else if (!Slots::instance().hasSkill(m_index, tool->skill))   // checked again at the call, not only in the prompt
       finish({false, "refused: this environment does not grant the skill \"" + tool->skill + "\" any more"});
+    else if (const QString why = clockGate(*tool, Slots::instance().asOf(m_index)); !why.isEmpty())   // the evaluation clock
+      finish({false, why});
     else {
       auto once = std::make_shared<bool>(false);
-      auto guarded = [finish, once](const ToolResult& r) { if (*once) return; *once = true; finish(r); };
+      auto guarded = [finish, once, tool](const ToolResult& r) {
+        if (*once) return;
+        *once = true;
+        finish({r.ok, r.ok ? wrapExternal(*tool, r.text) : r.text});   // third parties' text marked as data
+      };
       const int ms = tool->timeoutMs;
       QTimer::singleShot(ms, this, [guarded, ms] {
         guarded({false, QString("error: the data did not arrive within %1 s").arg(ms / 1000)});
       });
-      currentCaller() = ToolCaller{m_index, m_modelFile};
-      tool->run(call.value("arguments").toObject(), guarded);
+      currentCaller() = ToolCaller{m_index, m_modelFile, Slots::instance().asOf(m_index)};
+      beginTool(call);
+      tool->run(blind::in(mask, call.value("arguments").toObject()), guarded);
     }
   };
   (*next)();
+}
+
+// "Today is …", or in evaluation mode the moment the tools answer as of (the model is told; the tools enforce it)
+static QString todayLine(int env) {
+  const qint64 asOf = Slots::instance().asOf(env);
+  if (asOf <= 0) return "Today is " + QDate::currentDate().toString(Qt::ISODate) + ".";
+  if (const blind::Mask m = maskFor(env); m.on)
+    return "EVALUATION MODE, BLIND: the date is " + blind::shiftDate(m, asOf) + " UTC. The market is called " + blind::alias(m) +
+           "; its name, the dates and its price level are masked on purpose. Every tool answers as of that moment and refuses "
+           "anything later; the tools that only know the present are off. Reason only from what the tools give you.";
+  return "EVALUATION MODE: the date is " + asOfStamp(asOf) + ". Every tool answers as of that moment and refuses anything "
+         "later; the tools that only know the present are off. Reason only from what the tools give you: do not use anything "
+         "you may remember about markets or events after that date.";
 }
 
 QString Engine::systemPrompt() const {
@@ -405,26 +499,28 @@ QString Engine::systemPrompt() const {
                    "but ONLY through the tools below: you do not know any current price, figure, date of release or news "
                    "until a tool result gives it to you. Rules: call a tool before answering any question about markets, "
                    "news, the economy or positioning; quote figures exactly as the tool results give them, with their time; "
-                   "never invent or estimate a missing figure: say what you could not read. Today is %2. Answer in the "
+                   "never invent or estimate a missing figure: say what you could not read. " + QString(kExternalRule) + " %2 Answer in the "
                    "language of the user's message (the app is set to %3).\n\n"
                    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
                    "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n%4\n</tools>\n\n"
                    "For each function call, return a json object with function name and arguments within "
                    "<tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>")
-        .arg(m_index + 1).arg(QDate::currentDate().toString(Qt::ISODate), lang, sigs.join("\n"));
+        .arg(m_index + 1).arg(todayLine(m_index), lang, sigs.join("\n"));
   }
   return QString("You are a local AI model running offline inside Deepwater, a trading terminal, in isolated environment %1. "
                  "You have no internet access and no access to Deepwater's data, market prices, news or the user's files, "
                  "and you have no tools. Never make up prices, figures, news or events: when asked for them, say you cannot "
-                 "see them. Today is %2. Answer in the language of the user's message (the app is set to %3).")
-      .arg(m_index + 1).arg(QDate::currentDate().toString(Qt::ISODate), lang);
+                 "see them. %2 Answer in the language of the user's message (the app is set to %3).")
+      .arg(m_index + 1).arg(todayLine(m_index), lang);
 }
 
 bool Engine::ask(const QString& text) {
   if (text.trimmed().isEmpty() || m_state == State::Busy || m_pending) return false;
   if (Slots::instance().slot(m_index).isEmpty()) return false;
   trimConversation(m_messages);   // between two questions: no answer or tool round is under way
+  syncClock();                    // the evaluation clock changed since the last question: start afresh
   m_messages.append({"user", text.trimmed(), {}, QDateTime::currentDateTime(), {}});
+  journalQuestion(text.trimmed());
   m_round = 0; m_failedRounds = 0; m_cancelTools = false;
   ++m_gen;
   emit messagesChanged();
@@ -442,7 +538,10 @@ void Engine::sendPending() {
   QJsonArray msgs{QJsonObject{{"role", "system"}, {"content", systemPrompt()}}};
   QString responses;   // consecutive tool results go back as one user turn of <tool_response> blocks (Qwen / Hermes)
   auto flush = [&] { if (!responses.isEmpty()) { msgs.append(QJsonObject{{"role", "user"}, {"content", responses.trimmed()}}); responses.clear(); } };
-  for (const auto& m : m_messages) {
+  int from = 0;   // after the last change of the evaluation clock: nothing read before it is sent
+  for (int i = 0; i < m_messages.size(); ++i) if (m_messages[i].role == "clock") from = i + 1;
+  for (const auto& m : m_messages.mid(from)) {
+    if (m.role == "report") continue;   // the app's own notes are not the model's conversation
     if (m.role == "tool") {
       if (m.call.value("name").toString() == "—") continue;   // the app's own stop notes
       responses += "<tool_response>\n" + QString::fromUtf8(QJsonDocument(QJsonObject{
@@ -536,9 +635,9 @@ QString Engine::claudeSystemPrompt() const {
                  "you cannot see any Deepwater data. You do not know any current price, figure, release or news until a tool "
                  "result gives it to you. Rules: call a tool before answering any question about markets, news, the economy or "
                  "positioning; quote figures exactly as the tool results give them, with their time; never invent or estimate a "
-                 "missing figure: say what you could not read. Today is %2. Answer in the language of the user's message (the "
+                 "missing figure: say what you could not read. " + QString(kExternalRule) + " %2 Answer in the language of the user's message (the "
                  "app is set to %3), concisely, in Markdown.")
-      .arg(m_index + 1).arg(QDate::currentDate().toString(Qt::ISODate), lang);
+      .arg(m_index + 1).arg(todayLine(m_index), lang);
 }
 
 void Engine::runClaude(bool freshSession) {
@@ -571,7 +670,7 @@ void Engine::runClaude(bool freshSession) {
   if (!claudecode::model().isEmpty()) args << "--model" << claudecode::model();
   if (!claudecode::effort().isEmpty()) args << "--effort" << claudecode::effort();
 
-  m_cc = new QProcess(this);
+  m_cc = new dw::Process(this);
   m_ccBuf.clear(); m_ccErr.clear();
   m_ccThinking = false; m_ccResult = false; m_ccStopped = false; m_ccCalls = 0;
   if (!freshSession) m_ccRetried = false;
@@ -579,7 +678,7 @@ void Engine::runClaude(bool freshSession) {
   env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
   m_cc->setProcessEnvironment(env);
   m_cc->setWorkingDirectory(Slots::instance().folder(m_index));
-  connect(m_cc, &QProcess::readyReadStandardOutput, this, [this] {
+  connect(m_cc, &dw::Process::readyReadStandardOutput, this, [this] {
     m_ccBuf += m_cc->readAllStandardOutput();
     if (m_ccBuf.size() > (8 << 20) && m_ccBuf.indexOf('\n') < 0) {   // one JSON event per line: 8 MB without one is broken
       m_ccBuf.clear();
@@ -594,13 +693,13 @@ void Engine::runClaude(bool freshSession) {
       if (!j.isEmpty()) onClaudeLine(j);
     }
   });
-  connect(m_cc, &QProcess::readyReadStandardError, this, [this] {
+  connect(m_cc, &dw::Process::readyReadStandardError, this, [this] {
     m_ccErr += m_cc->readAllStandardError();
     if (m_ccErr.size() > 8192) m_ccErr = m_ccErr.right(8192);
   });
-  connect(m_cc, &QProcess::finished, this, &Engine::onClaudeFinished);
-  connect(m_cc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
-    if (e != QProcess::FailedToStart || !m_cc) return;
+  connect(m_cc, &dw::Process::finished, this, &Engine::onClaudeFinished);
+  connect(m_cc, &dw::Process::errorOccurred, this, [this](dw::Process::ProcessError e) {
+    if (e != dw::Process::FailedToStart || !m_cc) return;
     m_cc->deleteLater(); m_cc = nullptr;
     setState(State::Failed, QCoreApplication::translate("ai", "Claude Code could not start."));
   });
@@ -672,7 +771,7 @@ void Engine::onClaudeLine(const QJsonObject& j) {
   }
 }
 
-void Engine::onClaudeFinished(int code, QProcess::ExitStatus st) {
+void Engine::onClaudeFinished(int code, dw::Process::ExitStatus st) {
   if (!m_cc) return;
   m_cc->deleteLater();
   m_cc = nullptr;
@@ -691,8 +790,9 @@ void Engine::onClaudeFinished(int code, QProcess::ExitStatus st) {
   }
   save();
   emit textArrived();
+  journalAnswer(m_ccResult ? "eog" : m_ccStopped ? "stopped" : "error");
   if (m_ccResult || m_ccStopped) { setState(State::Ready); return; }
-  QString why = st == QProcess::CrashExit ? QCoreApplication::translate("ai", "Claude Code stopped unexpectedly.")
+  QString why = st == dw::Process::CrashExit ? QCoreApplication::translate("ai", "Claude Code stopped unexpectedly.")
                                           : QCoreApplication::translate("ai", "Claude Code exited (code %1).").arg(code);
   const QString tail = err.section('\n', -3);
   if (!tail.isEmpty()) why += "\n" + tail;
@@ -706,7 +806,20 @@ QString Engine::toolGate() {
   return {};
 }
 
+void Engine::beginTool(const QJsonObject& call) {
+  m_activeTool = call;
+  m_activeSince = QDateTime::currentDateTime();
+  emit toolActivity();
+}
+
+void Engine::endTool() {
+  if (m_activeTool.isEmpty()) return;
+  m_activeTool = {};
+  emit toolActivity();
+}
+
 void Engine::recordTool(const QJsonObject& call, const ToolResult& r) {
+  endTool();
   if (!m_messages.isEmpty() && m_messages.last().role == "assistant") {
     ChatMessage& a = m_messages.last();   // the text written before the call is complete
     if (m_ccThinking) { a.text += "</think>\n"; m_ccThinking = false; }

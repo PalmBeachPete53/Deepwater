@@ -108,6 +108,14 @@ PairSpec specFromJson(const QJsonObject& o) {
   for (const auto& t : timeframes()) if (want.contains(t.seconds)) s.timeframes << t.seconds;
   s.start = qint64(o.value("start").toDouble(0));
   s.paused = o.value("paused").toBool();
+  const QJsonObject fp = o.value("footprint").toObject();
+  for (const char* v : {"spot", "perp"})   // in this order, known ones only
+    if (fp.value("venues").toArray().contains(QJsonValue(QString::fromLatin1(v)))) s.footprint << QString::fromLatin1(v);
+  s.footprintStart = qint64(fp.value("start").toDouble(0));
+  const QJsonObject perp = o.value("perp").toObject();
+  s.depth = perp.value("depth").toBool();
+  s.openInterest = perp.value("oi").toBool();
+  s.liveBook = o.value("liveBook").toBool();
   for (const QJsonValue& v : o.value("indicators").toArray()) {
     IndSpec i = indFromJson(v.toObject());
     if (!i.id.isEmpty()) s.indicators << i;
@@ -121,6 +129,15 @@ QJsonObject specToJson(const PairSpec& s) {
   for (const IndSpec& i : s.indicators) ind << indToJson(i);
   QJsonObject o{{"timeframes", tfs}, {"start", double(s.start)}, {"indicators", ind}};
   if (s.paused) o.insert("paused", true);
+  if (!s.footprint.isEmpty())
+    o.insert("footprint", QJsonObject{{"venues", QJsonArray::fromStringList(s.footprint)}, {"start", double(s.footprintStart)}});
+  if (s.depth || s.openInterest) {
+    QJsonObject perp;
+    if (s.depth) perp.insert("depth", true);
+    if (s.openInterest) perp.insert("oi", true);
+    o.insert("perp", perp);
+  }
+  if (s.liveBook) o.insert("liveBook", true);
   return o;
 }
 

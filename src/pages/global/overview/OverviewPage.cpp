@@ -10,6 +10,7 @@
 #include "positioning/RiskIndex.h"
 #include "macro/CentralBanks.h"
 #include "market/QuoteHub.h"
+#include "ui/Touch.h"
 #include <QDateTime>
 #include <QPainter>
 #include <QPaintEvent>
@@ -112,8 +113,21 @@ void OverviewPage::resizeEvent(QResizeEvent*) {
 //     the globe and the Asset Registry side by side (reached by scrolling).
 // Heights: at the reference height (966) exactly the reference; taller pages give the extra height mostly to
 // the Currency Strength chart and the globe; shorter ones shrink down to usable minimums, then scroll.
+//   phone upright (ui::compact): one column, every panel the full width at a fixed height, the page scrolls.
 int OverviewPage::layoutPanels(int W, int VH) {
   const int m = 8, g = 7, top = 7;               // 49 - 42
+  if (ui::compact(W)) {
+    const int w = W - 2 * m;
+    int y = top;
+    auto put = [&](QWidget* panel, int h) { panel->setGeometry(m, y, w, h); y += h + g; };
+    put(m_squawk, qBound(420, VH - 40, 620));
+    put(m_risk, 470);   // gauge above the year's history (RiskPanel stacks them)
+    put(m_strength, 420);
+    put(m_banks, 300);
+    put(m_globe, qBound(260, w * 3 / 4, 420));
+    put(m_registry, 420);
+    return y;
+  }
   const int H = VH + 42;                         // page height the reference proportions refer to
   const int extra = qMax(0, H - 966);
   const int short_ = qMax(0, 966 - H);

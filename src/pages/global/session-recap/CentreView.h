@@ -15,6 +15,11 @@ public:
   void setHoverX(int viewportX);   // test hook: crosshair at this x inside the chart
   int traced() const { return m_traced; }
   int timelineTop() const { return m_geo.timeline.top(); }
+  // Content height for a view `w` wide (lays the view out for that width): the phone page shows the whole file
+  // in its own scroll, so it sizes the view to its content.
+  int heightFor(int w) { relayout(w); return m_geo.height; }
+signals:
+  void heightChanged();   // the content height changed (new window, language, width)
 protected:
   void paintEvent(QPaintEvent*) override;
   void resizeEvent(QResizeEvent*) override;
@@ -24,6 +29,13 @@ protected:
 private:
   struct Geo {
     int w = 0;
+    bool phone = false;                       // narrow view (< 520 px): see relayout()
+    int dy = 0;                               // phone: the meta line wraps, everything under it moves down
+    int headExtra = 0;                        // phone: extra lines of the wrapped headline
+    int head = 0;                             // phone: rows of chips above the timeline's legend
+    bool gridTwoLines = false;                // MOVES OF THE WINDOW subtitle under the title
+    int gridSubLines = 1;                     // its lines when it wraps
+    QList<int> secTextX, secTextW, secTextDY, secPctW;
     QRect card, timeline, plot, grid;
     QList<int> secTop, secH, secX, secRight;   // sections flow in 1 column, or 2 on wide views
     int extra = 0;                            // extra timeline height on wide views
@@ -32,13 +44,14 @@ private:
     QList<QRect> cards;
     QRectF en, fr;
   };
-  void relayout();
+  void relayout(int width = -1);   // -1: the viewport's width
   void updateTimeline();   // repaint of the timeline card only (crosshair)
   void paintTitle(QPainter& p);
   void paintRead(QPainter& p);
   void paintTimeline(QPainter& p);
   void paintGrid(QPainter& p);
   QList<int> chipAssets() const;
+  QString gridSubtitle() const;
   QVector<QPointF> points(int asset, const QRectF& r, double lo, double hi) const;
   int hoverIndex() const;
   qreal xOf(qint64 t) const;

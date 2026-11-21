@@ -24,6 +24,9 @@ public:
   // short windows: the IMPACT segments move up beside the week navigator (one row less above the table)
   void setCompact(bool on);
   bool compact() const { return m_compact; }
+  // phones (narrow page): country chips wrap over full-width rows, finger-sized targets; the height follows the width
+  void setPhone(bool on);
+  int phoneHeight(int width) const;
 signals:
   void changed();
   void weekStep(int delta);
@@ -36,6 +39,7 @@ protected:
 private:
   struct Hit { QRectF r; int kind; QString id; };   // kind: 0 prev, 1 next, 2 chip, 3 more, 4 impact
   QList<Hit> hits() const;
+  QList<Hit> phoneHits(double W) const;
   QLineEdit* m_search;
   QDate m_week;
   QSet<QString> m_off;            // deselected currencies
@@ -44,6 +48,7 @@ private:
   int m_impact = 0;
   int m_hover = -1;
   bool m_compact = false;
+  bool m_phone = false;
   double impactX() const;         // left of the IMPACT label (10, or after the week navigator when compact)
   double impactY() const { return m_compact ? 49 : 116; }
 };

@@ -18,12 +18,16 @@ public:
   void setTitle(const QString& t) { m_title = t; update(); }
   void setSubtitle(const QString& s) { m_sub = s; update(); }
   void setRightText(const QString& html) { m_right = html; update(); }   // simple "dim|bright|dim" runs, see paint
+  // phone layout of the page (content under 520 px): set by the page before it sizes the panel; some panels are that
+  // narrow on a desktop too (the split panel is 486 px at 1600), so they never decide from their own width
+  void setPhone(bool on) { if (on != m_phone) { m_phone = on; update(); } }
 protected:
   void paintFrame(QPainter& p);
   bool event(QEvent* e) override;                 // header tooltip: full title + subtitle (they may be elided)
   virtual QString headerTip() const { return m_sub.isEmpty() ? QString() : m_title.trimmed() + "  " + m_sub; }
   static constexpr int kHead = 28;
   QString m_title, m_sub, m_right;
+  bool m_phone = false;
 };
 
 class PricePanel : public Panel {
@@ -93,6 +97,9 @@ private:
 class ReportTable : public Panel {
 public:
   ReportTable(QWidget* parent, bool second);
+  // phone (< 520 px): each category on two lines (name, then long / short positions and changes and the net), the
+  // %OI, traders and spread columns left out; panel height 66 + rows × kPhonePitch
+  static constexpr int kPhonePitch = 42;
   void setData(const positioning::CotHistory& h);
 protected:
   void paintEvent(QPaintEvent*) override;

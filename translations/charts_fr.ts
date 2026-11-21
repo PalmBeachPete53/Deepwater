@@ -1855,6 +1855,21 @@
         <translation>Probabilité de %1 que l&apos;avantage soit réel après %2 version%3 testée%3 (doit dépasser 0.95)</translation>
     </message>
     <message>
+        <location filename="../src/pages/charts/DataTextCore.cpp" line="0"/>
+        <source>%1 probability the edge is real after %2 tries on this data: %3 nearby settings and %4 other strategies (needs above 0.95)</source>
+        <translation>Probabilité de %1 que l&apos;avantage soit réel après %2 essais sur ces données : %3 réglages voisins et %4 autres stratégies (doit dépasser 0.95)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/charts/DataTextCore.cpp" line="0"/>
+        <source>%1% chance the best of the %2 strategies tried on this data is below average on unseen data (needs under 50%)</source>
+        <translation>%1 % de risque que la meilleure des %2 stratégies essayées sur ces données soit sous la moyenne sur des données inédites (doit être sous 50 %)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/charts/DataTextCore.cpp" line="0"/>
+        <source>Overfitting across tries (PBO)</source>
+        <translation>Surajustement entre essais (PBO)</translation>
+    </message>
+    <message>
         <location filename="../src/charts/core/Quant.cpp" line="498"/>
         <location filename="../src/pages/charts/DataTextCore.cpp" line="45"/>
         <source>%1% with double fees and %2% slippage a side%3 (needs above 0)</source>
@@ -3196,6 +3211,50 @@
         <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="453"/>
         <source>Saved &quot;%1&quot;.</source>
         <translation>« %1 » enregistrée.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="0"/>
+        <source>Trial registry: the first strategy tested on this market and timeframe.</source>
+        <translation>Registre d&apos;essais : première stratégie testée sur ce marché et cette unité de temps.</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="0"/>
+        <source>Trial registry: %n different strategies tested on this market and timeframe</source>
+        <translation>
+            <numerusform>Registre d&apos;essais : %n stratégie testée sur ce marché et cette unité de temps</numerusform>
+            <numerusform>Registre d&apos;essais : %n stratégies différentes testées sur ce marché et cette unité de temps</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="0"/>
+        <source>%n by you</source>
+        <translation>
+            <numerusform>%n par vous</numerusform>
+            <numerusform>%n par vous</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="0"/>
+        <source>%n by the agents</source>
+        <translation>
+            <numerusform>%n par les agents</numerusform>
+            <numerusform>%n par les agents</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="0"/>
+        <source>This one is the best: its deflated Sharpe after these tries is %1 (above 0.95 it is likely real).</source>
+        <translation>C&apos;est la meilleure : son Sharpe dégonflé après ces essais est de %1 (au-dessus de 0,95, l&apos;avantage est probablement réel).</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="0"/>
+        <source>The best one&apos;s deflated Sharpe after these tries is %1 (above 0.95 it is likely real).</source>
+        <translation>Le Sharpe dégonflé de la meilleure après ces essais est de %1 (au-dessus de 0,95, l&apos;avantage est probablement réel).</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="0"/>
+        <source>Every backtest, yours here and the agents&apos;, is written in the trial registry and never removed. Trying many strategies on the same data and keeping the best is how luck looks like an edge: the deflated Sharpe accounts for every try.</source>
+        <translation>Chaque backtest, les vôtres ici comme ceux des agents, est inscrit dans le registre d&apos;essais et n&apos;en est jamais retiré. Essayer beaucoup de stratégies sur les mêmes données et garder la meilleure, c&apos;est ainsi que la chance se fait passer pour un avantage : le Sharpe dégonflé tient compte de chaque essai.</translation>
     </message>
     <message>
         <location filename="../src/pages/charts/panels/bottom/Tester.cpp" line="462"/>
@@ -6214,6 +6273,14 @@
         <location filename="../src/pages/charts/ChartsApp.cpp" line="0"/>
         <source>Down</source>
         <translation>Baisse</translation>
+    </message>
+    <message>
+        <source>Footprint live from %1, stored history from %2 (1 bp levels)</source>
+        <translation>Footprint en direct depuis %1, historique stocké depuis le %2 (niveaux de 1 pb)</translation>
+    </message>
+    <message>
+        <source> · stored history from %1</source>
+        <translation> · historique stocké depuis le %1</translation>
     </message>
 </context>
 </TS>

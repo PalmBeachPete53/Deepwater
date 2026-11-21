@@ -1,4 +1,5 @@
 #include "net/Http.h"
+#include "core/Startup.h"
 #include "net/Sources.h"
 #include "core/Paths.h"
 #include <QNetworkAccessManager>
@@ -182,7 +183,7 @@ void warmTls() {
     QMetaObject::invokeMethod(qApp, [] { resumeAfterTls(); }, Qt::QueuedConnection);
   });
 }
-Q_COREAPP_STARTUP_FUNCTION(warmTls)
+DW_STARTUP_FUNCTION(warmTls)
 
 class Engine : public QObject {
 public:

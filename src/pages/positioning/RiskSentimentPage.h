@@ -15,8 +15,11 @@ public:
 protected:
   void showEvent(QShowEvent*) override;
   void hideEvent(QHideEvent*) override;
+  void resizeEvent(QResizeEvent*) override;
 private:
   void refresh();
+  void applyBadge();
+  QString m_badge = QStringLiteral("-");   // badge shown ("-": none set yet)
   pk::TitleBar* m_title;
   pk::Ticker* m_ticker;
   pk::Scroll* m_scroll;

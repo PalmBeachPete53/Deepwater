@@ -48,6 +48,7 @@ private:
   QString m_symbol, m_compareSymbol;
   int m_nYears = 20;
   bool m_outliers = false, m_actual = false, m_index = false, m_hooksDone = false;
+  bool m_phone = false;   // toolbar wrapped inside the scrolling content (phones, short windows)
   seasonality::Period m_period;
   QVector<seasonality::DailyClose> m_closes, m_compareCloses;
   QString m_compareError;   // why the compare symbol has no path (shown in the trend card's subtitle)

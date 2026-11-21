@@ -4,6 +4,7 @@
 #include "technicaldata/TechnicalDataIndicators.h"
 #include "technicaldata/TechnicalDataSpec.h"
 #include "technicaldata/Dukascopy.h"
+#include "technicaldata/OrderFlowFeatures.h"
 #include "technicaldata/TechnicalDataStore.h"
 #include <QSaveFile>
 #include <QThread>
@@ -293,6 +294,15 @@ QList<Dataset> listDatasets() {
   return out;
 }
 
+qint64 datasetAsOf(const QString& pathOrId) {
+  static const QRegularExpression re("-asof-(\\d{12})(?:\\.csv)?$");
+  const auto m = re.match(QFileInfo(pathOrId).fileName());
+  if (!m.hasMatch()) return 0;
+  QDateTime t = QDateTime::fromString(m.captured(1), "yyyyMMddHHmm");
+  t.setTimeZone(QTimeZone::UTC);
+  return t.isValid() ? t.toSecsSinceEpoch() : 0;
+}
+
 int datasetCount() { return int(QDir(datasetsDir()).entryList({"*.csv"}, QDir::Files).size()); }
 
 int snapTechnicalDataRows(int rows) {
@@ -344,7 +354,8 @@ QString DatasetSpec::id() const {
     case SourceKind::Cot: return "cot-" + snake(key);
     case SourceKind::TechnicalData:
       return "technical-data-" + snake(key) + "-" + interval.toLower() + "-" + QString::number(snapTechnicalDataRows(rows)) +
-             (keepWarm ? "-warm" : "");
+             (keepWarm ? "-warm" : "") + (orderFlow ? "-of" : "") +
+             (asOf > 0 ? "-asof-" + QDateTime::fromSecsSinceEpoch(asOf, QTimeZone::UTC).toString("yyyyMMddHHmm") : QString());
     case SourceKind::Csv: {
       const QString h = QString::fromLatin1(QCryptographicHash::hash(QFileInfo(key).absoluteFilePath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8));
       return "csv-" + snake(QFileInfo(key).completeBaseName()) + "-" + h;
@@ -425,7 +436,10 @@ Dataset marketTable(const DatasetSpec& spec, const QString& path) {
                                                   "left. Pick a shorter timeframe.").arg(s.count).arg(WARM));
   const int want = snapTechnicalDataRows(spec.rows);
   // the newest bars, one more for the first return; warm-up bars among them (a short series) are skipped
-  const QVector<Kline> bars = st.before(spec.key, tf, s.last + 1, want + 1);
+  // evaluation mode: the bars closed by the moment (t + tf <= asOf), nothing after
+  const qint64 lastOpen = spec.asOf > 0 ? std::min(s.last, spec.asOf - tf) : s.last;
+  if (lastOpen < s.first) return fail(QCoreApplication::translate("ai", "No bar of this timeframe had closed by the evaluation moment."));
+  const QVector<Kline> bars = st.before(spec.key, tf, lastOpen + 1, want + 1);
   // the pair's columns (IndRow::v order) on this timeframe; levels related to the close: BTCUSDT's as they were, the
   // others by how they follow the price (an average drawn on the price → % from it; an ATR → % of the close)
   const QVector<IndColumn> icol = columnsOf(pair);
@@ -449,6 +463,17 @@ Dataset marketTable(const DatasetSpec& spec, const QString& path) {
     if (isOverlay(icol[i].id)) { cols << ic[i] + "_dist"; relIdx << i; }
     else { cols << ic[i] + "_pct"; pctIdx << i; }
   }
+  // the order flow's columns, and only the bars they cover (OrderFlowFeatures.h)
+  std::unique_ptr<OrderFlowFeatures> flow;
+  if (spec.orderFlow) {
+    flow = std::make_unique<OrderFlowFeatures>(st, spec.key, tf);
+    if (!flow->available())
+      return fail(QCoreApplication::translate("ai", "This pair records no order flow (footprint, book depth or open interest) usable on this "
+                                                    "timeframe (1m to 1D; set it in Data › Technical data › SETTINGS)."));
+    cols << flow->columns();
+  }
+  std::vector<double> flowRow;
+  int uncovered = 0;
   QSaveFile f(path);
   if (!f.open(QIODevice::WriteOnly)) return fail(f.errorString());
   f.write(("date," + cols.join(',') + "\n").toUtf8());
@@ -463,6 +488,7 @@ Dataset marketTable(const DatasetSpec& spec, const QString& path) {
     for (int i = from; i < to; ++i) {
       const Kline& k = bars[i];
       if (k.t < warmEnd) continue;
+      if (flow && !flow->row(k.t, k.c, k.v, flowRow)) { ++uncovered; continue; }
       const Kline& p = bars[i - 1];
       QStringList cells{QDateTime::fromSecsSinceEpoch(k.t, QTimeZone::UTC).toString(intraday ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd")};
       cells << num(k.o) << num(k.h) << num(k.l) << num(k.c) << num(k.v);
@@ -475,6 +501,7 @@ Dataset marketTable(const DatasetSpec& spec, const QString& path) {
       for (int c : indIdx) cells << num(v(c));
       for (int c : relIdx) { const double x = v(c); cells << num(std::isfinite(x) && x > 0 ? (k.c / x - 1) * 100 : NAN); }
       for (int c : pctIdx) cells << num(k.c > 0 ? v(c) / k.c * 100 : NAN);
+      if (flow) for (double x : flowRow) cells << num(x);
       out += cells.join(',').toUtf8() + "\n";
       if (++written >= want) break;
     }
@@ -483,7 +510,14 @@ Dataset marketTable(const DatasetSpec& spec, const QString& path) {
   if (!f.commit()) return fail(f.errorString());
   QString source = (fx ? QStringLiteral("Dukascopy (bid)") : QStringLiteral("Binance")) + " · " + QCoreApplication::translate("ai", "indicators: Charts' engine");
   if (noInd) source += " · " + QCoreApplication::translate("ai", "%1 bars without indicators yet").arg(noInd);
-  return describe(path, binanceSymbol(spec.key) + " · " + spec.interval, source);
+  if (flow) {
+    if (written == 0)
+      return fail(QCoreApplication::translate("ai", "No bar of this timeframe is covered by the stored order flow yet (Data › Technical data)."));
+    source += " · " + QCoreApplication::translate("ai", "order flow: the %1 bars it covers (%2 others left out)").arg(written).arg(uncovered);
+  }
+  return describe(path, binanceSymbol(spec.key) + " · " + spec.interval +
+                            (spec.asOf > 0 ? " · as of " + QDateTime::fromSecsSinceEpoch(spec.asOf, QTimeZone::UTC).toString("yyyy-MM-dd HH:mm") : QString()),
+                  source);
 }
 }  // namespace
 

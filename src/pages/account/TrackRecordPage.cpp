@@ -8,6 +8,7 @@
 #include "app/Pages.h"
 #include "core/Settings.h"
 #include "ui/Format.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QMouseEvent>
@@ -52,7 +53,82 @@ QString TrToolbar::filtersText() { return QCoreApplication::translate("account",
 QString TrToolbar::logText() { return QCoreApplication::translate("account", "+ LOG TRADE"); }
 QString TrToolbar::importText() { return QCoreApplication::translate("account", "IMPORT TRADES"); }
 
+// widths of the toolbar's controls (shared by the one-band layout's fit test and the stacked layout)
+static qreal tabWidth(int i, int px = 12) {
+  return std::ceil(QFontMetricsF(mono(px, true, 1.9)).horizontalAdvance(TrToolbar::tabName(i)) + 24);
+}
+static qreal filtersWidth() { return std::max(87.0, std::ceil(QFontMetricsF(mono(11, false, 1.4)).horizontalAdvance(TrToolbar::filtersText()) + 32)); }
+static qreal logWidth() { return std::max(100.0, std::ceil(QFontMetricsF(mono(11, true, 1)).horizontalAdvance(TrToolbar::logText()) + 24)); }
+static qreal importWidth() { return std::max(134.0, std::ceil(QFontMetricsF(mono(11, true, 1.3)).horizontalAdvance(TrToolbar::importText()) + 37)); }
+
+int TrToolbar::stackRows(int w) const {
+  // the one-band toolbar fits when, with the last import dropped and the smallest year label, the account box keeps
+  // its 160 px minimum (below ~1000 px in French the year box slid under it); phones always stack
+  if (!ui::compact(w)) {
+    const qreal refW[3] = {106, 102, 169};
+    qreal tx = 10;
+    for (int i = 0; i < 3; ++i) tx += std::max(refW[i], tabWidth(i));
+    const qreal minLeft = tx + 6 + filtersWidth() + 12 + std::ceil(QFontMetricsF(mono(12, true)).horizontalAdvance(m_year) + 34) + 12;
+    const qreal accRight = w - 10 - logWidth() - 8;
+    if (accRight - minLeft >= 160) return 0;
+  }
+  qreal tabs = 0; for (int i = 0; i < 3; ++i) tabs += tabWidth(i);
+  return tabs + 6 + filtersWidth() + 12 + logWidth() + 8 + importWidth() + 20 <= w ? 2 : 3;
+}
+int TrToolbar::heightFor(int w) const {
+  const int rows = stackRows(w);
+  return rows == 0 ? kHeight : 8 + rows * (36 + 8);
+}
+
+// Stacked toolbar (phones, narrow windows), 36 px rows (finger targets):
+//  two rows   view tabs · FILTERS … LOG TRADE · IMPORT  /  account box … year
+//  three rows account box … year  /  view tabs over the full width  /  FILTERS … LOG TRADE · IMPORT
+TrToolbar::L TrToolbar::stackedLayout() const {
+  L l;
+  l.showImport = false;                      // the last import date stays in the account box's tooltip
+  const qreal W = width(), rowH = 36, gap = 8;
+  const qreal fw = filtersWidth();
+  qreal lw = logWidth(), iw = importWidth();
+  l.yearPx = 16;
+  const qreal yw = std::ceil(QFontMetricsF(mono(16, true)).horizontalAdvance(m_year) + 34);
+  if (stackRows(width()) == 2) {
+    qreal x = 10;
+    for (int i = 0; i < 3; ++i) { const qreal w = tabWidth(i); l.tabs[i] = QRectF(x, gap, w, rowH); x += w; }
+    l.filters = QRectF(x + 6, gap, fw, rowH);
+    l.import = QRectF(W - 10 - iw, gap, iw, rowH);
+    l.log = QRectF(l.import.left() - 8 - lw, gap, lw, rowH);
+    const qreal y2 = gap + rowH + gap;
+    l.year = QRectF(W - 10 - yw, y2, yw, rowH);
+    l.account = QRectF(10, y2, l.year.left() - 8 - 10, rowH);
+    return l;
+  }
+  l.year = QRectF(W - 10 - yw, gap, yw, rowH);
+  l.account = QRectF(10, gap, l.year.left() - 8 - 10, rowH);
+  // tabs share the width in proportion to their labels; labels too long for it step down to 10 px
+  const qreal avail = W - 20;
+  qreal tw[3], sum = 0;
+  for (int px : {12, 11, 10}) {
+    l.tabPx = px; sum = 0;
+    for (int i = 0; i < 3; ++i) { tw[i] = tabWidth(i, px) - 8; sum += tw[i]; }
+    if (sum <= avail) break;
+  }
+  qreal x = 10;
+  for (int i = 0; i < 3; ++i) {
+    const qreal w = sum <= avail ? tw[i] + (avail - sum) / 3 : tw[i] * avail / sum;
+    l.tabs[i] = QRectF(x, gap + rowH + gap, w, rowH); x += w;
+  }
+  const qreal y3 = gap + 2 * (rowH + gap);
+  l.filters = QRectF(10, y3, fw, rowH);
+  // very narrow phones: LOG TRADE and IMPORT share what FILTERS leaves
+  const qreal room = W - 10 - (l.filters.right() + 12) - 8;
+  if (lw + iw > room) { const qreal k = room / (lw + iw); lw *= k; iw *= k; }
+  l.import = QRectF(W - 10 - iw, y3, iw, rowH);
+  l.log = QRectF(l.import.left() - 8 - lw, y3, lw, rowH);
+  return l;
+}
+
 TrToolbar::L TrToolbar::layout() const {
+  if (stackRows(width())) return stackedLayout();
   L l;
   const qreal W = width();
   // tab widths of the reference (English); longer labels (French) widen their tab
@@ -135,7 +211,7 @@ void TrToolbar::paintEvent(QPaintEvent*) {
       p.fillRect(r.adjusted(1, 1, -1, -1), theme::map("#2a2605"));
       p.fillRect(QRectF(r.left() + 1, r.bottom() - 3, r.width() - 2, 2), k.label);
     }
-    p.setFont(mono(12, true, 1.9));
+    p.setFont(mono(l.tabPx, true, 1.9));
     p.setPen(on ? k.tabText : hov ? theme::map("#e8e4da") : k.dim);
     p.drawText(r.adjusted(0, -1, 0, -1), Qt::AlignCenter, tabName(i));
     if (on && m_focus == i && m_focusShown) {
@@ -290,6 +366,25 @@ void SmoothScroll::wheelEvent(QWheelEvent* e) {
 }
 
 // ================================================================ page
+namespace {
+// "No account / no trades" box: 660 px wide, buttons side by side; phones: the page width, buttons stacked (38 px)
+struct EmptyBox { QRectF box, imp, log; bool phone = false; };
+EmptyBox emptyBox(qreal w) {
+  EmptyBox e;
+  e.phone = ui::compact(int(w));
+  if (!e.phone) {
+    e.box = QRectF(w / 2.0 - 330, 60, 660, 250);
+    e.imp = QRectF(e.box.center().x() + 8, e.box.top() + 160, 170, 32);
+    e.log = QRectF(e.box.center().x() - 178, e.box.top() + 160, 170, 32);
+  } else {
+    e.box = QRectF(10, 20, w - 20, 340);
+    e.log = QRectF(e.box.left() + 20, e.box.top() + 190, e.box.width() - 40, 38);
+    e.imp = QRectF(e.box.left() + 20, e.box.top() + 238, e.box.width() - 40, 38);
+  }
+  return e;
+}
+}
+
 TrackRecordPage::TrackRecordPage(QWidget* parent) : QWidget(parent) {
   m_bar = new TrToolbar(this);
 
@@ -302,7 +397,8 @@ TrackRecordPage::TrackRecordPage(QWidget* parent) : QWidget(parent) {
   m_counter->setPaint([this](QPainter& p, const QRectF& r, const QPointF&, double) {
     p.fillRect(QRectF(0, r.height() - 1, r.width(), 1), c().divider);
     p.setFont(mono(10)); p.setPen(theme::map("#3e3a31"));
-    p.drawText(r.adjusted(0, 0, -8, -1), Qt::AlignVCenter | Qt::AlignRight,
+    // phones: the bar has two rows of chips, the count sits on the second one
+    p.drawText(r.height() > 40 ? r.adjusted(0, r.height() - 46, -8, -1) : r.adjusted(0, 0, -8, -1), Qt::AlignVCenter | Qt::AlignRight,
                QCoreApplication::translate("account", "%1 of %2 trades").arg(m_data.trades.size()).arg(m_data.total));
   });
   m_counter->lower();
@@ -323,34 +419,37 @@ TrackRecordPage::TrackRecordPage(QWidget* parent) : QWidget(parent) {
   m_empty = new PaintPanel(m_content);
   m_empty->setFrame(false);
   m_empty->setPaint([this](QPainter& p, const QRectF& r, const QPointF&, double) {
-    const QRectF box(r.center().x() - 330, 60, 660, 250);
+    const EmptyBox e = emptyBox(r.width());
+    const QRectF box = e.box;
     panelFrame(p, box, true);
-    p.setFont(mono(16, true, 3)); p.setPen(c().white);
+    p.setFont(e.phone ? mono(14, true, 1.5) : mono(16, true, 3)); p.setPen(c().white);
     const bool noAcc = !m_data.hasAccount, noTrades = m_data.total == 0;
-    p.drawText(QRectF(box.left(), box.top() + 40, box.width(), 30), Qt::AlignCenter,
+    p.drawText(e.phone ? QRectF(box.left() + 16, box.top() + 22, box.width() - 32, 50) : QRectF(box.left(), box.top() + 40, box.width(), 30),
+               Qt::AlignCenter | Qt::TextWordWrap,
                noAcc ? QCoreApplication::translate("account", "NO ACCOUNT YET") : noTrades ? QCoreApplication::translate("account", "NO TRADES YET") : QCoreApplication::translate("account", "NO TRADE MATCHES THE FILTERS"));
     p.setFont(cond(16, false)); p.setPen(c().grey);
     const QString msg = noTrades
       ? QCoreApplication::translate("account", "Import a statement from MetaTrader 4, MetaTrader 5 or cTrader, connect the live read-only bridge, "
                                                "or log your trades by hand. Your journal stays on this computer.")
       : QCoreApplication::translate("account", "Change the year or the filters to see trades again.");
-    p.drawText(QRectF(box.left() + 40, box.top() + 82, box.width() - 80, 60), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, msg);
+    p.drawText(e.phone ? QRectF(box.left() + 20, box.top() + 82, box.width() - 40, 100) : QRectF(box.left() + 40, box.top() + 82, box.width() - 80, 60),
+               Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, msg);
     if (noTrades) {
-      const QRectF imp(box.center().x() + 8, box.top() + 160, 170, 32), log(box.center().x() - 178, box.top() + 160, 170, 32);
+      const QRectF imp = e.imp, log = e.log;
       p.setPen(Qt::NoPen); p.setBrush(c().accent); p.drawRoundedRect(imp, 3, 3);
       p.setFont(mono(12, true, 2)); p.setPen(theme::onAccent()); p.drawText(imp, Qt::AlignCenter, TrToolbar::importText());
       p.setPen(theme::map("#3a3424")); p.setBrush(Qt::NoBrush); p.drawRoundedRect(log.adjusted(.5, .5, -.5, -.5), 2, 2);
       p.setPen(theme::map("#a09988")); p.drawText(log, Qt::AlignCenter, TrToolbar::logText());
       p.setFont(mono(10)); p.setPen(c().faint);
-      p.drawText(QRectF(box.left(), box.top() + 206, box.width(), 20), Qt::AlignCenter,
-                 QCoreApplication::translate("account", "Just looking? Account box › Add demo account with sample trades (invented data)."));
+      p.drawText(e.phone ? QRectF(box.left() + 16, box.top() + 290, box.width() - 32, 36) : QRectF(box.left(), box.top() + 206, box.width(), 20),
+                 Qt::AlignCenter | Qt::TextWordWrap, QCoreApplication::translate("account", "Just looking? Account box › Add demo account with sample trades (invented data)."));
     }
   });
   connect(m_empty, &PaintPanel::clicked, this, [this](const QPointF& pt) {
-    const QRectF box(m_empty->width() / 2.0 - 330, 60, 660, 250);
+    const EmptyBox e = emptyBox(m_empty->width());
     if (m_data.total != 0) return;
-    if (QRectF(box.center().x() + 8, box.top() + 160, 170, 32).contains(pt)) importTrades();
-    else if (QRectF(box.center().x() - 178, box.top() + 160, 170, 32).contains(pt)) logTrade();
+    if (e.imp.contains(pt)) importTrades();
+    else if (e.log.contains(pt)) logTrade();
   });
 
   connect(m_bar, &TrToolbar::viewClicked, this, [this](int v) { setView(v); });
@@ -453,10 +552,22 @@ void TrackRecordPage::setView(int v, bool animate) {
 
 void TrackRecordPage::layoutPage() {
   const int W = width();
-  m_bar->setGeometry(0, 0, W, TrToolbar::kHeight);
-  int y = TrToolbar::kHeight;
+  const int barH = m_bar->heightFor(W);
+  m_bar->setFixedHeight(barH);
+  m_bar->setGeometry(0, 0, W, barH);
+  int y = barH;
   m_filterBar->setVisible(m_filtersOn);
-  if (m_filtersOn) {
+  const bool phone = ui::compact(W);
+  for (auto* cc : {m_fInstr, m_fSide, m_fStrat}) cc->setFixedHeight(phone ? 34 : 26);
+  if (m_filtersOn && phone) {
+    // phones: 34 px chips (finger), two per row; the trade count on the second row's right
+    const int cw = (W - 16 - 8) / 2;
+    m_filterBar->setGeometry(0, y, W, 86);
+    m_counter->setGeometry(0, 0, W, 86);
+    m_fInstr->setGeometry(8, 6, cw, 34); m_fSide->setGeometry(8 + cw + 8, 6, cw, 34);
+    m_fStrat->setGeometry(8, 46, cw, 34);
+    y += 86;
+  } else if (m_filtersOn) {
     m_filterBar->setGeometry(0, y, W, 39);
     m_counter->setGeometry(0, 0, W, 39);
     int x = 8;
@@ -477,7 +588,7 @@ void TrackRecordPage::layoutPage() {
     if (on) { h = m_views[i]->relayout(vw, m_scroll->viewport()->height()); m_views[i]->setGeometry(0, 0, vw, h); }
   }
   m_empty->setVisible(empty);
-  if (empty) { h = std::max(m_scroll->viewport()->height(), 420); m_empty->setGeometry(0, 0, vw, h); }
+  if (empty) { h = std::max(m_scroll->viewport()->height(), phone ? 380 : 420); m_empty->setGeometry(0, 0, vw, h); }
   m_content->resize(vw, h);
 }
 

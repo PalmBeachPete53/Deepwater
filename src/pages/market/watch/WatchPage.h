@@ -36,6 +36,7 @@ private:
   void refresh();                        // rows, counts, cards from quotes + filters
   void ensureHistory();                  // 1W / 1M closes of every list (WatchHistory fetches what is missing)
   void layoutBoard();
+  void layoutPhone(int W);               // phone held upright (ui::compact): one column, finger-sized controls
   double changeOf(const QString& symbol, QString* tip) const;
   void setActive(bool on);
 

@@ -736,8 +736,8 @@
     </message>
     <message>
         <location filename="../src/ai/Tools.cpp" line="13"/>
-        <source>The model may use AI › ML: load data sets (prices, macro, COT), read them, train models of the five families in the same sandbox as the page (one at a time, named after this environment) and read their results. It cannot delete, stop or install anything, nor read files outside the data sets.</source>
-        <translation>Le modèle peut utiliser IA › ML : charger des jeux de données (prix, macro, COT), les lire, entraîner des modèles des cinq familles dans le même bac à sable que la page (un à la fois, nommés d&apos;après cet environnement) et lire leurs résultats. Il ne peut rien supprimer, arrêter ni installer, ni lire de fichier hors des jeux de données.</translation>
+        <source>The model may use AI › ML: load data sets (prices, macro, COT), read them, train models of the five families in the same sandbox as the page (one at a time, named after this environment), read their results and compare them (figures computed by Deepwater). It cannot delete, stop or install anything, nor read files outside the data sets.</source>
+        <translation>Le modèle peut utiliser IA › ML : charger des jeux de données (prix, macro, COT), les lire, entraîner des modèles des cinq familles dans le même bac à sable que la page (un à la fois, nommés d&apos;après cet environnement), lire leurs résultats et les comparer (chiffres calculés par Deepwater). Il ne peut rien supprimer, arrêter ni installer, ni lire de fichier hors des jeux de données.</translation>
     </message>
     <message>
         <location filename="../src/ai/Tools.cpp" line="16"/>
@@ -1649,9 +1649,764 @@ Continuer ?</translation>
         <translation>Part de test (dernières lignes)</translation>
     </message>
     <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>EVALUATION</source>
+        <translation>ÉVALUATION</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Evaluation mode: the environment&apos;s tools answer as of a past date, as if it were then. Nothing later can be read, and the tools that only know the present are off.</source>
+        <translation>Mode évaluation : les outils de l&apos;environnement répondent à une date passée, comme si on y était. Rien de plus récent ne peut être lu, et les outils qui ne connaissent que le présent sont coupés.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>EVALUATION · %1 UTC</source>
+        <translation>ÉVALUATION · %1 UTC</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Evaluation mode · environment %1</source>
+        <translation>Mode évaluation · environnement %1</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>The environment&apos;s tools answer as of the date below, as if it were then: the bars closed by that time, the order flow stored up to it, the macro facts published by then, backtests on the history before it. A later date asked is refused, and the tools that only know the present (prices, news, the live book, the pages) are off. The model is told the date; the tools enforce it. Its own memory of later events is not erased: compare with dates after its training.</source>
+        <translation>Les outils de l&apos;environnement répondent à la date ci-dessous, comme si on y était : les bougies clôturées à cette heure, l&apos;order flow stocké jusque-là, les faits macro publiés avant, les backtests sur l&apos;historique antérieur. Une date plus récente demandée est refusée, et les outils qui ne connaissent que le présent (cours, actualités, carnet en direct, pages) sont coupés. Le modèle est informé de la date ; ce sont les outils qui l&apos;imposent. Sa propre mémoire des événements postérieurs n&apos;est pas effacée : comparez avec des dates postérieures à son entraînement.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Evaluation mode on</source>
+        <translation>Mode évaluation activé</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/ChatView.cpp" line="0"/>
+        <source>Evaluation mode at %1 UTC from here: the tools answer as of that moment, and the model starts afresh (it no longer sees the messages above).</source>
+        <translation>Mode évaluation au %1 UTC à partir d&apos;ici : les outils répondent à cette date, et le modèle repart d&apos;une conversation vierge (il ne voit plus les messages au-dessus).</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/ChatView.cpp" line="0"/>
+        <source>Evaluation mode off from here: the tools answer in the present again, and the model starts afresh (it no longer sees the messages above).</source>
+        <translation>Mode évaluation coupé à partir d&apos;ici : les outils répondent de nouveau au présent, et le modèle repart d&apos;une conversation vierge (il ne voit plus les messages au-dessus).</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>TRADED AFTER COSTS (TEST ROWS)</source>
+        <translation>TRADÉ APRÈS FRAIS (LIGNES DE TEST)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>NET</source>
+        <translation>NET</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>MAX DRAWDOWN</source>
+        <translation>PERTE MAX</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>TRADES</source>
+        <translation>TRADES</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>IN THE MARKET</source>
+        <translation>EN POSITION</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Model, after costs</source>
+        <translation>Modèle, après frais</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Model, before costs</source>
+        <translation>Modèle, avant frais</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Model, costs × 2</source>
+        <translation>Modèle, frais × 2</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Model, costs × 3</source>
+        <translation>Modèle, frais × 3</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Buy &amp; hold</source>
+        <translation>Achat-conservation</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Trend (20-row average)</source>
+        <translation>Tendance (moyenne 20)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Constant exposure</source>
+        <translation>Exposition constante</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>%1, %2 bp a side; in the market %3 of the time. Constant exposure: that share held all along. Against it: %4 bp a row after costs, p %5: %6</source>
+        <translation>%1, %2 pb par côté ; en position %3 du temps. Exposition constante : cette part tenue tout du long. Contre elle : %4 pb par ligne après frais, p %5 : %6</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Long when the model says up, short otherwise</source>
+        <translation>Long quand le modèle prévoit une hausse, short sinon</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Long when the model says up, flat otherwise</source>
+        <translation>Long quand le modèle prévoit une hausse, hors marché sinon</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>the timing earns more than simply being in the market that much.</source>
+        <translation>le choix du moment rapporte plus que d&apos;être simplement autant en position.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>the timing loses against simply being in the market that much, and not by chance.</source>
+        <translation>le choix du moment perd face au simple fait d&apos;être autant en position, et pas par hasard.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>the timing is not distinguishable from simply being in the market that much.</source>
+        <translation>le choix du moment ne se distingue pas du simple fait d&apos;être autant en position.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlCompareView.cpp" line="0"/>
+        <source>Traded after costs (%1 bp a side, long when the model says up): %2. Buy &amp; hold on the same rows: %3.</source>
+        <translation>Tradé après frais (%1 pb par côté, long quand le modèle prévoit une hausse) : %2. Achat-conservation sur les mêmes lignes : %3.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>realized volatility</source>
+        <translation>volatilité réalisée</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>range (high − low)</source>
+        <translation>amplitude (haut − bas)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>size of the move</source>
+        <translation>taille du mouvement</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>big move (yes / no)</source>
+        <translation>gros mouvement (oui / non)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Predicts how much %1 will move over the next %2 row(s) (realized volatility, %), whatever the direction. Judged against HAR and EWMA, the two simple volatility models it must beat.</source>
+        <translation>Prédit de combien %1 va bouger sur les %2 prochaine(s) ligne(s) (volatilité réalisée, %), quel que soit le sens. Jugé contre HAR et EWMA, les deux modèles de volatilité simples qu&apos;il doit battre.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Predicts the range (highest high − lowest low) of the next %2 row(s), in % of %1. Judged against HAR and EWMA.</source>
+        <translation>Prédit l&apos;amplitude (plus haut − plus bas) des %2 prochaine(s) ligne(s), en % de %1. Jugé contre HAR et EWMA.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Predicts the size of the move of %1 over the next %2 row(s), up or down (%). Judged against HAR and EWMA.</source>
+        <translation>Prédit la taille du mouvement de %1 sur les %2 prochaine(s) ligne(s), à la hausse ou à la baisse (%). Jugé contre HAR et EWMA.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Predicts whether %1 moves far within the next %2 row(s) (1) or not (0): beyond the 80th percentile of the training rows&apos; moves. Judged against HAR and EWMA.</source>
+        <translation>Prédit si %1 bouge beaucoup dans les %2 prochaine(s) ligne(s) (1) ou non (0) : au-delà du 80e centile des mouvements des lignes d&apos;entraînement. Jugé contre HAR et EWMA.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>%1: %2 → the model %3 (p %4)</source>
+        <translation>%1 : %2 → le modèle %3 (p %4)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>does better</source>
+        <translation>fait mieux</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>does worse</source>
+        <translation>fait moins bien</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>is not distinguishable</source>
+        <translation>ne s&apos;en distingue pas</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>AGAINST THE VOLATILITY REFERENCES (SAME TEST ROWS)</source>
+        <translation>CONTRE LES RÉFÉRENCES DE VOLATILITÉ (MÊMES LIGNES DE TEST)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Model %1 = %2. %3. HAR: a regression on the volatility of the last h, 5h and 22h rows; EWMA: on the exponentially weighted volatility. Both fitted on the same training rows.</source>
+        <translation>Modèle %1 = %2. %3. HAR : une régression sur la volatilité des h, 5h et 22h dernières lignes ; EWMA : sur la volatilité à pondération exponentielle. Les deux ajustés sur les mêmes lignes d&apos;entraînement.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Big move: beyond %1 %.</source>
+        <translation>Gros mouvement : au-delà de %1 %.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlCompareView.cpp" line="0"/>
+        <source>better</source>
+        <translation>mieux</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlCompareView.cpp" line="0"/>
+        <source>worse</source>
+        <translation>moins bien</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlCompareView.cpp" line="0"/>
+        <source>no difference</source>
+        <translation>pas de différence</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlCompareView.cpp" line="0"/>
+        <source>Against the volatility references: %1.</source>
+        <translation>Contre les références de volatilité : %1.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>%1 decisions (%2 repeat(s)) from %3 to %4 UTC, each held %5 h after costs (%6 bp a side). %7 without a DECISION line (counted as flat), %8 without a price.</source>
+        <translation>%1 décisions (%2 répétition(s)) du %3 au %4 UTC, chacune tenue %5 h, après frais (%6 pb par côté). %7 sans ligne DECISION (comptée hors marché), %8 sans prix.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>%1 has no 1-hour bars in Data › Technical data: the decisions are scored on them.</source>
+        <translation>%1 n&apos;a pas de bougies 1 h dans Data › Données techniques : les décisions sont notées dessus.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Agent against %1: %2 per decision, p %3 → %4</source>
+        <translation>Agent contre %1 : %2 par décision, p %3 → %4</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Agent</source>
+        <translation>Agent</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>An evaluation is already running.</source>
+        <translation>Une évaluation est déjà en cours.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>better, not by chance</source>
+        <translation>meilleur, pas par hasard</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Binance&apos;s monthly closes could not be read: no probe.</source>
+        <translation>Les clôtures mensuelles de Binance n&apos;ont pas pu être lues : pas de sonde.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Bitcoin&apos;s monthly closes asked from memory, tools useless, against Binance&apos;s. Known = within 10 %.</source>
+        <translation>Clôtures mensuelles du bitcoin demandées de mémoire, outils inutilisables, comparées à celles de Binance. Connu = à 10 % près.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>buy &amp; hold</source>
+        <translation>l&apos;achat-conservation</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Decisions</source>
+        <translation>Décisions</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Evaluation of %1 on %2, %3 hours ahead</source>
+        <translation>Évaluation de %1 sur %2, à %3 heures</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>evaluation protocol</source>
+        <translation>protocole d&apos;évaluation</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Every figure is computed by Deepwater from the stored bars; the model only gave LONG / SHORT / FLAT. A few dozen decisions are an anecdote, not a proof.</source>
+        <translation>Chaque chiffre est calculé par Deepwater à partir des bougies stockées ; le modèle n&apos;a donné que LONG / SHORT / FLAT. Quelques dizaines de décisions sont une anecdote, pas une preuve.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Flat</source>
+        <translation>Hors marché</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Gap</source>
+        <translation>Écart</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Give a period, a horizon and at least two decisions.</source>
+        <translation>Donnez une période, un horizon et au moins deux décisions.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>In the market</source>
+        <translation>En position</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Interrupted: %1.</source>
+        <translation>Interrompue : %1.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>It knew none of these months: every decision of these months counts as tier A (check the answer above: a refusal also gives this).</source>
+        <translation>Il ne connaissait aucun de ces mois : toute décision de ces mois compte en niveau A (vérifiez sa réponse ci-dessus : un refus de répondre donne aussi ce résultat).</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Knowledge probe of %1</source>
+        <translation>Sonde de mémoire de %1</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Knowledge probe</source>
+        <translation>Sonde de mémoire</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Last month it still knows: %1. Decisions from %2 on are tier A in its evaluations.</source>
+        <translation>Dernier mois qu&apos;il connaît encore : %1. Les décisions à partir du %2 sont de niveau A dans ses évaluations.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Measured memory frontier: %1 (knowledge probe). Tier A = decisions from %2 on, the only ones that count; tier B = before, where the model may remember what followed.</source>
+        <translation>Frontière de mémoire mesurée : %1 (sonde). Niveau A = décisions à partir du %2, les seules qui comptent ; niveau B = avant, où le modèle peut se souvenir de la suite.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>ML without LLM (%1)</source>
+        <translation>ML sans LLM (%1)</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Month</source>
+        <translation>Mois</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>No decision after the frontier.</source>
+        <translation>Aucune décision après la frontière.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>No decision before the frontier.</source>
+        <translation>Aucune décision avant la frontière.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>No knowledge probe yet for this environment: every decision is tier B (the model may remember what followed). Probe its memory first.</source>
+        <translation>Pas encore de sonde de mémoire pour cet environnement : toutes les décisions sont de niveau B (le modèle peut se souvenir de la suite). Sondez d&apos;abord sa mémoire.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>No ML run answers the same question yet: a supervised training of the direction of close, %1 row(s) ahead, on %2 1-hour bars (walk-forward over this period) would give the comparison without LLM.</source>
+        <translation>Aucun entraînement ML ne répond encore à la même question : un entraînement supervisé de la direction de close, %1 ligne(s) plus loin, sur les bougies 1 h de %2 (walk-forward sur cette période) donnerait la comparaison sans LLM.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>not distinguishable</source>
+        <translation>pas de différence distinguable</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Per decision</source>
+        <translation>Par décision</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Repeats: %1 (spread %2). A gap between two agents smaller than this spread ranks nothing.</source>
+        <translation>Répétitions : %1 (dispersion %2). Un écart entre deux agents plus petit que cette dispersion ne classe rien.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Rule</source>
+        <translation>Règle</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Said</source>
+        <translation>Annoncé</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>stopped by you</source>
+        <translation>arrêtée par vous</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>The decisions are closer than the horizon (%1 h): they would overlap. Fewer decisions or a longer period.</source>
+        <translation>Les décisions sont plus rapprochées que l&apos;horizon (%1 h) : elles se chevaucheraient. Moins de décisions ou une période plus longue.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>the ML model</source>
+        <translation>le modèle ML</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>the model did not take the question</source>
+        <translation>le modèle n&apos;a pas pris la question</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>The period must end %1 hours before the last stored bar (%2), so each decision has its outcome.</source>
+        <translation>La période doit finir %1 heures avant la dernière bougie stockée (%2), pour que chaque décision ait son résultat.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>the trend rule</source>
+        <translation>la règle de tendance</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>This environment holds no model.</source>
+        <translation>Cet environnement ne contient aucun modèle.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Tier A (after the frontier)</source>
+        <translation>Niveau A (après la frontière)</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Tier B (before: memory leakage)</source>
+        <translation>Niveau B (avant : fuite de mémoire)</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Total</source>
+        <translation>Total</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Trend (above its 20-hour average)</source>
+        <translation>Tendance (au-dessus de sa moyenne 20 h)</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>unknown</source>
+        <translation>inconnu</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Won</source>
+        <translation>Gagnantes</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>worse, not by chance</source>
+        <translation>moins bon, pas par hasard</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Tick &quot;Read Deepwater&apos;s data&quot; for this environment: the model decides from its tools.</source>
+        <translation>Cochez « Lire les données de Deepwater » pour cet environnement : le modèle décide à partir de ses outils.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>MEMORY PROBE</source>
+        <translation>SONDE DE MÉMOIRE</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>EVALUATION %1 / %2</source>
+        <translation>ÉVALUATION %1 / %2</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Evaluation protocol</source>
+        <translation>Protocole d&apos;évaluation</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>At each moment of the period, the clock is set there (a fresh conversation) and the model decides LONG, SHORT or FLAT for the next hours with its tools; Deepwater scores each decision on the stored 1-hour bars after costs, against buy &amp; hold, the trend rule, flat and an ML model without LLM. Probe the model&apos;s memory first: only the decisions after the last month it remembers count (tier A). Each decision is a full answer of the model: a dozen take several minutes.</source>
+        <translation>À chaque moment de la période, l&apos;horloge y est placée (une conversation vierge) et le modèle décide LONG, SHORT ou HORS MARCHÉ pour les heures suivantes avec ses outils ; Deepwater note chaque décision sur les bougies 1 h stockées, après frais, contre l&apos;achat-conservation, la règle de tendance, le hors-marché et un modèle ML sans LLM. Sondez d&apos;abord la mémoire du modèle : seules les décisions après le dernier mois dont il se souvient comptent (niveau A). Chaque décision est une réponse complète du modèle : une douzaine prend plusieurs minutes.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>%1 h</source>
+        <translation>%1 h</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Market</source>
+        <translation>Marché</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source> (1-hour bars, 15 bp a side)</source>
+        <translation> (bougies 1 h, 15 pb par côté)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>From</source>
+        <translation>Du</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>To</source>
+        <translation>Au</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Horizon</source>
+        <translation>Horizon</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Repeats</source>
+        <translation>Répétitions</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Memory probed: last month it remembers: %1.</source>
+        <translation>Mémoire sondée : dernier mois dont il se souvient : %1.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Memory not probed yet for this environment.</source>
+        <translation>Mémoire pas encore sondée pour cet environnement.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Probe its memory</source>
+        <translation>Sonder sa mémoire</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Stop the evaluation</source>
+        <translation>Arrêter l&apos;évaluation</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Run the evaluation</source>
+        <translation>Lancer l&apos;évaluation</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/ChatView.cpp" line="0"/>
+        <source>DEEPWATER · EVALUATION</source>
+        <translation>DEEPWATER · ÉVALUATION</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>The time between two decisions must be at least the horizon (%1 h): they would overlap.</source>
+        <translation>Le temps entre deux décisions doit être au moins l&apos;horizon (%1 h) : elles se chevaucheraient.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>A forward test is already running in this environment.</source>
+        <translation>Un test en avance est déjà en cours dans cet environnement.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Forward test (%1): %2 of %3 decisions asked, %4 scored, %5 missed.</source>
+        <translation>Test en avance (%1) : %2 décisions demandées sur %3, %4 notées, %5 manquées.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>running</source>
+        <translation>en cours</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>finished</source>
+        <translation>terminé</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Forward test (tier C) of %1 on %2, %3 hours ahead</source>
+        <translation>Test en avance (niveau C) de %1 sur %2, à %3 heures</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Asked in the present every %1 h from %2 UTC: no memory of the model can know what followed. %3 decisions scored, %4 missed, %5 without a price, %6 without a DECISION line.</source>
+        <translation>Demandé au présent toutes les %1 h à partir du %2 UTC : aucune mémoire du modèle ne pouvait connaître la suite. %3 décisions notées, %4 manquées, %5 sans prix, %6 sans ligne DECISION.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>The agent changed during the test (model, version, prompt or skills) for %1 decision(s): it was not the same agent throughout.</source>
+        <translation>L&apos;agent a changé pendant le test (modèle, version, consignes ou compétences) pour %1 décision(s) : ce n&apos;était pas le même agent du début à la fin.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>forward test</source>
+        <translation>test en avance</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Forward test (tier C)</source>
+        <translation>Test en avance (niveau C)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>The same question asked in the present, now and then every few hours while Deepwater runs (the horizon and the number of decisions above): no memory of the model can know what follows. Each decision is scored once its horizon has passed; a time missed (Deepwater closed, the environment busy or in evaluation mode) counts as missed, never asked late. Keep the same model and skills throughout: a change is reported.</source>
+        <translation>La même question posée au présent, maintenant puis toutes les quelques heures tant que Deepwater tourne (l&apos;horizon et le nombre de décisions ci-dessus) : aucune mémoire du modèle ne peut connaître la suite. Chaque décision est notée une fois son horizon passé ; une échéance manquée (Deepwater fermé, l&apos;environnement occupé ou en mode évaluation) compte comme manquée, jamais posée en retard. Gardez le même modèle et les mêmes compétences du début à la fin : un changement est signalé.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source> h between decisions</source>
+        <translation> h entre deux décisions</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>No forward test in this environment.</source>
+        <translation>Aucun test en avance dans cet environnement.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Stop the forward test</source>
+        <translation>Arrêter le test en avance</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Start the forward test</source>
+        <translation>Démarrer le test en avance</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Agent against %1: %2 per decision; too few decisions (%3) for a test.</source>
+        <translation>Agent contre %1 : %2 par décision ; trop peu de décisions (%3) pour un test.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Named (the market and the dates as they are)</source>
+        <translation>Nommé (le marché et les dates tels quels)</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Blind (dates shifted, the market&apos;s name and price level masked)</source>
+        <translation>À l&apos;aveugle (dates décalées, nom et niveau de prix du marché masqués)</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Same decision named and blind at %1 of %2 moments. A model that does clearly better named than blind on tier B decisions is helped by its memory; on tier A, by recognising the market.</source>
+        <translation>Même décision en nommé et à l&apos;aveugle à %1 moments sur %2. Un modèle qui fait nettement mieux en nommé qu&apos;à l&apos;aveugle sur les décisions de niveau B est aidé par sa mémoire ; en niveau A, par le fait de reconnaître le marché.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Masking limits: a number of the price&apos;s order that is not a price (an open interest in coins) is scaled too; the asset&apos;s behaviour itself (its volatility) is not hidden.</source>
+        <translation>Limites du masquage : un nombre de l&apos;ordre du prix qui n&apos;est pas un prix (un open interest en bitcoins) est aussi mis à l&apos;échelle ; le comportement de l&apos;actif lui-même (sa volatilité) n&apos;est pas caché.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Blind: dates shifted, the market&apos;s name and price level masked</source>
+        <translation>À l&apos;aveugle : dates décalées, nom et niveau de prix du marché masqués</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>named</source>
+        <translation>nommés</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>blind</source>
+        <translation>à l&apos;aveugle</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>both, at each moment</source>
+        <translation>les deux, à chaque moment</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/AgentsPage.cpp" line="0"/>
+        <source>Trials</source>
+        <translation>Essais</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/ChatView.cpp" line="0"/>
+        <source>Blind (dates, name and price level masked for the model) · </source>
+        <translation>À l&apos;aveugle (dates, nom et niveau de prix masqués pour le modèle) · </translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>Inconclusive: it gave no price at all (a refusal looks the same as no memory). Every decision counts as tier B until a probe answers.</source>
+        <translation>Non concluant : il n&apos;a donné aucun cours (un refus ressemble à une absence de mémoire). Toutes les décisions comptent en niveau B tant qu&apos;une sonde n&apos;a pas répondu.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>It gave prices but none close enough: no month is known. Every decision counts as tier A.</source>
+        <translation>Il a donné des cours, mais aucun assez proche : aucun mois n&apos;est connu. Toutes les décisions comptent en niveau A.</translation>
+    </message>
+    <message>
+        <location filename="../src/ai/Evaluation.cpp" line="0"/>
+        <source>The knowledge probe was inconclusive (the model gave no price): every decision is tier B. Probe its memory again.</source>
+        <translation>La sonde de mémoire n&apos;a pas été concluante (le modèle n&apos;a donné aucun cours) : toutes les décisions sont de niveau B. Sondez de nouveau sa mémoire.</translation>
+    </message>
+    <message>
         <location filename="../src/pages/ai/MlPage.cpp" line="867"/>
         <source>Time-series CV folds (0 = none)</source>
         <translation>Plis de validation croisée temporelle (0 = aucun)</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>one cut: trained once</source>
+        <translation>une coupure : entraîné une fois</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>walk-forward: retrained 5 times</source>
+        <translation>walk-forward : réentraîné 5 fois</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>walk-forward: retrained 10 times</source>
+        <translation>walk-forward : réentraîné 10 fois</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Walk-forward cuts the test part into blocks and predicts each one with a model trained afresh on everything before it, leaving out the rows whose target reaches into the block. It is how a model retrained regularly would have done; the test rows are the same as with one cut.</source>
+        <translation>Le walk-forward découpe la partie test en blocs et prédit chacun avec un modèle réentraîné sur tout ce qui le précède, en écartant les lignes dont la cible déborde sur le bloc. C&apos;est ce qu&apos;aurait donné un modèle réentraîné régulièrement ; les lignes de test sont les mêmes qu&apos;avec une coupure.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Test part predicted by</source>
+        <translation>Partie test prédite par</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>Walk-forward: the test rows predicted in %1 blocks, each by a model retrained on every row before it (%2 row(s) left out before each block). TEST above is over all the blocks; %3 by block: %4</source>
+        <translation>Walk-forward : lignes de test prédites en %1 blocs, chacun par un modèle réentraîné sur toutes les lignes qui le précèdent (%2 ligne(s) écartée(s) avant chaque bloc). TEST ci-dessus porte sur tous les blocs ; %3 par bloc : %4</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
+        <source>%1 · walk-forward: retrained before each test block, the last time on %2 rows (%3 → %4); tested on %5 rows (%6 → %7) · %8 s</source>
+        <translation>%1 · walk-forward : réentraîné avant chaque bloc de test, la dernière fois sur %2 lignes (%3 → %4) ; testé sur %5 lignes (%6 → %7) · %8 s</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlCompareView.cpp" line="0"/>
+        <source>Overfitting across these %1 setups (PBO, on their %2 shared test rows): %3 % chance that the setup best on half the rows is at or below the median on the other half. %4</source>
+        <translation>Surajustement entre ces %1 configurations (PBO, sur leurs %2 lignes de test communes) : %3 % de risque que la meilleure sur une moitié des lignes soit à la médiane ou en dessous sur l&apos;autre moitié. %4</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlCompareView.cpp" line="0"/>
+        <source>Above 50 %: picking the best here is mostly picking luck.</source>
+        <translation>Au-dessus de 50 % : choisir la meilleure ici, c&apos;est surtout choisir la chance.</translation>
+    </message>
+    <message>
+        <location filename="../src/pages/ai/MlCompareView.cpp" line="0"/>
+        <source>Under 50 %: the ranking holds from one half of the rows to the other.</source>
+        <translation>Sous 50 % : le classement tient d&apos;une moitié des lignes à l&apos;autre.</translation>
     </message>
     <message>
         <location filename="../src/pages/ai/MlPage.cpp" line="868"/>
@@ -2032,16 +2787,6 @@ Fait : étape 1, supervisé ; étape 2, non supervisé ; étape 3, semi- et auto
         <location filename="../src/pages/ai/MlPage.cpp" line="1653"/>
         <source>PER YEAR</source>
         <translation>PAR AN</translation>
-    </message>
-    <message>
-        <location filename="../src/pages/ai/MlPage.cpp" line="1654"/>
-        <source>MAX DRAWDOWN</source>
-        <translation>PERTE MAX</translation>
-    </message>
-    <message>
-        <location filename="../src/pages/ai/MlPage.cpp" line="1654"/>
-        <source>TRADES</source>
-        <translation>TRADES</translation>
     </message>
     <message>
         <location filename="../src/pages/ai/MlPage.cpp" line="1654"/>
@@ -2738,6 +3483,889 @@ Fait : étape 1, supervisé ; étape 2, non supervisé ; étape 3, semi- et auto
         <location filename="../src/pages/ai/MlPage.cpp" line="0"/>
         <source>Over %1 GB of data sets: the oldest were deleted (%2).</source>
         <translation>Plus de %1 Go de jeux de données : les plus anciens ont été supprimés (%2).</translation>
+    </message>
+    <message>
+        <source>checks the ML environment</source>
+        <translation>vérifie l'environnement ML</translation>
+    </message>
+    <message>
+        <source>reads the ML methods</source>
+        <translation>consulte les méthodes ML</translation>
+    </message>
+    <message>
+        <source>lists the data sets</source>
+        <translation>liste les jeux de données</translation>
+    </message>
+    <message>
+        <source>builds a data set</source>
+        <translation>construit un jeu de données</translation>
+    </message>
+    <message>
+        <source>reads a data set</source>
+        <translation>lit un jeu de données</translation>
+    </message>
+    <message>
+        <source>starts a training</source>
+        <translation>lance un entraînement</translation>
+    </message>
+    <message>
+        <source>lists the trainings</source>
+        <translation>liste les entraînements</translation>
+    </message>
+    <message>
+        <source>reads a training's result</source>
+        <translation>lit le résultat d'un entraînement</translation>
+    </message>
+    <message>
+        <source>reads a training's predictions</source>
+        <translation>lit les prédictions d'un entraînement</translation>
+    </message>
+    <message>
+        <source>reads the indicators</source>
+        <translation>consulte les indicateurs</translation>
+    </message>
+    <message>
+        <source>backtests a strategy</source>
+        <translation>backteste une stratégie</translation>
+    </message>
+    <message>
+        <source>runs the quant checks</source>
+        <translation>lance les contrôles quant</translation>
+    </message>
+    <message>
+        <source>reads its past backtests</source>
+        <translation>relit ses backtests passés</translation>
+    </message>
+    <message>
+        <source>reads live prices</source>
+        <translation>lit les cours en direct</translation>
+    </message>
+    <message>
+        <source>reads past prices</source>
+        <translation>lit l'historique des prix</translation>
+    </message>
+    <message>
+        <source>reads the calendar</source>
+        <translation>lit le calendrier</translation>
+    </message>
+    <message>
+        <source>reads the news</source>
+        <translation>lit les actualités</translation>
+    </message>
+    <message>
+        <source>cross-validation %1/%2</source>
+        <translation>validation croisée %1/%2</translation>
+    </message>
+    <message>
+        <source>epoch %1/%2 · loss %3</source>
+        <translation>époque %1/%2 · perte %3</translation>
+    </message>
+    <message>
+        <source>episode %1/%2 · train %3</source>
+        <translation>épisode %1/%2 · entraînement %3</translation>
+    </message>
+    <message>
+        <source>loading the data</source>
+        <translation>chargement des données</translation>
+    </message>
+    <message>
+        <source>preparing</source>
+        <translation>préparation</translation>
+    </message>
+    <message>
+        <source>fitting</source>
+        <translation>ajustement du modèle</translation>
+    </message>
+    <message>
+        <source>evaluating</source>
+        <translation>évaluation</translation>
+    </message>
+    <message>
+        <source>saving</source>
+        <translation>enregistrement</translation>
+    </message>
+    <message>
+        <source>done</source>
+        <translation>terminé</translation>
+    </message>
+    <message>
+        <source>embedding</source>
+        <translation>encodage</translation>
+    </message>
+    <message>
+        <source>probing</source>
+        <translation>sondage</translation>
+    </message>
+    <message>
+        <source>measuring</source>
+        <translation>mesure</translation>
+    </message>
+    <message>
+        <source>comparing</source>
+        <translation>comparaison</translation>
+    </message>
+    <message>
+        <source>unsupervised</source>
+        <translation>non supervisé</translation>
+    </message>
+    <message>
+        <source>semi-supervised</source>
+        <translation>semi-supervisé</translation>
+    </message>
+    <message>
+        <source>self-supervised</source>
+        <translation>auto-supervisé</translation>
+    </message>
+    <message>
+        <source>reinforcement</source>
+        <translation>par renforcement</translation>
+    </message>
+    <message>
+        <source>supervised</source>
+        <translation>supervisé</translation>
+    </message>
+    <message>
+        <source>Test: return %1 · buy &amp; hold %2</source>
+        <translation>Test : rendement %1 · achat-conservation %2</translation>
+    </message>
+    <message>
+        <source>%1 groups · silhouette %2</source>
+        <translation>%1 groupes · silhouette %2</translation>
+    </message>
+    <message>
+        <source>%1 of the rows unusual</source>
+        <translation>%1 des lignes inhabituelles</translation>
+    </message>
+    <message>
+        <source>Reduced to %1 axes</source>
+        <translation>Réduit à %1 axes</translation>
+    </message>
+    <message>
+        <source>Done</source>
+        <translation>Terminé</translation>
+    </message>
+    <message>
+        <source>Loss %1 → %2</source>
+        <translation>Perte %1 → %2</translation>
+    </message>
+    <message>
+        <source>Test: balanced accuracy %1 · no skill %2</source>
+        <translation>Test : précision équilibrée %1 · sans compétence %2</translation>
+    </message>
+    <message>
+        <source>Test: error (MAE) %1 · no skill %2</source>
+        <translation>Test : erreur (MAE) %1 · sans compétence %2</translation>
+    </message>
+    <message>
+        <source>Error of each validation fold (MAE)</source>
+        <translation>Erreur de chaque pli de validation (MAE)</translation>
+    </message>
+    <message>
+        <source>Balanced accuracy of each validation fold</source>
+        <translation>Précision équilibrée de chaque pli de validation</translation>
+    </message>
+    <message>
+        <source>Loss of each epoch</source>
+        <translation>Perte à chaque époque</translation>
+    </message>
+    <message>
+        <source>epoch</source>
+        <translation>époque</translation>
+    </message>
+    <message>
+        <source>Return of each episode</source>
+        <translation>Rendement de chaque épisode</translation>
+    </message>
+    <message>
+        <source>episode</source>
+        <translation>épisode</translation>
+    </message>
+    <message>
+        <source>train</source>
+        <translation>entraînement</translation>
+    </message>
+    <message>
+        <source>validation</source>
+        <translation>validation</translation>
+    </message>
+    <message>
+        <source>test</source>
+        <translation>test</translation>
+    </message>
+    <message>
+        <source>Stop this training</source>
+        <translation>Arrêter cet entraînement</translation>
+    </message>
+    <message>
+        <source>thinking…</source>
+        <translation>réfléchit…</translation>
+    </message>
+    <message>
+        <source>writing its answer…</source>
+        <translation>écrit sa réponse…</translation>
+    </message>
+    <message>
+        <source>THINKING</source>
+        <translation>RÉFLÉCHIT</translation>
+    </message>
+    <message>
+        <source>WRITING</source>
+        <translation>ÉCRIT</translation>
+    </message>
+    <message>
+        <source>loading its model…</source>
+        <translation>charge son modèle…</translation>
+    </message>
+    <message>
+        <source>STARTING</source>
+        <translation>DÉMARRE</translation>
+    </message>
+    <message>
+        <source>stopped on an error</source>
+        <translation>arrêté sur une erreur</translation>
+    </message>
+    <message>
+        <source>ERROR</source>
+        <translation>ERREUR</translation>
+    </message>
+    <message>
+        <source>waiting for your question</source>
+        <translation>attend votre question</translation>
+    </message>
+    <message>
+        <source>IDLE</source>
+        <translation>AU REPOS</translation>
+    </message>
+    <message>
+        <source>ACTIVITY</source>
+        <translation>ACTIVITÉ</translation>
+    </message>
+    <message>
+        <source>NOW</source>
+        <translation>EN CE MOMENT</translation>
+    </message>
+    <message>
+        <source>ML TRAINING</source>
+        <translation>ENTRAÎNEMENT ML</translation>
+    </message>
+    <message>
+        <source>No training started by this agent yet. Its trainings show here as they run.</source>
+        <translation>Cet agent n'a encore lancé aucun entraînement. Ses entraînements s'affichent ici pendant qu'ils tournent.</translation>
+    </message>
+    <message>
+        <source>Tick “Machine learning” to let this agent train models: its trainings show here as they run.</source>
+        <translation>Cochez « Apprentissage automatique » pour que cet agent puisse entraîner des modèles : ses entraînements s'affichent ici pendant qu'ils tournent.</translation>
+    </message>
+    <message>
+        <source>running for %1</source>
+        <translation>en cours depuis %1</translation>
+    </message>
+    <message>
+        <source>started at %1</source>
+        <translation>lancé à %1</translation>
+    </message>
+    <message>
+        <source>LAST ACTIONS</source>
+        <translation>DERNIÈRES ACTIONS</translation>
+    </message>
+    <message>
+        <source>None yet.</source>
+        <translation>Aucune pour l'instant.</translation>
+    </message>
+    <message>
+        <source>CV fold</source>
+        <translation>pli</translation>
+    </message>
+    <message>
+        <source>TRAINS</source>
+        <translation>ENTRAÎNE</translation>
+    </message>
+    <message>
+        <source>Drag to widen or narrow the activity panel</source>
+        <translation>Glissez pour élargir ou réduire le panneau d'activité</translation>
+    </message>
+    <message>
+        <source>ML TRAININGS</source>
+        <translation>ENTRAÎNEMENTS ML</translation>
+    </message>
+    <message>
+        <source>compares trainings</source>
+        <translation>compare des entraînements</translation>
+    </message>
+    <message>
+        <source>PERSISTENCE</source>
+        <translation>PERSISTANCE</translation>
+    </message>
+    <message>
+        <source>Persistence: what was last seen happens again (the last change over the same horizon, the last direction, today&apos;s level). A second naive rule; on noisy returns the training mean is often the harder one.</source>
+        <translation>Persistance : ce qu&apos;on a vu en dernier se reproduit (la dernière variation sur le même horizon, la dernière direction, le niveau du jour). Une deuxième règle naïve ; sur des rendements bruités, la moyenne d&apos;entraînement est souvent la plus dure à battre.</translation>
+    </message>
+    <message>
+        <source>MAE</source>
+        <translation>MAE</translation>
+    </message>
+    <message>
+        <source>PROBE BAL. ACC.</source>
+        <translation>SONDE EXACT. ÉQ.</translation>
+    </message>
+    <message>
+        <source>PROBE MAE</source>
+        <translation>SONDE MAE</translation>
+    </message>
+    <message>
+        <source>counting the %1 setup(s) tried</source>
+        <translation>en comptant les %1 réglage(s) essayé(s)</translation>
+    </message>
+    <message>
+        <source>The best beats both no skill and persistence, %1.</source>
+        <translation>Le meilleur bat à la fois « sans compétence » et la persistance, %1.</translation>
+    </message>
+    <message>
+        <source>The best beats no skill (%1) but not persistence: the naive rule &quot;what was last seen happens again&quot; does better. Nothing a simple rule does not already give.</source>
+        <translation>Le meilleur bat « sans compétence » (%1) mais pas la persistance : la règle naïve « ce qu&apos;on a vu en dernier se reproduit » fait mieux. Rien qu&apos;une règle simple ne donne déjà.</translation>
+    </message>
+    <message>
+        <source>The best beats no skill (%1) but not persistence: the naive rule &quot;what was last seen happens again&quot; does as well. Nothing a simple rule does not already give.</source>
+        <translation>Le meilleur bat « sans compétence » (%1) mais pas la persistance : la règle naïve « ce qu&apos;on a vu en dernier se reproduit » fait aussi bien. Rien qu&apos;une règle simple ne donne déjà.</translation>
+    </message>
+    <message>
+        <source>The best beats no skill, %1 (no persistence on record for this run: made by an earlier version).</source>
+        <translation>Le meilleur bat « sans compétence », %1 (pas de persistance enregistrée pour cet entraînement : fait par une version antérieure).</translation>
+    </message>
+    <message>
+        <source>Even the best does worse than no skill, and not by chance, though it beats persistence here: none of these setups shows skill.</source>
+        <translation>Même le meilleur fait moins bien que « sans compétence », et pas par hasard, bien qu&apos;il batte ici la persistance : aucun de ces réglages ne montre de compétence.</translation>
+    </message>
+    <message>
+        <source>Even the best does worse than no skill, and not by chance: none of these setups shows skill.</source>
+        <translation>Même le meilleur fait moins bien que « sans compétence », et pas par hasard : aucun de ces réglages ne montre de compétence.</translation>
+    </message>
+    <message>
+        <source>Even the best does no better than no skill, though it beats persistence here: none of these setups shows skill.</source>
+        <translation>Même le meilleur ne fait pas mieux que « sans compétence », bien qu&apos;il batte ici la persistance : aucun de ces réglages ne montre de compétence.</translation>
+    </message>
+    <message>
+        <source>Even the best does no better than no skill: none of these setups shows skill.</source>
+        <translation>Même le meilleur ne fait pas mieux que « sans compétence » : aucun de ces réglages ne montre de compétence.</translation>
+    </message>
+    <message>
+        <source>After %1 setup(s) tried, the best is not distinguishable from no skill (adj. p %2): its edge can be luck, even though it beats persistence.</source>
+        <translation>Après %1 réglage(s) essayé(s), le meilleur ne se distingue pas de « sans compétence » (p ajusté %2) : son avance peut être de la chance, même s&apos;il bat la persistance.</translation>
+    </message>
+    <message>
+        <source>After %1 setup(s) tried, the best is not distinguishable from no skill (adj. p %2): its edge can be luck.</source>
+        <translation>Après %1 réglage(s) essayé(s), le meilleur ne se distingue pas de « sans compétence » (p ajusté %2) : son avance peut être de la chance.</translation>
+    </message>
+    <message>
+        <source>No test against no skill for these runs: their no-skill prediction was not recorded (made by an earlier version).</source>
+        <translation>Pas de test contre « sans compétence » pour ces entraînements : leur prédiction sans compétence n&apos;a pas été enregistrée (faits par une version antérieure).</translation>
+    </message>
+    <message>
+        <source>COMPARISON · %1 TRAININGS</source>
+        <translation>COMPARAISON · %1 ENTRAÎNEMENTS</translation>
+    </message>
+    <message>
+        <source>Every figure is computed by Deepwater from the trainings&apos; own files, the same the agents quote. p: paired block bootstrap on the same test rows; adj. p: p × the setups tried on that market and question (re-runs of one setup count once). Under 0.05: unlikely to be chance. Click a row to open the training.</source>
+        <translation>Chaque chiffre est calculé par Deepwater à partir des fichiers des entraînements, les mêmes que citent les agents. p : bootstrap par blocs apparié sur les mêmes lignes de test ; p ajusté : p × les réglages essayés sur ce marché et cette question (les relances d&apos;un même réglage comptent une fois). Sous 0,05 : peu probablement dû au hasard. Cliquez une ligne pour ouvrir l&apos;entraînement.</translation>
+    </message>
+    <message>
+        <source>Left out, not finished: %1</source>
+        <translation>Laissés de côté, pas terminés : %1</translation>
+    </message>
+    <message>
+        <source>SAME MARKET · %1</source>
+        <translation>MÊME MARCHÉ · %1</translation>
+    </message>
+    <message>
+        <source>%1 runs of one setup only: the same result each time, nothing to rank.</source>
+        <translation>%1 lancements d&apos;un seul réglage : le même résultat à chaque fois, rien à classer.</translation>
+    </message>
+    <message>
+        <source>test %1</source>
+        <translation>test %1</translation>
+    </message>
+    <message>
+        <source>data version not recorded (older runs)</source>
+        <translation>version des données non enregistrée (anciens entraînements)</translation>
+    </message>
+    <message>
+        <source>data %1</source>
+        <translation>données %1</translation>
+    </message>
+    <message>
+        <source>%1 setup(s) here; %2 different setup(s) tried on this market and question in all.</source>
+        <translation>%1 réglage(s) ici ; %2 réglage(s) différent(s) essayé(s) en tout sur ce marché et cette question.</translation>
+    </message>
+    <message>
+        <source>SEVERAL MARKETS · %1</source>
+        <translation>PLUSIEURS MARCHÉS · %1</translation>
+    </message>
+    <message>
+        <source>Each market against its own reference: raw scores do not compare across markets.</source>
+        <translation>Chaque marché contre sa propre référence : les scores bruts ne se comparent pas d&apos;un marché à l&apos;autre.</translation>
+    </message>
+    <message>
+        <source>MARKET</source>
+        <translation>MARCHÉ</translation>
+    </message>
+    <message>
+        <source>ERROR REMOVED</source>
+        <translation>ERREUR ÔTÉE</translation>
+    </message>
+    <message>
+        <source>EDGE</source>
+        <translation>AVANCE</translation>
+    </message>
+    <message>
+        <source>ADJ. P</source>
+        <translation>P AJUSTÉ</translation>
+    </message>
+    <message>
+        <source>VS PERSISTENCE</source>
+        <translation>VS PERSISTANCE</translation>
+    </message>
+    <message>
+        <source>TEST RETURN</source>
+        <translation>RENDEMENT TEST</translation>
+    </message>
+    <message>
+        <source>BUY &amp; HOLD</source>
+        <translation>ACHAT-CONSERV.</translation>
+    </message>
+    <message>
+        <source>EXCESS</source>
+        <translation>SURPLUS</translation>
+    </message>
+    <message>
+        <source>RANDOM BEATEN</source>
+        <translation>HASARD BATTU</translation>
+    </message>
+    <message>
+        <source>SHARPE</source>
+        <translation>SHARPE</translation>
+    </message>
+    <message>
+        <source>GROUPS</source>
+        <translation>GROUPES</translation>
+    </message>
+    <message>
+        <source>SILHOUETTE</source>
+        <translation>SILHOUETTE</translation>
+    </message>
+    <message>
+        <source>DAVIES-BOULDIN</source>
+        <translation>DAVIES-BOULDIN</translation>
+    </message>
+    <message>
+        <source>BIC</source>
+        <translation>BIC</translation>
+    </message>
+    <message>
+        <source>LONGEST GROUP (ROWS)</source>
+        <translation>GROUPE LE PLUS LONG (LIGNES)</translation>
+    </message>
+    <message>
+        <source>MAE lower by %1</source>
+        <translation>MAE plus basse de %1</translation>
+    </message>
+    <message>
+        <source>balanced accuracy %1</source>
+        <translation>exactitude équilibrée %1</translation>
+    </message>
+    <message>
+        <source>Best against second on their %1 shared test rows: %2, p %3. %4</source>
+        <translation>Le meilleur contre le deuxième sur leurs %1 lignes de test communes : %2, p %3. %4</translation>
+    </message>
+    <message>
+        <source>The best is really better on these rows.</source>
+        <translation>Le meilleur est vraiment meilleur sur ces lignes.</translation>
+    </message>
+    <message>
+        <source>Not significantly different: choose on other grounds (simpler model, steadier folds).</source>
+        <translation>Pas de différence significative : choisissez sur d&apos;autres critères (modèle plus simple, plis plus réguliers).</translation>
+    </message>
+    <message>
+        <source>Noise: random agents trading as often returned %1 to %2 (5th to 95th percentile); differences inside that band are chance. No paired test for simulated trading.</source>
+        <translation>Bruit : des agents au hasard qui tradent aussi souvent ont rendu de %1 à %2 (5e au 95e centile) ; les écarts dans cette bande sont du hasard. Pas de test apparié pour le trading simulé.</translation>
+    </message>
+    <message>
+        <source>Above buy &amp; hold on %1 of %2 markets, beats 95 % of random agents on %3; mean excess %4.</source>
+        <translation>Au-dessus de l&apos;achat-conservation sur %1 marché(s) sur %2, bat 95 % des agents au hasard sur %3 ; surplus moyen %4.</translation>
+    </message>
+    <message>
+        <source>Silhouette: higher means groups further apart (above 0.5 well apart, near 0 overlapping). Davies-Bouldin: lower is better. BIC: lower is better, between Gaussian-mixture runs only. No test of significance for groupings.</source>
+        <translation>Silhouette : plus haut = groupes plus séparés (au-dessus de 0,5 bien séparés, près de 0 qui se chevauchent). Davies-Bouldin : plus bas = mieux. BIC : plus bas = mieux, seulement entre mélanges gaussiens. Pas de test de significativité pour les regroupements.</translation>
+    </message>
+    <message>
+        <source>Descriptive only: groupings on different markets have no common score; compare how many groups and how long they last.</source>
+        <translation>Descriptif seulement : des regroupements sur des marchés différents n&apos;ont pas de score commun ; comparez le nombre de groupes et leur durée.</translation>
+    </message>
+    <message>
+        <source>NOT COMPARED</source>
+        <translation>NON COMPARÉS</translation>
+    </message>
+    <message>
+        <source>same market and question as another training, but another test period: not the same rows.</source>
+        <translation>même marché et même question qu&apos;un autre entraînement, mais une autre période de test : pas les mêmes lignes.</translation>
+    </message>
+    <message>
+        <source>same market, question and test period as another training, but another version of the data set (rebuilt since, or not recorded for older runs): not the same rows.</source>
+        <translation>même marché, même question et même période de test qu&apos;un autre entraînement, mais une autre version du jeu de données (reconstruit depuis, ou non enregistrée pour les anciens) : pas les mêmes lignes.</translation>
+    </message>
+    <message>
+        <source>no other training of this question on this market, and its setup was not run on another market.</source>
+        <translation>aucun autre entraînement de cette question sur ce marché, et son réglage n&apos;a pas été lancé sur un autre marché.</translation>
+    </message>
+    <message>
+        <source>… and %1 more</source>
+        <translation>… et %1 de plus</translation>
+    </message>
+    <message>
+        <source>WITHOUT REFERENCES</source>
+        <translation>SANS RÉFÉRENCES</translation>
+    </message>
+    <message>
+        <source>These older trainings could not get their no-skill and persistence columns afterwards (their — above). Re-running the same setup on today&apos;s data set gives a training with them.</source>
+        <translation>Ces anciens entraînements n&apos;ont pas pu recevoir après coup leurs colonnes sans compétence et persistance (leurs — ci-dessus). Relancer le même réglage sur le jeu de données d&apos;aujourd&apos;hui donne un entraînement qui les a.</translation>
+    </message>
+    <message>
+        <source>Nothing to compare among these: tick trainings of the same question on one market, or one setup run on several markets.</source>
+        <translation>Rien à comparer parmi ceux-ci : cochez des entraînements d&apos;une même question sur un marché, ou un même réglage lancé sur plusieurs marchés.</translation>
+    </message>
+    <message>
+        <source>trades %1 (%2, cost %3 bp)</source>
+        <translation>trade %1 (%2, coût %3 pb)</translation>
+    </message>
+    <message>
+        <source>groups the rows on %1 feature(s)</source>
+        <translation>regroupe les lignes sur %1 variable(s)</translation>
+    </message>
+    <message>
+        <source>looks for unusual rows on %1 feature(s)</source>
+        <translation>cherche les lignes inhabituelles sur %1 variable(s)</translation>
+    </message>
+    <message>
+        <source>maps the rows on %1 feature(s)</source>
+        <translation>cartographie les lignes sur %1 variable(s)</translation>
+    </message>
+    <message>
+        <source>embeddings; probe: %1 of %2, %3 row(s) ahead</source>
+        <translation>représentations ; sonde : %1 de %2, %3 ligne(s) plus loin</translation>
+    </message>
+    <message>
+        <source>predicts the %1 of %2, %3 row(s) ahead</source>
+        <translation>prédit : %1 de %2, %3 ligne(s) plus loin</translation>
+    </message>
+    <message>
+        <source>Tick trainings to compare them (or ⌘-click a row)</source>
+        <translation>Cochez des entraînements pour les comparer (ou ⌘-clic sur une ligne)</translation>
+    </message>
+    <message>
+        <source>COMPARE</source>
+        <translation>COMPARER</translation>
+    </message>
+    <message>
+        <source>COMPARE (%1)</source>
+        <translation>COMPARER (%1)</translation>
+    </message>
+    <message>
+        <source>Compare the ticked trainings</source>
+        <translation>Comparer les entraînements cochés</translation>
+    </message>
+    <message>
+        <source>Tick at least one more training</source>
+        <translation>Cochez au moins un autre entraînement</translation>
+    </message>
+    <message>
+        <source>Compare the selected training with the ones like it: the same question on the same market, the same setup on other markets. Tick trainings to choose them yourself.</source>
+        <translation>Comparer l&apos;entraînement sélectionné à ceux qui lui ressemblent : la même question sur le même marché, le même réglage sur d&apos;autres marchés. Cochez des entraînements pour les choisir vous-même.</translation>
+    </message>
+    <message>
+        <source>Select a training, or tick the ones to compare.</source>
+        <translation>Sélectionnez un entraînement, ou cochez ceux à comparer.</translation>
+    </message>
+    <message>
+        <source>This training has no result to compare.</source>
+        <translation>Cet entraînement n&apos;a pas de résultat à comparer.</translation>
+    </message>
+    <message>
+        <source>No other training like this one: the same question on the same market, or the same setup on another market. Tick trainings to compare them anyway.</source>
+        <translation>Aucun autre entraînement comparable à celui-ci (même question sur le même marché, ou même réglage sur un autre marché). Cochez des entraînements pour les comparer quand même.</translation>
+    </message>
+    <message>
+        <source>%1 finished training(s) among these: at least two are needed.</source>
+        <translation>%1 entraînement(s) terminé(s) parmi ceux-ci : il en faut au moins deux.</translation>
+    </message>
+    <message>
+        <source>Comparing %1 trainings…</source>
+        <translation>Comparaison de %1 entraînements…</translation>
+    </message>
+    <message>
+        <source>‹ BACK TO THE COMPARISON</source>
+        <translation>‹ RETOUR À LA COMPARAISON</translation>
+    </message>
+    <message>
+        <source>SETUP</source>
+        <translation>RÉGLAGE</translation>
+    </message>
+    <message>
+        <source>the test rows&apos; dates differ from the run&apos;s: the data set was rebuilt since</source>
+        <translation>les dates des lignes de test diffèrent de celles de l&apos;entraînement : le jeu de données a été reconstruit depuis</translation>
+    </message>
+    <message>
+        <source>the test rows&apos; actual values differ from the run&apos;s: the data set was rebuilt since</source>
+        <translation>les valeurs réelles des lignes de test diffèrent de celles de l&apos;entraînement : le jeu de données a été reconstruit depuis</translation>
+    </message>
+    <message>
+        <source>the rebuilt no-skill class differs from the run&apos;s</source>
+        <translation>la classe sans compétence recalculée diffère de celle de l&apos;entraînement</translation>
+    </message>
+    <message>
+        <source>its data set is no longer on disk</source>
+        <translation>son jeu de données n&apos;est plus sur le disque</translation>
+    </message>
+    <message>
+        <source>the trainer stopped while adding them</source>
+        <translation>l&apos;entraîneur s&apos;est arrêté pendant l&apos;ajout</translation>
+    </message>
+    <message>
+        <source>the data set now gives %1 test rows, the run had %2: it was rebuilt since</source>
+        <translation>le jeu de données donne maintenant %1 lignes de test, l&apos;entraînement en avait %2 : il a été reconstruit depuis</translation>
+    </message>
+    <message>
+        <source>the rebuilt no-skill %1 (%2) differs from the run&apos;s (%3)</source>
+        <translation>la valeur sans compétence %1 recalculée (%2) diffère de celle de l&apos;entraînement (%3)</translation>
+    </message>
+    <message>
+        <source>Beats its own no skill on %1 of %2 markets, significantly (after tries) on %3; mean edge %4.</source>
+        <translation>Bat son propre « sans compétence » sur %1 marché(s) sur %2, significativement (après essais) sur %3 ; avance moyenne %4.</translation>
+    </message>
+    <message>
+        <source>Significant on one market only: a setup that works on one market only is likely fitted to it.</source>
+        <translation>Significatif sur un seul marché : un réglage qui ne marche que sur un marché y est probablement ajusté.</translation>
+    </message>
+    <message>
+        <source>It shows skill on none of them.</source>
+        <translation>Il ne montre de compétence sur aucun.</translation>
+    </message>
+    <message>
+        <source>WEB</source>
+        <translation>TOILE</translation>
+    </message>
+    <message>
+        <source>The conversation in the middle, linked to what the agent does: the data it collects, its trainings, its comparisons</source>
+        <translation>La conversation au centre, reliée à ce que fait l&apos;agent : les données qu&apos;il collecte, ses entraînements, ses comparaisons</translation>
+    </message>
+    <message>
+        <source>TRAINING NOW</source>
+        <translation>ENTRAÎNE EN CE MOMENT</translation>
+    </message>
+    <message>
+        <source>ITS TRAININGS</source>
+        <translation>SES ENTRAÎNEMENTS</translation>
+    </message>
+    <message>
+        <source>just now</source>
+        <translation>à l&apos;instant</translation>
+    </message>
+    <message>
+        <source>%1 min ago</source>
+        <translation>il y a %1 min</translation>
+    </message>
+    <message>
+        <source>%1 h ago</source>
+        <translation>il y a %1 h</translation>
+    </message>
+    <message>
+        <source>Nothing collected yet. The data this agent reads (prices, macro series, news, data sets for training) shows here, newest first.</source>
+        <translation>Rien de collecté pour l&apos;instant. Les données que lit cet agent (cours, séries macro, actualités, jeux de données d&apos;entraînement) s&apos;affichent ici, les plus récentes d&apos;abord.</translation>
+    </message>
+    <message>
+        <source>%1 READ(S)</source>
+        <translation>%1 LECTURE(S)</translation>
+    </message>
+    <message>
+        <source>%1 REFUSED</source>
+        <translation>%1 REFUSÉE(S)</translation>
+    </message>
+    <message>
+        <source>No comparison yet. When this agent compares its trainings, each group&apos;s best and the verdict show here.</source>
+        <translation>Pas encore de comparaison. Quand cet agent compare ses entraînements, le meilleur de chaque groupe et le verdict s&apos;affichent ici.</translation>
+    </message>
+    <message>
+        <source>Tick “Machine learning” to let this agent train and compare models.</source>
+        <translation>Cochez « Apprentissage automatique » pour que cet agent entraîne et compare des modèles.</translation>
+    </message>
+    <message>
+        <source>%1 TRAININGS</source>
+        <translation>%1 ENTRAÎNEMENTS</translation>
+    </message>
+    <message>
+        <source>Comparing…</source>
+        <translation>Comparaison…</translation>
+    </message>
+    <message>
+        <source>These trainings are no longer all here: nothing left to compare.</source>
+        <translation>Ces entraînements ne sont plus tous là : plus rien à comparer.</translation>
+    </message>
+    <message>
+        <source>Nothing comparable among the trainings it chose.</source>
+        <translation>Rien de comparable parmi les entraînements qu&apos;il a choisis.</translation>
+    </message>
+    <message>
+        <source>best: %1, %2 over no skill</source>
+        <translation>meilleur : %1, %2 sur « sans compétence »</translation>
+    </message>
+    <message>
+        <source>beats no skill on %1 of %2 markets</source>
+        <translation>bat « sans compétence » sur %1 marché(s) sur %2</translation>
+    </message>
+    <message>
+        <source>best: %1, %2 over buy &amp; hold</source>
+        <translation>meilleur : %1, %2 sur l&apos;achat-conservation</translation>
+    </message>
+    <message>
+        <source>above buy &amp; hold on %1 of %2 markets</source>
+        <translation>au-dessus de l&apos;achat-conservation sur %1 marché(s) sur %2</translation>
+    </message>
+    <message>
+        <source>best: %1, silhouette %2</source>
+        <translation>meilleur : %1, silhouette %2</translation>
+    </message>
+    <message>
+        <source>%1 markets, descriptive only</source>
+        <translation>%1 marchés, descriptif seulement</translation>
+    </message>
+    <message>
+        <source>significant after the tries on %1</source>
+        <translation>significatif après essais sur %1</translation>
+    </message>
+    <message>
+        <source>significant on none after the tries</source>
+        <translation>significatif sur aucun après essais</translation>
+    </message>
+    <message>
+        <source>Only re-runs of one setup: nothing to rank.</source>
+        <translation>Seulement des relances d&apos;un même réglage : rien à classer.</translation>
+    </message>
+    <message>
+        <source>reads the squawk</source>
+        <translation>lit le squawk</translation>
+    </message>
+    <message>
+        <source>reads macro data</source>
+        <translation>lit des données macro</translation>
+    </message>
+    <message>
+        <source>reads the central banks</source>
+        <translation>lit les banques centrales</translation>
+    </message>
+    <message>
+        <source>reads the COT positions</source>
+        <translation>lit les positions COT</translation>
+    </message>
+    <message>
+        <source>reads retail sentiment</source>
+        <translation>lit le sentiment des particuliers</translation>
+    </message>
+    <message>
+        <source>reads risk sentiment</source>
+        <translation>lit le sentiment de risque</translation>
+    </message>
+    <message>
+        <source>reads bank forecasts</source>
+        <translation>lit les prévisions des banques</translation>
+    </message>
+    <message>
+        <source>reads bank research</source>
+        <translation>lit la recherche des banques</translation>
+    </message>
+    <message>
+        <source>reads market hours</source>
+        <translation>lit les horaires des marchés</translation>
+    </message>
+    <message>
+        <source>reads the technical picture</source>
+        <translation>lit la lecture technique</translation>
+    </message>
+    <message>
+        <source>reads liquidity pools</source>
+        <translation>lit les poches de liquidité</translation>
+    </message>
+    <message>
+        <source>reads seasonality</source>
+        <translation>lit la saisonnalité</translation>
+    </message>
+    <message>
+        <source>reads fundamental scores</source>
+        <translation>lit les scores fondamentaux</translation>
+    </message>
+    <message>
+        <source>reads macro chains</source>
+        <translation>lit les chaînes macro</translation>
+    </message>
+    <message>
+        <source>reads macro facts</source>
+        <translation>lit les faits macro</translation>
+    </message>
+    <message>
+        <source>reads what technical data exists</source>
+        <translation>lit les données techniques disponibles</translation>
+    </message>
+    <message>
+        <source>reads technical data</source>
+        <translation>lit des données techniques</translation>
+    </message>
+    <message>
+        <source>reads the footprint</source>
+        <translation>lit le footprint</translation>
+    </message>
+    <message>
+        <source>reads the order book</source>
+        <translation>lit le carnet d'ordres</translation>
+    </message>
+    <message>
+        <source>reads the open interest</source>
+        <translation>lit l'open interest</translation>
+    </message>
+    <message>
+        <source>reads the track record</source>
+        <translation>lit le track record</translation>
+    </message>
+    <message>
+        <source>COLLECTION</source>
+        <comment>constellation node</comment>
+        <translation>COLLECTE</translation>
+    </message>
+    <message>
+        <source>TRAINING</source>
+        <comment>constellation node</comment>
+        <translation>ENTRAÎNEMENT</translation>
+    </message>
+    <message>
+        <source>COMPARISON</source>
+        <comment>constellation node</comment>
+        <translation>COMPARAISON</translation>
+    </message>
+    <message>
+        <source>order flow</source>
+        <translation>flux d’ordres</translation>
+    </message>
+    <message>
+        <source>Adds the columns of what the pair records besides its bars (footprint per bar, the perpetual&apos;s book depth and open interest) and keeps only the bars they cover, so a model on the bar columns alone and one with these are trained on the same rows.</source>
+        <translation>Ajoute les colonnes de ce que la paire enregistre en plus de ses bougies (footprint par bougie, profondeur du carnet et open interest du perpétuel) et ne garde que les bougies qu’elles couvrent, pour qu’un modèle sur les seules colonnes de bougie et un modèle avec celles-ci s’entraînent sur les mêmes lignes.</translation>
+    </message>
+    <message>
+        <source>This pair records no order flow (footprint, book depth or open interest) usable on this timeframe (1m to 1D; set it in Data › Technical data › SETTINGS).</source>
+        <translation>Cette paire n’enregistre aucun flux d’ordres (footprint, profondeur du carnet ou open interest) utilisable sur cette unité de temps (1m à 1D ; à régler dans Data › Technical data › RÉGLAGES).</translation>
+    </message>
+    <message>
+        <source>No bar of this timeframe is covered by the stored order flow yet (Data › Technical data).</source>
+        <translation>Aucune bougie de cette unité de temps n’est encore couverte par le flux d’ordres stocké (Data › Technical data).</translation>
+    </message>
+    <message>
+        <source>order flow: the %1 bars it covers (%2 others left out)</source>
+        <translation>flux d’ordres : les %1 bougies qu’il couvre (%2 autres écartées)</translation>
     </message>
 </context>
 </TS>

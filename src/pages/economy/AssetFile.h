@@ -51,12 +51,14 @@ private:
   void paintDashboard(QPainter& p);
   void paintSummary(QPainter& p, const QRectF& box);
   void paintTable(QPainter& p);
+  void paintTablePhone(QPainter& p);
   void paintCards(QPainter& p);
   void paintDetail(QPainter& p);
   void paintChart(QPainter& p, const QRectF& plot);
   QVector<macro::Point> window() const;   // visible points of the detail series
   void applyRange();
   void showTip(const QString& text);
+  QString captionText(const QVector<macro::Point>& w) const;   // detail caption (one line on desktop, wrapped on phones)
 
   QString m_iso = "us";
   bool m_detail = false;
@@ -73,6 +75,16 @@ private:
   QRectF m_close, m_summary, m_curvePlot, m_table, m_backBtn, m_headBox, m_chartBox, m_plot, m_caption, m_cal;
   QList<QRectF> m_tabRects, m_rowRects, m_cardRects, m_rangeRects, m_detRangeRects, m_typeRects;
   QRectF m_stdRect, m_fcRect, m_compareRect;
+  // phones (ui::compact): one column; the blocks below move down by what the wrapped texts and stacked controls need.
+  // The desktop values are the reference positions.
+  bool m_phone = false;
+  qreal m_dashY = 427;     // "MACRO DASHBOARD" label baseline
+  qreal m_advY = 0;        // ADVANCED heading
+  qreal m_fnH = 30;        // table footnote box
+  qreal m_advTextH = 0;    // wrapped ADVANCED note height (0: one line, beside the range buttons)
+  qreal m_cardsTop = 0;
+  qreal m_hintY = 275;     // detail: drag hint baseline (< 0: not drawn)
+  QRectF m_frame;          // detail: chart frame
   // interaction
   QPointF m_mouse{-1, -1};
   bool m_inside = false;

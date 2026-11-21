@@ -82,6 +82,9 @@ struct Checks {
   std::optional<Pbo> pbo;
   double psr = NaN, dsr = NaN, sr0 = 0;
   int trials = 0;
+  // Deepwater (not in the JS): the per-period Sharpes the deflated Sharpe counted (one per version tried), so the trial
+  // registry can add the other strategies tried on the same data (trials::withRegistry). Not in toJson().
+  QVector<double> trialSharpes;
   double costStress = NaN;
   std::optional<Robustness> robustness;
   std::optional<MonteCarlo> monteCarlo;

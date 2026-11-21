@@ -5,6 +5,7 @@
 #include "ui/Theme.h"
 #include "ui/Chart.h"
 #include "ui/Format.h"
+#include "ui/Touch.h"
 #include "core/I18n.h"
 #include <QCoreApplication>
 #include <QPainter>
@@ -86,6 +87,15 @@ QList<QPair<int, QString>> monthTicks(const QVector<QDate>& d) {
   QList<QPair<int, QString>> out;
   for (int i = 1; i < d.size(); ++i) if (d[i].month() != d[i - 1].month()) out << qMakePair(i, monthCaps(d[i]));
   return out;
+}
+// Phone-width panels (< 520 px): twelve month labels no longer fit side by side; a label that would touch the
+// previous one is skipped (wider panels keep every month, as before).
+bool skipMonth(qreal x, qreal& lastRight, const QString& t, const QFontMetricsF& fm, qreal panelW) {
+  if (panelW >= 520) return false;
+  const qreal w = fm.horizontalAdvance(t);
+  if (x - w / 2 < lastRight + 6) return true;
+  lastRight = x + w / 2;
+  return false;
 }
 
 // ------------------------------------------------------------------------------------------------ gauge
@@ -223,7 +233,8 @@ private:
       qreal x0 = c.x() - total / 2;
       p.setFont(f);
       for (int k = 0; k < blocks.size(); ++k) {
-        const QRectF pill(x0, c.y() + 129 * s, ws[k], 19);
+        // phone-width panel (< 520 px): the two pills span more than the "0"–"100" gap, so they go under those labels
+        const QRectF pill(x0, c.y() + 129 * s + (width() < 520 ? 24 : 0), ws[k], 19);
         p.setPen(QPen(theme::map(0x2b, 0x2a, 0x1d), 1)); p.setBrush(theme::map(0x14, 0x10, 0x00));
         p.drawRoundedRect(pill.adjusted(.5, .5, -.5, -.5), 2, 2);
         qreal x = pill.left() + 11;
@@ -317,9 +328,11 @@ private:
       return;
     }
     p.setFont(theme::sans(11, QFont::Medium)); p.setPen(theme::map(0x86, 0x83, 0x7a));
+    qreal lastRight = -1e9;
     for (const auto& [i, t] : monthTicks(m_d.dates)) {
       const qreal x = pl.left() + pl.width() * i / (n - 1);
       if (x < pl.left() + 14 || x > pl.right() - 14) continue;
+      if (skipMonth(x, lastRight, t, QFontMetricsF(p.font()), width())) continue;
       p.drawText(QRectF(x - 30, pl.bottom() + 4, 60, 20), Qt::AlignCenter, t);
     }
     // zone-coloured line with glow, split where it crosses 40 / 60
@@ -356,7 +369,11 @@ public:
   QRect dotRect() const { return QRect(10, 10, 16, 16); }
   static constexpr qreal kHead = 36, kRow = 74.3;
   // rows keep the reference pitch (74.3) and share the extra height of a taller panel (up to 104 px)
-  qreal rowH() const { return std::min(104.0, kRow + std::max(0, height() - 797) / 7.0); }
+  qreal rowH() const { return phone() ? kPhoneRow : std::min(104.0, kRow + std::max(0, height() - 797) / 7.0); }
+  // phone width (< 520 px): the description wraps on two lines, so rows are taller and the panel's height is fixed
+  static constexpr qreal kPhoneRow = 86;
+  bool phone() const { return width() < 520; }
+  static int phoneHeight() { return int(kHead + 7 * kPhoneRow + 2); }
 protected:
   void mouseMoveEvent(QMouseEvent* e) override {
     const qreal y = e->position().y() - kHead;
@@ -391,7 +408,7 @@ protected:
     p.fillRect(QRectF(1, kHead - 1, width() - 2, 1), theme::map(0x2a, 0x24, 0x14));
     const qreal L = 11, R = width() - 11;
     for (int i = 0; i < 7; ++i) {
-      const qreal y = kHead + i * rowH(); const qreal kRow = rowH(); const qreal oy = (kRow - 74.3) / 2;
+      const qreal y = kHead + i * rowH(); const qreal kRow = rowH(); const qreal oy = phone() ? 2 : (kRow - 74.3) / 2;
       if (i == m_hoverRow) {
         QLinearGradient g(0, 0, width() * 0.6, 0);
         g.setColorAt(0, theme::map(0x2b, 0x21, 0x04)); g.setColorAt(1, theme::map(0x2b, 0x21, 0x04, 0));
@@ -422,7 +439,8 @@ protected:
         else { p.setBrush(g); p.drawRoundedRect(QRectF(track.left(), track.top(), w, 4), 2, 2); }
       }
       p.setFont(theme::condensed(12, QFont::Medium)); p.setPen(theme::map(0x52, 0x4e, 0x46));
-      p.drawText(QPointF(L, y + oy + 59), QCoreApplication::translate("positioning", c.description.toUtf8().constData()));
+      if (phone()) p.drawText(QRectF(L, y + oy + 47, R - L, 34), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, QCoreApplication::translate("positioning", c.description.toUtf8().constData()));
+      else p.drawText(QPointF(L, y + oy + 59), QCoreApplication::translate("positioning", c.description.toUtf8().constData()));
     }
     if (m_d.components.isEmpty()) {
       p.setFont(theme::mono(11)); p.setPen(theme::map(0x7c, 0x79, 0x72));
@@ -461,12 +479,14 @@ private:
       const QFont sf = theme::mono(11); const QFontMetricsF sm(sf);
       const QString cs = QCoreApplication::translate("positioning", "%1 1Y").arg(fmt::pct(chg, 1));
       qreal x = width() - 12 - sm.horizontalAdvance(cs);
-      p.setFont(sf); p.setPen(chg >= 0 ? theme::map(0x4f, 0xd0, 0xe0) : theme::map(0xe8, 0x6a, 0x66)); p.drawText(QPointF(x, 26), cs);
+      const qreal dy = phone() ? 24 : 0;   // phone: the title takes the whole first line, the value goes under it
+      p.setFont(sf); p.setPen(chg >= 0 ? theme::map(0x4f, 0xd0, 0xe0) : theme::map(0xe8, 0x6a, 0x66)); p.drawText(QPointF(x, 26 + dy), cs);
       const QFont bf = theme::mono(18, QFont::Bold); const QString vs = fmt::num(v.last(), 2);
       x -= QFontMetricsF(bf).horizontalAdvance(vs) + 10;
-      p.setFont(bf); p.setPen(theme::map(0xfa, 0xf8, 0xf2)); p.drawText(QPointF(x, 27), vs);
+      p.setFont(bf); p.setPen(theme::map(0xfa, 0xf8, 0xf2)); p.drawText(QPointF(x, 27 + dy), vs);
     }
-    const QRectF pl(10, 47, width() - 10 - 64, height() - 47 - 30);
+    const qreal top = phone() ? 66 : 47;
+    const QRectF pl(10, top, width() - 10 - 64, height() - top - 30);
     auto rg = chart::range(v, 0.06);
     const auto ticks = niceTicks3(rg.first, rg.second, 7);   // steps 1/2/3/5 ×10ⁿ (VIX uses 3, as on t010.5)
     if (ticks.size() >= 2) { rg.first = std::min(rg.first, ticks.first()); rg.second = std::max(rg.second, ticks.last()); }
@@ -489,9 +509,11 @@ private:
     }
     const int n = v.size();
     p.setFont(theme::sans(11, QFont::Medium)); p.setPen(theme::map(0x86, 0x83, 0x7a));
+    qreal lastRight = -1e9;
     for (const auto& [i, t] : monthTicks(dts)) {
       const qreal x = pl.left() + pl.width() * i / (n - 1);
       if (x < pl.left() + 14 || x > pl.right() - 10) continue;
+      if (skipMonth(x, lastRight, t, QFontMetricsF(p.font()), width())) continue;
       p.drawText(QRectF(x - 30, pl.bottom() + 6, 60, 20), Qt::AlignCenter, t);
     }
     QPainterPath path;
@@ -507,6 +529,7 @@ private:
     if (theme::isDark()) { p.setPen(QPen(theme::alpha(c, 45), 5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.drawPath(path); }
     p.setPen(QPen(theme::mix(c, theme::map(QColor(Qt::white)), 0.15), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.drawPath(path);
   }
+  bool phone() const { return width() < 520; }
   bool m_vix; RiskData m_d; QPixmap m_cache;
 };
 }
@@ -529,6 +552,9 @@ protected:
   // height (gauge 45 %, history 25 %, charts 30 %) so big screens have no empty band; smaller ones scroll.
   void resizeEvent(QResizeEvent*) override {
     const int W = width(), m = 14, gap = 11;
+    if (ui::compact(W)) { layoutPhone(); return; }
+    m_phone = false;
+    setMinimumHeight(kHeight);
     const int extra = std::max(0, height() - kHeight);
     const int gh = 492 + extra * 45 / 100, hh = 293 + extra * 25 / 100, ch = 280 + extra * 30 / 100;
     const int lw = int(std::round((W - 2 * m - gap) * 0.5554));
@@ -541,20 +567,40 @@ protected:
     vix->setGeometry(m + bw + gap, cy, W - 2 * m - gap - bw, ch);
     m_footY = cy + ch + 6;
   }
+  // Phone held upright: one column, gauge first, then the components, the history and the two 1-year charts; the
+  // content is as tall as they need (the page scrolls).
+  void layoutPhone() {
+    m_phone = true;
+    const int W = width(), m = 10, gap = 10, w = W - 2 * m;
+    // the gauge's scale follows the width (s = (w - 40) / 640): the panel is just tall enough for that scale
+    const int gh = std::max(260, int(std::round(472 * (w - 40) / 640.0)) + 76);   // + room for the pills under "0"/"100"
+    int y = 12;
+    gauge->setGeometry(m, y, w, gh); y += gh + gap;
+    comps->setGeometry(m, y, w, ComponentsPanel::phoneHeight()); y += ComponentsPanel::phoneHeight() + gap;
+    history->setGeometry(m, y, w, 270); y += 270 + gap;
+    spx->setGeometry(m, y, w, 240); y += 240 + gap;
+    vix->setGeometry(m, y, w, 240); y += 240 + 6;
+    m_footY = y;
+    const QRect fr = QFontMetrics(theme::mono(9, QFont::Normal, 1.0)).boundingRect(QRect(0, 0, W - 28, 10000), Qt::TextWordWrap, footText());
+    setMinimumHeight(y + fr.height() + 24);
+  }
   void paintEvent(QPaintEvent*) override {
     QPainter p(this);
     p.fillRect(rect(), pk::col::kPage());
+    const QString t = footText();
+    p.setFont(theme::mono(9, QFont::Normal, 1.0)); p.setPen(theme::map(0x51, 0x4f, 0x49));
+    // narrow windows: wrap rather than cut the UPDATED time (phone: as many lines as it needs)
+    p.drawText(QRectF(14, m_footY, width() - 28, m_phone ? height() - m_footY : 30), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, t);
+  }
+private:
+  QString footText() const {
     const QString upd = m_d.updated.isValid() ? m_d.updated.toString("HH:mm") : fmt::dash();
-    const QString t = QCoreApplication::translate("positioning",
+    return QCoreApplication::translate("positioning",
         "EACH COMPONENT: TODAY'S READ AGAINST ITS OWN PREVIOUS 252 TRADING DAYS (PERCENTILE), ORIENTED SO "
         "HIGHER = MORE RISK APPETITE · COMPOSITE = AVERAGE OF AVAILABLE COMPONENTS, COMPUTED BY DEEPWATER · "
         "YAHOO FINANCE DAILY CLOSES · UPDATED %1").arg(upd);
-    p.setFont(theme::mono(9, QFont::Normal, 1.0)); p.setPen(theme::map(0x51, 0x4f, 0x49));
-    // narrow windows: wrap rather than cut the UPDATED time
-    p.drawText(QRectF(14, m_footY, width() - 28, 30), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, t);
   }
-private:
-  RiskData m_d; int m_footY = 1110;
+  RiskData m_d; int m_footY = 1110; bool m_phone = false;
 };
 
 RiskSentimentPage::RiskSentimentPage(QWidget* parent) : QWidget(parent) {
@@ -563,7 +609,7 @@ RiskSentimentPage::RiskSentimentPage(QWidget* parent) : QWidget(parent) {
   auto* v = new QVBoxLayout(this); v->setContentsMargins(0, 0, 0, 0); v->setSpacing(0);
   m_title = new pk::TitleBar(pk::TitleBar::Gauge, QCoreApplication::translate("positioning", "RISK SENTIMENT — CROSS-ASSET RISK APPETITE"), this, 36);
   m_title->setPulse(true);
-  m_title->setBadge(QCoreApplication::translate("positioning", "%1 MARKETS · DAILY CLOSES · PERCENTILE VS 1 YEAR").arg(7), true);
+  applyBadge();
   m_scroll = new pk::Scroll(this);
   m_content = new RiskContent(m_scroll);
   m_scroll->setWidget(m_content);
@@ -600,9 +646,17 @@ RiskSentimentPage::RiskSentimentPage(QWidget* parent) : QWidget(parent) {
 void RiskSentimentPage::refresh() {
   const auto& d = RiskIndex::instance().data();
   m_content->setData(d);
-  int n = 0; for (const auto& c : d.components) if (c.ok()) ++n;
-  m_title->setBadge(QCoreApplication::translate("positioning", "%1 MARKETS · DAILY CLOSES · PERCENTILE VS 1 YEAR").arg(d.ok() ? n : 7), true);
+  applyBadge();
 }
+// Phone upright: the bar has room for the title only (the badge would cover it); the footer names the sources.
+void RiskSentimentPage::applyBadge() {
+  const auto& d = RiskIndex::instance().data();
+  int n = 0; for (const auto& c : d.components) if (c.ok()) ++n;
+  const QString b = ui::compact(width()) ? QString()
+      : QCoreApplication::translate("positioning", "%1 MARKETS · DAILY CLOSES · PERCENTILE VS 1 YEAR").arg(d.ok() ? n : 7);
+  if (b != m_badge) { m_badge = b; m_title->setBadge(b, true); }
+}
+void RiskSentimentPage::resizeEvent(QResizeEvent* e) { QWidget::resizeEvent(e); applyBadge(); }
 void RiskSentimentPage::showEvent(QShowEvent*) { m_ticker->setRunning(true); RiskIndex::instance().load(); m_reload.start(); }
 void RiskSentimentPage::hideEvent(QHideEvent*) { m_ticker->setRunning(false); m_reload.stop(); }
 }  // namespace positioning

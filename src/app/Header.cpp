@@ -2,6 +2,7 @@
 #include "app/Pages.h"
 #include "ui/Theme.h"
 #include "core/I18n.h"
+#include "ui/Touch.h"
 #include <QToolTip>
 #include <QPainter>
 #include <QPainterPath>
@@ -21,6 +22,7 @@ QFont clockFont() { return theme::mono(12, QFont::Medium, 0.5); }
 QFont utcFont() { return theme::mono(11); }
 constexpr qreal kWordX = 54;
 constexpr qreal kGearW = 34;   // gear button at the right end of the first row
+constexpr qreal kHelpW = 30;   // the documentation ? left of the gear
 
 // What the header shows at a given width, most complete first (laptops at 1024–1366 px drop the extras).
 struct Fit { bool word; int clock; qreal pad; qreal sp; };   // clock: 2 utc+date+time, 1 date+time, 0 time
@@ -40,7 +42,7 @@ qreal tabsWidth(qreal pad, qreal sp) {
 }
 Fit fitFor(qreal width) {
   for (const auto& f : kFits)
-    if (tabsStart(f.word) + tabsWidth(f.pad, f.sp) + 24 <= width - 16 - kGearW - clockWidth(f.clock)) return f;
+    if (tabsStart(f.word) + tabsWidth(f.pad, f.sp) + 24 <= width - 16 - kGearW - kHelpW - clockWidth(f.clock)) return f;
   return kFits[std::size(kFits) - 1];
 }
 struct SubFit { qreal pad; qreal sp; int px; };
@@ -58,6 +60,16 @@ SubFit subFitFor(const QList<app::SubTab>& subs, qreal width) {
 struct Layout { int width = -1, main = -1, rev = -1; QString lang; Fit fit; SubFit sfit; QList<Header::Hit> hits; };
 Layout& layoutMemo() { static Layout l; return l; }
 // the options gear (static: three path booleans per paint before)
+// the documentation button: a ? in a ring, the gear's size and colours
+void drawHelp(QPainter& p, const QRectF& r, bool hover) {
+  const auto& c = theme::pal();
+  if (hover) { p.setPen(Qt::NoPen); p.setBrush(c.panelAlt); p.drawRoundedRect(r, 3, 3); }
+  const QColor col = hover ? c.accent : c.textDim;
+  p.setPen(QPen(col, 1.6)); p.setBrush(Qt::NoBrush);
+  p.drawEllipse(r.center(), 7.6, 7.6);
+  p.setFont(theme::mono(11, QFont::ExtraBold)); p.setPen(col);
+  p.drawText(r.adjusted(0, 0, 0, 0.5), Qt::AlignCenter, "?");
+}
 const QPainterPath& gearPath() {
   static const QPainterPath gear = [] {
     QPainterPath teeth;
@@ -114,9 +126,66 @@ QList<Header::Hit> Header::hits() const {
   return out;
 }
 
+// a phone upright (narrow), or turned (low: the two rows would take a fifth of the height)
+bool Header::isCompact() const { return ui::compact(width()) || (window() && window()->height() < 500); }
+
+void Header::syncHeight() {
+  const int h = isCompact() ? kCompactHeight : kHeight;
+  if (height() != h) setFixedHeight(h);
+}
+void Header::resizeEvent(QResizeEvent*) { syncHeight(); }
+
+QRectF Header::menuRect() const { return QRectF(4, (kCompactHeight - 44) / 2.0, 44, 44); }
+
+void Header::paintCompact(QPainter& p) {
+  const auto& c = theme::pal();
+  p.fillRect(rect(), theme::map("#050301"));
+  p.fillRect(QRect(0, height() - 1, width(), 1), c.border);
+  // ☰
+  const QRectF m = menuRect();
+  if (m_hoverMenu) { p.setPen(Qt::NoPen); p.setBrush(c.panelAlt); p.drawRoundedRect(m.adjusted(4, 4, -4, -4), 3, 3); }
+  p.setPen(QPen(m_hoverMenu ? c.accent : c.text, 2, Qt::SolidLine, Qt::RoundCap));
+  for (int k = -1; k <= 1; ++k) p.drawLine(QPointF(m.center().x() - 9, m.center().y() + k * 6), QPointF(m.center().x() + 9, m.center().y() + k * 6));
+  // time and gear on the right
+  const QRectF g = gearRect();
+  if (m_hoverGear) { p.setPen(Qt::NoPen); p.setBrush(c.panelAlt); p.drawRoundedRect(g, 3, 3); }
+  p.save(); p.translate(g.center()); p.setPen(Qt::NoPen); p.setBrush(m_hoverGear ? c.accent : c.textDim); p.drawPath(gearPath()); p.restore();
+  drawHelp(p, helpRect(), m_hoverHelp);
+  qreal right = helpRect().left() - 10;
+  const QString hm = QDateTime::currentDateTime().toString("HH:mm");
+  p.setFont(clockFont());
+  const qreal wc = QFontMetricsF(p.font()).horizontalAdvance(hm);
+  const qreal left = m.right() + 8;
+  if (right - wc - left > 140) {
+    p.setPen(c.textDim);
+    p.drawText(QPointF(right - wc, height() / 2.0 + 4.5), hm);
+    right -= wc + 14;
+  }
+  // TAB › SUB-TAB (the tab dimmer), elided
+  const auto& t = app::tabs();
+  if (m_main < 0 || m_main >= t.size()) return;
+  const QString main = app::label(t[m_main].label).toUpper();
+  const QString sub = t[m_main].subs.size() > 1 ? app::label(t[m_main].subs[m_sub].label).toUpper() : QString();
+  const QFont f = theme::mono(12, QFont::Bold, 1.4);
+  p.setFont(f);
+  const QFontMetricsF fm(f);
+  const qreal room = right - left;
+  const qreal y = height() / 2.0 + 4.5;
+  if (sub.isEmpty()) { p.setPen(c.accent); p.drawText(QPointF(left, y), fm.elidedText(main, Qt::ElideRight, room)); return; }
+  const QString sep = QStringLiteral(" › ");
+  const qreal wm = fm.horizontalAdvance(main + sep);
+  if (wm + fm.horizontalAdvance(sub) <= room) {
+    p.setPen(c.textDim); p.drawText(QPointF(left, y), main + sep);
+    p.setPen(c.accent); p.drawText(QPointF(left + wm, y), sub);
+  } else {
+    p.setPen(c.accent); p.drawText(QPointF(left, y), fm.elidedText(sub, Qt::ElideRight, room));   // the page's own name first
+  }
+}
+
 void Header::paintEvent(QPaintEvent*) {
   QPainter p(this);
   p.setRenderHint(QPainter::Antialiasing);
+  if (isCompact()) { paintCompact(p); return; }
   const auto& c = theme::pal();
   p.fillRect(rect(), theme::map("#050301"));
   p.fillRect(QRect(0, kRow1, width(), kHeight - kRow1), theme::map("#090603"));
@@ -185,7 +254,7 @@ void Header::paintEvent(QPaintEvent*) {
   const QString local = fit.clock == 0 ? now.toString("HH:mm:ss")
                                        : i18n::locale().toString(now, "ddd dd MMM  HH:mm:ss");
   const qreal wl = QFontMetricsF(p.font()).horizontalAdvance(local);
-  const qreal right = width() - 16 - kGearW;
+  const qreal right = width() - 16 - kGearW - kHelpW;
   p.drawText(QPointF(right - wl, kRow1 / 2.0 + 4.5), local);
   if (fit.clock == 2) {
     const QString utc = "UTC " + now.toUTC().toString("HH:mm");
@@ -204,20 +273,39 @@ void Header::paintEvent(QPaintEvent*) {
     p.setPen(Qt::NoPen); p.setBrush(col); p.drawPath(gearPath());
     p.restore();
   }
+  drawHelp(p, helpRect(), m_hoverHelp);
 }
 
-QRectF Header::gearRect() const { return QRectF(width() - 16 - 26, (kRow1 - 26) / 2.0, 26, 26); }
+QRectF Header::gearRect() const {
+  if (isCompact()) return QRectF(width() - 8 - 36, (kCompactHeight - 36) / 2.0, 36, 36);   // a finger's size
+  return QRectF(width() - 16 - 26, (kRow1 - 26) / 2.0, 26, 26);
+}
+
+QRectF Header::helpRect() const {
+  const QRectF g = gearRect();
+  return isCompact() ? g.translated(-g.width() - 4, 0) : g.translated(-kHelpW, 0);
+}
 
 void Header::mouseMoveEvent(QMouseEvent* e) {
+  const bool qh = helpRect().contains(e->position());
+  if (qh != m_hoverHelp) { m_hoverHelp = qh; update(helpRect().adjusted(-2, -2, 2, 2).toAlignedRect()); }
+  if (isCompact()) {
+    const bool gh = gearRect().contains(e->position()), mh = menuRect().contains(e->position());
+    if (gh != m_hoverGear || mh != m_hoverMenu) { m_hoverGear = gh; m_hoverMenu = mh; update(); }
+    setCursor(gh || mh || qh ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    return;
+  }
   const bool gh = gearRect().contains(e->position());
   if (gh != m_hoverGear) { m_hoverGear = gh; update(gearRect().adjusted(-2, -2, 2, 2).toAlignedRect()); }
   int hm = -1, hs = -1;
   for (const auto& h : hits()) if (h.r.contains(e->position())) { if (h.sub < 0) hm = h.main; else hs = h.sub; }
   if (hm != m_hoverMain || hs != m_hoverSub) { m_hoverMain = hm; m_hoverSub = hs; update(); }
-  setCursor(hm >= 0 || hs >= 0 || gh ? Qt::PointingHandCursor : Qt::ArrowCursor);
+  setCursor(hm >= 0 || hs >= 0 || gh || qh ? Qt::PointingHandCursor : Qt::ArrowCursor);
 }
 void Header::mousePressEvent(QMouseEvent* e) {
   if (gearRect().contains(e->position())) { emit optionsRequested(); return; }
+  if (helpRect().contains(e->position())) { emit helpRequested(); return; }
+  if (isCompact()) { if (menuRect().contains(e->position()) || e->position().x() < width() / 2) emit menuRequested(); return; }
   for (const auto& h : hits()) {
     if (!h.r.contains(e->position())) continue;
     if (h.sub < 0) emit navigate(h.main, m_lastSub.value(h.main));
@@ -225,4 +313,4 @@ void Header::mousePressEvent(QMouseEvent* e) {
     return;
   }
 }
-void Header::leaveEvent(QEvent*) { m_hoverMain = m_hoverSub = -1; m_hoverGear = false; update(); }
+void Header::leaveEvent(QEvent*) { m_hoverMain = m_hoverSub = -1; m_hoverGear = m_hoverMenu = m_hoverHelp = false; update(); }

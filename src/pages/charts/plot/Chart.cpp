@@ -135,7 +135,7 @@ void Chart::mergeScaleOptions(const PriceScaleOptions& a, const PriceScaleOption
 }
 
 static void mergeTimeOptions(const TimeScaleOptions& a, const TimeScaleOptions& b, TimeScaleOptions& t) {
-  DW_M(rightOffset) DW_M(barSpacing) DW_M(minBarSpacing) DW_M(maxBarSpacing) DW_M(fixLeftEdge) DW_M(fixRightEdge)
+  DW_M(rightOffset) DW_M(barSpacing) DW_M(minBarSpacing) DW_M(maxBarSpacing) DW_M(minVisibleBars) DW_M(fixLeftEdge) DW_M(fixRightEdge)
   DW_M(lockVisibleTimeRangeOnResize) DW_M(rightBarStaysOnScroll) DW_M(borderVisible) DW_M(borderColor) DW_M(visible)
   DW_M(timeVisible) DW_M(secondsVisible) DW_M(shiftVisibleRangeOnNewBar) DW_M(ticksVisible) DW_M(allowBoldLabels)
   DW_M(minimumHeight)

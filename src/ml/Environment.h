@@ -4,7 +4,7 @@
 #include <QString>
 #include <QStringList>
 
-class QProcess;
+#include "core/Process.h"
 
 // AI › ML: Deepwater's own Python environment, <data>/ml/venv, made from a Python 3.11+ already on this computer
 // (python.org, Homebrew). Created and filled from the ML page only (INSTALL), with pinned versions and binary wheels only
@@ -56,7 +56,7 @@ private:
   void runStep();
   QString writeLock(const QString& group) const;   // the lock copied under <data>/ml for pip; its path, "" on failure
   EnvStatus m_status;
-  QProcess* m_install = nullptr;
+  dw::Process* m_install = nullptr;
   QString m_log;
   int m_step = 0;
   bool m_refreshing = false, m_refreshAgain = false, m_withTorch = false;

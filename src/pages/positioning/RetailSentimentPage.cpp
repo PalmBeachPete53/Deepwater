@@ -7,6 +7,8 @@
 #include "ui/Theme.h"
 #include "ui/Format.h"
 #include "core/I18n.h"
+#include "ui/Touch.h"
+#include "global/PageScroll.h"
 #include <QCoreApplication>
 #include <QPainter>
 #include <QPainterPath>
@@ -75,15 +77,16 @@ class RetailKpis : public QWidget {
 public:
   explicit RetailKpis(QWidget* p) : QWidget(p) { setFixedHeight(82); setMouseTracking(true); }
   static constexpr int kCard = 82;
-  // six cards in a row; below 1200 px the labels would be cut, so 3 × 2
-  int columns() const { return width() >= 1180 ? 6 : 3; }
-  int neededHeight() const { return columns() == 6 ? kCard : 2 * kCard + 7; }
+  // six cards in a row; below 1200 px the labels would be cut, so 3 × 2; a phone upright (under 520 px) 2 × 3
+  int columns() const { return width() >= 1180 ? 6 : width() < 520 ? 2 : 3; }
+  int neededHeight() const { const int rows = (6 + columns() - 1) / columns(); return rows * kCard + (rows - 1) * 7; }
   void setData(const KpiData& d) { m_d = d; update(); }
 protected:
   bool event(QEvent* e) override {
     if (e->type() == QEvent::ToolTip) {
       const QPoint hp = static_cast<QHelpEvent*>(e)->pos();
-      const int i = int(hp.x() / (width() / qreal(columns()))) + (hp.y() > kCard ? columns() : 0);
+      const int row = columns() == 2 ? int(hp.y() / (kCard + 7)) : (hp.y() > kCard ? 1 : 0);
+      const int i = int(hp.x() / (width() / qreal(columns()))) + row * columns();
       static const char* tips[6] = {QT_TRANSLATE_NOOP("positioning", "Instruments whose retail long share is 65 % or more (Myfxbook community outlook)"),
         QT_TRANSLATE_NOOP("positioning", "Instruments whose retail short share is 65 % or more"), QT_TRANSLATE_NOOP("positioning", "Highest long share"), QT_TRANSLATE_NOOP("positioning", "Highest short share"),
         QT_TRANSLATE_NOOP("positioning", "Open positions tracked by the Myfxbook community outlook, all listed instruments"),
@@ -161,7 +164,8 @@ protected:
     p.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), 2, 2);
     const QColor c = m_on ? theme::map(0xd5, 0xc7, 0x88) : m_hover ? theme::map(0xc8, 0xc3, 0xb8) : theme::map(0x7d, 0x7a, 0x74);
     p.setPen(QPen(c, 1));
-    for (int k = 0; k < 3; ++k) { const qreal y = 9.5 + k * 3.5; p.drawLine(QPointF(9, y), QPointF(17, y)); }
+    const qreal oy = (height() - 26) / 2.0;   // 0 at the reference 26 px; the phone layout makes the button taller
+    for (int k = 0; k < 3; ++k) { const qreal y = oy + 9.5 + k * 3.5; p.drawLine(QPointF(9, y), QPointF(17, y)); }
     p.setFont(theme::mono(12)); p.drawText(QRectF(22, 0, width() - 22, height()), Qt::AlignVCenter | Qt::AlignLeft, QCoreApplication::translate("positioning", "Custom"));
   }
   void enterEvent(QEnterEvent*) override { m_hover = true; update(); }
@@ -174,8 +178,13 @@ private:
 // ------------------------------------------------------------------------------------------------ columns
 struct Cols {
   qreal bar, barW = 263, lng, sht, delta, pos, status;
+  bool phone = false;   // only SYMBOL, POSITIONING, LONG and STATUS (sht, delta, pos < 0: not drawn)
   explicit Cols(qreal W) {
     status = W - 11;
+    if (W < ui::kCompactWidth) {   // phone upright: SHORT is the bar's other side; positions and history are in the modal
+      phone = true; bar = 92; lng = W - 108; barW = std::max(40.0, lng - 46 - bar); sht = delta = pos = -1;
+      return;
+    }
     if (W < 1200) {   // small windows: fixed-width numeric columns after a narrower bar, so nothing overlaps the bar
       bar = 110; barW = std::clamp(W * 0.2, 150.0, 263.0);
       lng = bar + barW + 75; sht = lng + 80; delta = sht + 120; pos = delta + 120;
@@ -200,7 +209,9 @@ protected:
     p.drawText(r.adjusted(10, 0, 0, 0), Qt::AlignVCenter | Qt::AlignLeft, QCoreApplication::translate("positioning", "SYMBOL"));
     p.drawText(r.adjusted(c.bar, 0, 0, 0), Qt::AlignVCenter | Qt::AlignLeft, QCoreApplication::translate("positioning", "POSITIONING"));
     auto right = [&](qreal x, const QString& t) { p.drawText(QRectF(x - 200, 0, 200, 16), Qt::AlignVCenter | Qt::AlignRight, t); };
-    right(c.lng, QCoreApplication::translate("positioning", "LONG")); right(c.sht, QCoreApplication::translate("positioning", "SHORT")); right(c.delta, QCoreApplication::translate("positioning", "24H Δ LONG")); right(c.pos, QCoreApplication::translate("positioning", "POSITIONS")); right(c.status, QCoreApplication::translate("positioning", "STATUS"));
+    right(c.lng, QCoreApplication::translate("positioning", "LONG"));
+    if (!c.phone) { right(c.sht, QCoreApplication::translate("positioning", "SHORT")); right(c.delta, QCoreApplication::translate("positioning", "24H Δ LONG")); right(c.pos, QCoreApplication::translate("positioning", "POSITIONS")); }
+    right(c.status, QCoreApplication::translate("positioning", "STATUS"));
     p.fillRect(QRectF(0, 23, width(), 1), theme::map(0x36, 0x37, 0x22));
   }
 };
@@ -234,7 +245,7 @@ protected:
       auto* he = static_cast<QHelpEvent*>(e);
       const int i = indexAt(he->pos().y());
       const Cols c(width());
-      if (i >= 0 && he->pos().x() > c.delta - 120 && he->pos().x() < c.delta + 10 && !m_items[i].deltaTip.isEmpty())
+      if (i >= 0 && !c.phone && he->pos().x() > c.delta - 120 && he->pos().x() < c.delta + 10 && !m_items[i].deltaTip.isEmpty())
         QToolTip::showText(he->globalPos(), m_items[i].deltaTip, this);
       else QToolTip::hideText();
       return true;
@@ -296,6 +307,7 @@ protected:
       auto right = [&](qreal x, const QString& t, const QFont& f, const QColor& col) { p.setFont(f); p.setPen(col); p.drawText(QRectF(x - 200, r.top(), 200, kRow), Qt::AlignVCenter | Qt::AlignRight, t); };
       auto pct = [](double v) { return std::isfinite(v) ? QString("%1%").arg(fmt::whole(v)) : fmt::dash(); };   // lround(NaN): undefined
       right(c.lng, pct(s.longPct), num, theme::map(kLongTxt));
+      if (c.phone) { pk::drawStatusBadge(p, c.status, cy, pk::statusOf(s.longPct), 16); continue; }
       right(c.sht, pct(s.shortPct), num, theme::map(kShortTxt));
       if (!std::isfinite(it.delta)) right(c.delta, fmt::dash(), small, theme::map(0x4a, 0x47, 0x40));
       else if (it.delta == 0) right(c.delta, QCoreApplication::translate("positioning", "flat"), small, theme::map(0x79, 0x78, 0x71));
@@ -367,6 +379,16 @@ public:
     setFixedSize(width, layout()->totalHeightForWidth(width));
   }
   bool compact() const { return m_compact; }
+  // phone upright: the reference card (fields stacked) at the screen's width, as tall as its wrapped text; fields and
+  // buttons finger-sized
+  void setPhone(bool on, int width) {
+    for (QWidget* w : std::initializer_list<QWidget*>{email, password, button, cancel}) w->setMinimumHeight(on ? 36 : 0);
+    if (!on) return;
+    if (m_compact) setCompact(false, width);
+    status->setVisible(!status->text().isEmpty());
+    layout()->activate();
+    setFixedSize(width, layout()->totalHeightForWidth(width));
+  }
 private:
   QBoxLayout *m_fields = nullptr, *m_row = nullptr;
   bool m_compact = false;
@@ -461,6 +483,30 @@ RetailSentimentPage::RetailSentimentPage(QWidget* parent) : QWidget(parent) {
 
 void RetailSentimentPage::resizeEvent(QResizeEvent*) {
   const int W = width(), H = height();
+  // phone upright, or a page this short (phone sideways: ~380 px): one scrolling page
+  setPhoneMode(ui::compact(W) || H < 420);
+  if (m_pageScroll) {
+    const bool narrow = ui::compact(W);
+    // upright, the title would be cut and the badge pushed off the screen: the app header already names the page,
+    // the badge (log in / out) moves to the top of the scrolling page
+    m_title->setVisible(!narrow);
+    placeConn(narrow);
+    const int top = narrow ? 0 : 34;
+    if (!narrow) m_title->setGeometry(0, 0, W, 34);
+    m_pageScroll->setGeometry(0, top, W, H - top - 26);
+    m_pageScroll->relayout();
+    m_footer->setGeometry(0, H - 26, W, 26);
+    if (narrow) {
+      m_login->setPhone(true, W - 20);
+      m_login->move(10, 46);
+    } else {
+      m_login->setPhone(false, 0);
+      m_login->setCompact(true, std::min(W - 40, 860));   // sideways: the flat card, under the title bar
+      m_login->move((W - m_login->width()) / 2, std::clamp(top + 8, 0, std::max(0, H - 26 - m_login->height())));
+    }
+    if (m_modal) m_modal->setGeometry(rect());
+    return;
+  }
   m_title->setGeometry(0, 0, W, 34);
   m_kpis->setGeometry(10, 45, W - 20, 82);
   const int kh = m_kpis->neededHeight(), dy = kh - 82;   // two rows of cards on small windows
@@ -479,6 +525,86 @@ void RetailSentimentPage::resizeEvent(QResizeEvent*) {
   const int ly = std::clamp(199 + dy + std::min(90, (H - 199 - dy - 26 - m_login->height()) / 2), 40, std::max(40, H - 26 - 8 - m_login->height()));
   m_login->move((W - m_login->width()) / 2, ly);
   if (m_modal) m_modal->setGeometry(rect());
+}
+
+void RetailSentimentPage::setPhoneMode(bool on) {
+  if (on == (m_pageScroll != nullptr)) return;
+  const QList<QWidget*> moved{m_kpis, m_filter, m_cat, m_custom, m_sort, m_head};
+  if (on) {
+    m_phoneBox = new QWidget;
+    m_scroll->takeWidget();   // the table gets its full height in the page instead of its own scroll area
+    m_scroll->hide();
+    for (QWidget* w : moved) { w->setParent(m_phoneBox); w->show(); }
+    m_table->setParent(m_phoneBox); m_table->show();
+    m_pageScroll = new global::PageScroll(m_phoneBox, this);
+    m_pageScroll->layout = [this](int w, int vh) { return layoutPhone(w, vh); };
+    m_pageScroll->show();
+    m_custom->setFixedSize(82, 34);
+    m_cat->setPadding(8, 28); m_sort->setPadding(8, 28);   // finger-sized segments (34 px with the frame)
+  } else {
+    placeConn(false);
+    m_title->show();
+    for (QWidget* w : moved) { w->setParent(this); w->show(); }
+    m_pageScroll->takeWidget();
+    m_scroll->setWidget(m_table);
+    m_scroll->show();
+    m_pageScroll->hide(); m_pageScroll->deleteLater(); m_pageScroll = nullptr;
+    m_phoneBox->deleteLater(); m_phoneBox = nullptr;
+    m_custom->setFixedSize(73, 26);
+    m_cat->setPadding(8, 20); m_sort->setPadding(8, 20);
+    m_kpis->setFixedHeight(82);
+    m_login->setPhone(false, 0);
+    if (auto* icon = m_filter->findChild<QLabel*>()) icon->move(7, 7);
+  }
+  m_footer->raise(); m_login->raise();
+  if (m_modal) m_modal->raise();
+}
+
+void RetailSentimentPage::placeConn(bool inPage) {
+  if (inPage == m_connInPage) return;
+  m_connInPage = inPage;
+  if (inPage) {
+    m_title->rightLayout()->removeWidget(m_conn);
+    m_conn->setParent(m_phoneBox);
+    m_conn->setFixedHeight(32);   // a finger target: it logs in and out
+  } else {
+    m_conn->setParent(m_title);
+    m_conn->setFixedHeight(20);
+    m_title->rightLayout()->addWidget(m_conn);
+  }
+  m_conn->show();
+}
+
+int RetailSentimentPage::layoutPhone(int w, int vh) {
+  int y = 8;
+  if (m_connInPage) { m_conn->move(10, y); y += m_conn->height() + 8; }
+  else y = 11;   // the title bar is above the scroll area
+  m_kpis->setGeometry(10, y, w - 20, 82);
+  const int kh = m_kpis->neededHeight();
+  m_kpis->setFixedHeight(kh);
+  m_kpis->setGeometry(10, y, w - 20, kh);
+  y += kh + 8;
+  const int rowH = 34, gap = 6;
+  const int cw = m_cat->sizeHint().width(), sw = m_sort->sizeHint().width();
+  if (10 + 122 + 6 + cw + 5 + m_custom->width() + 12 + sw + 10 <= w) {   // sideways: one row, as on a desktop
+    m_filter->setGeometry(10, y, 122, rowH);
+    m_cat->setGeometry(138, y, cw, rowH);
+    m_custom->move(m_cat->geometry().right() + 5, y);
+    m_sort->setGeometry(w - 10 - sw, y, sw, rowH);
+    y += rowH + 8;
+  } else {   // upright: filter + custom list, then the categories, then the sort order
+    m_filter->setGeometry(10, y, w - 20 - gap - m_custom->width(), rowH);
+    m_custom->move(w - 10 - m_custom->width(), y);
+    y += rowH + gap;
+    m_cat->setGeometry(10, y, std::min(cw, w - 20), rowH); y += rowH + gap;
+    m_sort->setGeometry(10, y, std::min(sw, w - 20), rowH); y += rowH + 8;
+  }
+  if (auto* icon = m_filter->findChild<QLabel*>()) icon->move(7, (rowH - 12) / 2);   // the magnifier stays centred in the taller field
+  y += 4;
+  m_head->setGeometry(0, y, w, 26); y += 23;
+  const int th = std::max(m_table->minimumHeight(), vh - y);   // login / empty: the table's note fills the screen
+  m_table->setGeometry(0, y, w, th);
+  return y + th;
 }
 
 void RetailSentimentPage::showEvent(QShowEvent*) { m_ticker->setRunning(true); m_clock->start(); Retail::instance().setActive(this, true); }
@@ -622,6 +748,7 @@ void RetailSentimentPage::rebuildRows() {
   }
   m_table->setItems(items);
   m_table->setEmptyText(snap.isEmpty() ? QString() : QCoreApplication::translate("positioning", "No instrument matches the filter."));
+  if (m_pageScroll) m_pageScroll->relayout();   // phone: the page is as tall as the table
 }
 
 void RetailSentimentPage::openModal(const QString& symbol) {

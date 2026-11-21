@@ -5,13 +5,21 @@
 // Test hooks: DW_AI_SLOTS="i:owner/repo/file;…" (load before showing), DW_AI_HOVER=<slot> (drop-target highlight),
 // DW_AI_LIGHT=<0..1> (freeze every lit cube at that intensity, for screenshots), DW_AI_CHAT=<slot> (open its chat),
 // DW_AI_ASK=<question> (with DW_AI_CHAT: send it once the page is shown), DW_AI_SKILLS="i:skill,…;…" (tick boxes),
-// DW_AI_TOOLTEST=<file> (run every data tool once, results written to the file), DW_AI_UNTICK_ON_CALL=1.
+// DW_AI_TOOLTEST=<file> (run every data tool once, results written to the file), DW_AI_UNTICK_ON_CALL=1,
+// DW_AI_EVALDLG=<slot> (open that environment's EVALUATION dialog).
+// Phones (pages/ai/PhoneScroll.h, 2026-11-21): one column — the models, then the four cubes one under the other — and
+// the page scrolls; the chat fills the screen, its activity panel (or its WEB nodes) below it. Sideways (short): the
+// desktop rows at a fixed height, scrolling. Models are loaded by dragging (a mouse) or from AI › LLM › Integration's
+// LOAD buttons (Claude Code); on iOS neither a local model nor Claude Code can run (no child process): the cube's chat
+// shows the engine's failure.
 #include "app/Pages.h"
 #include "ai/ModelHub.h"
 #include "ai/Slots.h"
 #include "ai/Engine.h"
 #include "ai/Tools.h"
 #include "ai/ClaudeCode.h"
+#include "ai/Evaluation.h"
+#include "technicaldata/TechnicalDataStore.h"
 #include <QFile>
 #include <QRegularExpression>
 #include <QJsonArray>
@@ -19,6 +27,7 @@
 #include <QJsonObject>
 #include <memory>
 #include "pages/ai/ChatView.h"
+#include "pages/ai/PhoneScroll.h"
 #include "pages/ai/SkillBox.h"
 #include "pages/ai/VoxelCube.h"
 #include "ui/Kit.h"
@@ -28,6 +37,7 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QScrollArea>
+#include <QScreen>
 #include <QPushButton>
 #include <QLabel>
 #include <QPainter>
@@ -42,6 +52,17 @@
 #include <QEasingCurve>
 #include <QFileInfo>
 #include <QStackedWidget>
+#include <QCheckBox>
+#include <QRandomGenerator>
+#include <QComboBox>
+#include <QDateEdit>
+#include <QFormLayout>
+#include <QSpinBox>
+#include <QAbstractSpinBox>
+#include <QDateTimeEdit>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QTimeZone>
 #include <functional>
 #include <cmath>
 
@@ -86,6 +107,17 @@ QPixmap dragChip(const QString& text, qreal dpr) {
   p.setFont(f); p.setPen(c.text); p.drawText(QRectF(24, 0, w - 24, 30), Qt::AlignVCenter, text);
   return pm;
 }
+
+// A wrapping label that toggles a check box when tapped: on a phone, a check box's own text cannot wrap and would hold
+// the dialog wider than the screen.
+class TapLabel : public QLabel {
+public:
+  TapLabel(const QString& text, QAbstractButton* box, QWidget* parent) : QLabel(text, parent), m_box(box) { setWordWrap(true); }
+protected:
+  void mouseReleaseEvent(QMouseEvent* e) override { if (m_box->isEnabled() && rect().contains(e->position().toPoint())) m_box->toggle(); }
+private:
+  QAbstractButton* m_box;
+};
 
 // ---------------------------------------------------------------------------------------------- model list
 class ModelList : public QWidget {
@@ -181,6 +213,15 @@ public:
                               .arg(theme::alpha(c.up, 40).name(QColor::HexArgb), c.up.name(), theme::alpha(c.up, 150).name(QColor::HexArgb),
                                    theme::alpha(c.up, 80).name(QColor::HexArgb)));
     connect(m_chat, &QPushButton::clicked, this, [this] { if (onChat) onChat(m_index); });
+    // evaluation mode: the environment's tools answer as of a past moment (ai::Tools.h, Clock)
+    m_eval = new QPushButton(QCoreApplication::translate("ai", "EVALUATION"), this);
+    m_eval->setCursor(Qt::PointingHandCursor);
+    m_eval->setFont(theme::mono(10, QFont::Bold, 1.2));
+    m_eval->setToolTip(QCoreApplication::translate("ai", "Evaluation mode: the environment's tools answer as of a past date, as if it were then. "
+                                                         "Nothing later can be read, and the tools that only know the present are off."));
+    connect(m_eval, &QPushButton::clicked, this, [this] { editEvaluation(); });
+    connect(&ai::Slots::instance(), &ai::Slots::asOfChanged, this, [this](int i) { if (i == m_index) syncLabels(); });
+    connect(&ai::Evaluation::instance(), &ai::Evaluation::progress, this, [this] { syncLabels(); });
     for (const auto& sk : ai::skills()) m_skillBoxes << new SkillBox(m_index, sk, this);
     ai::Engine* eng = ai::Engines::instance().at(m_index);
     connect(eng, &ai::Engine::stateChanged, this, [this] { updatePulse(); update(); });
@@ -194,6 +235,16 @@ public:
     if (qEnvironmentVariableIsSet("DW_AI_HOVER") && qEnvironmentVariableIntValue("DW_AI_HOVER") == m_index) m_dropHover = true;
     syncLabels();
   }
+  // phones: finger-sized buttons; the card's height is the page's (one column, kPhoneHeight)
+  static constexpr int kPhoneHeight = 270;
+  void setPhone(bool on) {
+    if (on == m_phone) return;
+    m_phone = on;
+    for (auto* b : {m_eject, m_chat, m_eval}) { b->setMinimumHeight(on ? 34 : 0); b->adjustSize(); }
+    resizeEvent(nullptr);
+    update();
+  }
+  void openEvaluation() { editEvaluation(); }
   void slotChanged() {
     const bool on = !ai::Slots::instance().slot(m_index).isEmpty();
     m_anim->stop();
@@ -220,7 +271,9 @@ protected:
   bool compact() const { return loaded() && height() - 126 - 24 * m_skillBoxes.size() < 90 && width() >= 260; }
   QRectF cubeRect() const {
     if (compact()) {
-      const qreal side = qMax<qreal>(0, qMin<qreal>(width() * 0.4, height() - 100 - 22 * (m_skillBoxes.size() - 1)));
+      qreal side = qMax<qreal>(0, qMin<qreal>(width() * 0.4, height() - 100 - 22 * (m_skillBoxes.size() - 1)));
+      // phones: the buttons are taller (34 px), the cube stops above the first skill box
+      if (m_phone && !m_skillBoxes.isEmpty()) side = qMax<qreal>(0, qMin<qreal>(side, m_skillBoxes.first()->y() - 34 - 8));
       return QRectF(14, 34, side, side);
     }
     const qreal below = loaded() ? 126 : showEmptyNote() ? 62 + emptyNoteHeight() : 60;
@@ -232,6 +285,8 @@ protected:
     m_eject->move(width() - m_eject->width() - 12, height() - m_eject->height() - 12);
     m_chat->adjustSize();
     m_chat->move(m_eject->x() - m_chat->width() - 8, m_eject->y());
+    m_eval->adjustSize();
+    m_eval->move(m_chat->x() - m_eval->width() - 8, m_eject->y());
     // skills: tick boxes just above the buttons (they belong to the environment, empty or not); at the bottom when
     // the card is empty (no buttons), so no empty band is left under them
     const int boxesBottom = loaded() ? m_eject->y() - 6 : height() - 10;
@@ -265,6 +320,20 @@ protected:
     p.setPen(QPen(theme::alpha(sc, 130), 1)); p.setBrush(theme::alpha(sc, on ? 40 : 18)); p.drawRoundedRect(pill, 3, 3);
     p.setPen(Qt::NoPen); p.setBrush(sc); p.drawEllipse(QPointF(pill.left() + 9, pill.center().y()), 3, 3);
     p.setFont(sf); p.setPen(sc); p.drawText(pill.adjusted(16, 0, 0, 0), Qt::AlignVCenter | Qt::AlignLeft, state);
+    const auto& evr = ai::Evaluation::instance();
+    const bool protocol = evr.running() && evr.environment() == m_index;
+    if (const qint64 asOf = ai::Slots::instance().asOf(m_index); asOf > 0 || protocol) {   // evaluation mode: the date its tools answer as of
+      const QString ev = protocol ? (evr.probing() ? QCoreApplication::translate("ai", "MEMORY PROBE")
+                                                   : QCoreApplication::translate("ai", "EVALUATION %1 / %2").arg(evr.done() + 1).arg(evr.total()))
+                                  : QCoreApplication::translate("ai", "EVALUATION · %1 UTC")
+                                        .arg(QDateTime::fromSecsSinceEpoch(asOf, QTimeZone::UTC).toString("yyyy-MM-dd HH:mm"));
+      const qreal ew = QFontMetricsF(sf).horizontalAdvance(ev) + 16;
+      const QRectF eb(pill.left() - 8 - ew, 12, ew, 18);
+      if (eb.left() > 16 + QFontMetricsF(theme::mono(11, QFont::Bold, 2.4)).horizontalAdvance(QCoreApplication::translate("ai", "ENVIRONMENT %1").arg(m_index + 1)) + 8) {
+        p.setPen(QPen(theme::alpha(c.warn, 150), 1)); p.setBrush(theme::alpha(c.warn, 36)); p.drawRoundedRect(eb, 3, 3);
+        p.setPen(c.warn); p.drawText(eb, Qt::AlignCenter, ev);
+      }
+    }
 
     // cube
     const QRectF cr = cubeRect();
@@ -321,8 +390,8 @@ protected:
         }
       }
       p.setFont(theme::mono(10)); p.setPen(c.textDim);
-      if (side)   // beside the cube: the details may take two lines
-        p.drawText(QRectF(x0, y0 + 22, lw, 36), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, meta.join("  ·  "));
+      if (side)   // beside the cube: the details may take two lines (three on a narrow card: phone turned sideways)
+        p.drawText(QRectF(x0, y0 + 22, lw, 54), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, meta.join("  ·  "));
       else
         p.drawText(QRectF(16, y0 + 20, width() - 32, 18), Qt::AlignLeft | Qt::AlignVCenter,
                    QFontMetricsF(p.font()).elidedText(meta.join("  ·  "), Qt::ElideRight, width() - 32));
@@ -369,6 +438,14 @@ private:
     const bool on = !ai::Slots::instance().slot(m_index).isEmpty();
     m_eject->setVisible(on);
     m_chat->setVisible(on);
+    m_eval->setVisible(on);
+    const bool eval = ai::Slots::instance().asOf(m_index) > 0;
+    const auto& c = theme::pal();
+    const QColor ec = eval ? c.warn : c.textDim;
+    m_eval->setStyleSheet(QString("QPushButton { background: %1; color: %2; border: 1px solid %3; border-radius: 3px; padding: 3px 10px; }"
+                                  "QPushButton:hover { color: %4; border-color: %4; }")
+                              .arg(eval ? theme::alpha(c.warn, 40).name(QColor::HexArgb) : QStringLiteral("transparent"), ec.name(),
+                                   eval ? theme::alpha(c.warn, 150).name(QColor::HexArgb) : c.border.name(), c.warn.name()));
     resizeEvent(nullptr);   // the skill boxes move down when the card empties, up when it loads
     update();
   }
@@ -390,16 +467,231 @@ private:
   QPointF m_pressPos;
   QPushButton* m_eject;
   QPushButton* m_chat;
+  QPushButton* m_eval = nullptr;
+  bool m_phone = false;
+  // the evaluation mode's dialog: on or off, and the moment (UTC)
+  void editEvaluation() {
+    // phones: the dialog as wide as the window, its text and fields scrolling above OK / Cancel, one column of
+    // finger-sized controls
+    const bool phone = ui::compact(window()->width());
+    QDialog d(window());
+    d.setWindowTitle(QCoreApplication::translate("ai", "Evaluation mode · environment %1").arg(m_index + 1));
+    QVBoxLayout* lay = nullptr;
+    QVBoxLayout* outer = nullptr;
+    // the text and fields scroll above OK / Cancel at every size: on a laptop the dialog is taller than the screen
+    // and macOS squeezed its rows on top of each other (seen 2026-11-21 at 1600x1042)
+    QScrollArea* phoneScroll = nullptr;
+    {
+      outer = new QVBoxLayout(&d); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(0);
+      phoneScroll = new QScrollArea(&d);
+      phoneScroll->setWidgetResizable(true); phoneScroll->setFrameShape(QFrame::NoFrame);
+      phoneScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+      auto* inner = new QWidget;
+      phoneScroll->setWidget(inner);
+      lay = new QVBoxLayout(inner);
+      if (phone) lay->setContentsMargins(16, 16, 16, 8);
+      outer->addWidget(phoneScroll, 1);
+    }
+    auto* note = new QLabel(QCoreApplication::translate("ai",
+        "The environment's tools answer as of the date below, as if it were then: the bars closed by that time, the order flow "
+        "stored up to it, the macro facts published by then, backtests on the history before it. A later date asked is refused, "
+        "and the tools that only know the present (prices, news, the live book, the pages) are off. The model is told the date; "
+        "the tools enforce it. Its own memory of later events is not erased: compare with dates after its training."), &d);
+    note->setWordWrap(true);
+    note->setMinimumWidth(phone ? 0 : 420);
+    auto* on = new QCheckBox(QCoreApplication::translate("ai", "Evaluation mode on"), &d);
+    auto* when = new QDateTimeEdit(&d);
+    when->setTimeZone(QTimeZone::UTC);
+    when->setDisplayFormat("yyyy-MM-dd HH:mm 'UTC'");
+    when->setCalendarPopup(true);
+    const qint64 cur = ai::Slots::instance().asOf(m_index);
+    on->setChecked(cur > 0);
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    when->setMaximumDateTime(now);
+    when->setDateTime(cur > 0 ? QDateTime::fromSecsSinceEpoch(cur, QTimeZone::UTC)
+                              : QDateTime(now.date().addDays(-7), QTime(0, 0), QTimeZone::UTC));
+    when->setEnabled(on->isChecked());
+    connect(on, &QCheckBox::toggled, when, &QWidget::setEnabled);
+    auto* blindBox = new QCheckBox(QCoreApplication::translate("ai", "Blind: dates shifted, the market's name and price level masked"), &d);
+    blindBox->setChecked(ai::Slots::instance().blindSeed(m_index) != 0);
+    blindBox->setEnabled(on->isChecked());
+    connect(on, &QCheckBox::toggled, blindBox, &QWidget::setEnabled);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &d);
+    connect(bb, &QDialogButtonBox::accepted, &d, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &d, &QDialog::reject);
+    lay->addWidget(note);
+    lay->addWidget(on);
+    lay->addWidget(when);
+    if (phone) {   // the long option's text wraps beside its box
+      auto* row = new QHBoxLayout; row->setSpacing(6);
+      auto* text = new TapLabel(blindBox->text(), blindBox, &d);
+      blindBox->setText(QString());
+      text->setEnabled(blindBox->isEnabled());
+      connect(on, &QCheckBox::toggled, text, &QWidget::setEnabled);
+      row->addWidget(blindBox, 0, Qt::AlignTop);
+      row->addWidget(text, 1);
+      lay->addLayout(row);
+    } else lay->addWidget(blindBox);
+    // the evaluation protocol (ai::Evaluation): the model decides at past moments, Deepwater scores the decisions
+    auto& evr = ai::Evaluation::instance();
+    auto* head = new QLabel("<b>" + QCoreApplication::translate("ai", "Evaluation protocol").toHtmlEscaped() + "</b>", &d);
+    auto* pnote = new QLabel(QCoreApplication::translate("ai",
+        "At each moment of the period, the clock is set there (a fresh conversation) and the model decides LONG, SHORT or FLAT "
+        "for the next hours with its tools; Deepwater scores each decision on the stored 1-hour bars after costs, against buy & "
+        "hold, the trend rule, flat and an ML model without LLM. Probe the model's memory first: only the decisions after the "
+        "last month it remembers count (tier A). Each decision is a full answer of the model: a dozen take several minutes."), &d);
+    pnote->setWordWrap(true);
+    const QString market = "BINANCE:BTCUSDT";
+    const auto st = technicaldata::Store::instance().state(market, 3600);
+    const QDateTime lastBar = QDateTime::fromSecsSinceEpoch(st.count ? st.last + 3600 : QDateTime::currentSecsSinceEpoch(), QTimeZone::UTC);
+    auto* from = new QDateEdit(lastBar.date().addDays(-15), &d);
+    auto* to = new QDateEdit(lastBar.date().addDays(-2), &d);
+    for (auto* de : {from, to}) { de->setDisplayFormat("yyyy-MM-dd"); de->setCalendarPopup(true); }
+    auto* horizon = new QComboBox(&d);
+    for (int h : {1, 4, 12, 24}) horizon->addItem(QCoreApplication::translate("ai", "%1 h").arg(h), h);
+    horizon->setCurrentIndex(1);
+    auto* count = new QSpinBox(&d);
+    count->setRange(2, 60); count->setValue(10);
+    auto* repeats = new QSpinBox(&d);
+    repeats->setRange(1, 5); repeats->setValue(1);
+    auto* trials = new QComboBox(&d);
+    trials->addItem(QCoreApplication::translate("ai", "named"), 0);
+    trials->addItem(QCoreApplication::translate("ai", "blind"), 1);
+    trials->addItem(QCoreApplication::translate("ai", "both, at each moment"), 2);
+    auto* form = new QFormLayout;
+    auto* marketLine = new QLabel(market + QCoreApplication::translate("ai", " (1-hour bars, 15 bp a side)"), &d);
+    if (phone) form->setRowWrapPolicy(QFormLayout::WrapAllRows);   // each label above its field, the field full width
+    form->addRow(QCoreApplication::translate("ai", "Market"), marketLine);
+    form->addRow(QCoreApplication::translate("ai", "From"), from);
+    form->addRow(QCoreApplication::translate("ai", "To"), to);
+    form->addRow(QCoreApplication::translate("ai", "Horizon"), horizon);
+    form->addRow(QCoreApplication::translate("ai", "Decisions"), count);
+    form->addRow(QCoreApplication::translate("ai", "Repeats"), repeats);
+    form->addRow(QCoreApplication::translate("ai", "Trials"), trials);
+    QString lastKnown;
+    const qint64 frontier = ai::Evaluation::frontierOf(m_index, &lastKnown);
+    auto* probeLine = new QLabel(frontier > 0 ? QCoreApplication::translate("ai", "Memory probed: last month it remembers: %1.").arg(lastKnown)
+                                              : QCoreApplication::translate("ai", "Memory not probed yet for this environment."), &d);
+    auto* err = new QLabel(&d);
+    err->setWordWrap(true);
+    err->setStyleSheet(QString("color:%1;").arg(theme::pal().down.name()));
+    auto* probeBtn = new QPushButton(QCoreApplication::translate("ai", "Probe its memory"), &d);
+    auto* runBtn = new QPushButton(evr.running() ? QCoreApplication::translate("ai", "Stop the evaluation") : QCoreApplication::translate("ai", "Run the evaluation"), &d);
+    probeBtn->setEnabled(!evr.running());
+    auto* btnRow = new QHBoxLayout;
+    btnRow->addWidget(probeBtn);
+    btnRow->addWidget(runBtn);
+    btnRow->addStretch(1);
+    connect(probeBtn, &QPushButton::clicked, &d, [&d, err, this] {
+      const QString why = ai::Evaluation::instance().startProbe(m_index);
+      if (!why.isEmpty()) { err->setText(why); return; }
+      d.reject();
+      if (onChat) onChat(m_index);
+    });
+    connect(runBtn, &QPushButton::clicked, &d, [&d, err, from, to, horizon, count, repeats, trials, market, this] {
+      auto& e = ai::Evaluation::instance();
+      if (e.running()) { e.stop(); d.reject(); return; }
+      ai::EvalSpec spec;
+      spec.env = m_index;
+      spec.market = market;
+      spec.horizonHours = horizon->currentData().toInt();
+      spec.from = QDateTime(from->date(), QTime(0, 0), QTimeZone::UTC).toSecsSinceEpoch();
+      spec.to = QDateTime(to->date(), QTime(0, 0), QTimeZone::UTC).toSecsSinceEpoch();
+      spec.decisions = count->value();
+      spec.repeats = repeats->value();
+      spec.mode = trials->currentData().toInt();
+      const QString why = e.startProtocol(spec);
+      if (!why.isEmpty()) { err->setText(why); return; }
+      d.reject();
+      if (onChat) onChat(m_index);
+    });
+    // the forward test (tier C): asked in the present at scheduled times, scored once the horizon has passed
+    auto* fhead = new QLabel("<b>" + QCoreApplication::translate("ai", "Forward test (tier C)").toHtmlEscaped() + "</b>", &d);
+    auto* fnote = new QLabel(QCoreApplication::translate("ai",
+        "The same question asked in the present, now and then every few hours while Deepwater runs (the horizon and the number of "
+        "decisions above): no memory of the model can know what follows. Each decision is scored once its horizon has passed; "
+        "a time missed (Deepwater closed, the environment busy or in evaluation mode) counts as missed, never asked late. Keep "
+        "the same model and skills throughout: a change is reported."), &d);
+    fnote->setWordWrap(true);
+    auto* step = new QSpinBox(&d);
+    step->setRange(1, 72); step->setValue(6); step->setSuffix(QCoreApplication::translate("ai", " h between decisions"));
+    const QString fst = evr.forwardStatus(m_index);
+    auto* fline = new QLabel(fst.isEmpty() ? QCoreApplication::translate("ai", "No forward test in this environment.") : fst, &d);
+    fline->setWordWrap(true);
+    const bool fRunning = fst.contains(QCoreApplication::translate("ai", "running"));
+    auto* fBtn = new QPushButton(fRunning ? QCoreApplication::translate("ai", "Stop the forward test") : QCoreApplication::translate("ai", "Start the forward test"), &d);
+    connect(fBtn, &QPushButton::clicked, &d, [&d, err, horizon, count, step, market, fRunning, this] {
+      auto& e = ai::Evaluation::instance();
+      if (fRunning) { e.stopForward(m_index); d.reject(); return; }
+      ai::EvalSpec spec;
+      spec.env = m_index;
+      spec.market = market;
+      spec.horizonHours = horizon->currentData().toInt();
+      spec.decisions = count->value();
+      const QString why = e.startForward(spec, step->value());
+      if (!why.isEmpty()) { err->setText(why); return; }
+      d.reject();
+      if (onChat) onChat(m_index);
+    });
+    auto* fRow = new QHBoxLayout;
+    fRow->addWidget(step);
+    fRow->addWidget(fBtn);
+    fRow->addStretch(1);
+    lay->addSpacing(10);
+    lay->addWidget(head);
+    lay->addWidget(pnote);
+    lay->addLayout(form);
+    lay->addWidget(probeLine);
+    lay->addLayout(btnRow);
+    lay->addSpacing(8);
+    lay->addWidget(fhead);
+    lay->addWidget(fnote);
+    lay->addWidget(fline);
+    lay->addLayout(fRow);
+    lay->addWidget(err);
+    if (phone) {
+      probeLine->setWordWrap(true);
+      for (QBoxLayout* r : {static_cast<QBoxLayout*>(btnRow), static_cast<QBoxLayout*>(fRow)}) r->setDirection(QBoxLayout::TopToBottom);
+      // the app's colours and 36 px controls (a taller native macOS button turns into a white bevel)
+      const auto& pc = theme::pal();
+      d.setStyleSheet(QString("QPushButton { background:%1; color:%2; border:1px solid %3; border-radius:3px; padding:6px 12px; min-height:22px; }"
+                              "QPushButton:hover { border-color:%4; } QPushButton:disabled { color:%5; }"
+                              "QAbstractSpinBox, QComboBox { background:%1; color:%2; border:1px solid %3; border-radius:3px; padding:4px 8px; min-height:26px; }"
+                              "QCheckBox { min-height:30px; } QCheckBox::indicator { width:18px; height:18px; border:1px solid %4; border-radius:3px; background:%1; }"
+                              "QCheckBox::indicator:checked { background:%6; border-color:%6; } QCheckBox::indicator:disabled { border-color:%3; }")
+                          .arg(pc.panelAlt.name(), pc.text.name(), pc.border.name(), pc.borderHi.name(), pc.textMute.name(), pc.accent.name()));
+      auto* foot = new QVBoxLayout; foot->setContentsMargins(16, 8, 16, 16);
+      foot->addWidget(bb);
+      outer->addLayout(foot);
+      d.setMinimumWidth(0);
+      const QSize cap = window()->size() - QSize(24, 24);
+      phoneScroll->widget()->adjustSize();
+      d.resize(cap.width(), qMin(cap.height(), phoneScroll->widget()->sizeHint().height() + foot->sizeHint().height() + 4));
+    } else {
+      auto* foot = new QVBoxLayout; foot->setContentsMargins(11, 6, 11, 11);
+      foot->addWidget(bb);
+      outer->addLayout(foot);
+      phoneScroll->widget()->adjustSize();
+      const QRect avail = window()->screen() ? window()->screen()->availableGeometry() : QRect(0, 0, 1280, 800);
+      const QSize hint = phoneScroll->widget()->sizeHint();
+      d.resize(hint.width() + 24, qMin(avail.height() - 80, hint.height() + foot->sizeHint().height() + 4));
+    }
+    if (d.exec() != QDialog::Accepted) return;
+    const quint32 seed = ai::Slots::instance().blindSeed(m_index);
+    ai::Slots::instance().setBlind(m_index, on->isChecked() && blindBox->isChecked() ? (seed ? seed : QRandomGenerator::global()->generate() | 1u) : 0);
+    ai::Slots::instance().setAsOf(m_index, on->isChecked() ? when->dateTime().toSecsSinceEpoch() : 0);
+  }
   QList<SkillBox*> m_skillBoxes;
 };
 
 // ---------------------------------------------------------------------------------------------- page
 class AgentsPage : public QWidget {
 public:
-  explicit AgentsPage(QWidget* parent) : QWidget(parent) {
+  explicit AgentsPage(QWidget* parent) : QWidget(parent), m_scroll(this) {
     const auto& c = theme::pal();
     applyHookSlots();
     auto* root = new QVBoxLayout(this);
+    m_root = root;
     root->setContentsMargins(16, 12, 16, 12); root->setSpacing(10);
 
     auto* head = new QHBoxLayout; head->setSpacing(12);
@@ -409,15 +701,18 @@ public:
     m_mem = ui::label(QString(), theme::mono(10), c.textDim, this);
     head->addWidget(m_mem);
     root->addLayout(head);
+    m_head = head;
 
     auto* body = new QHBoxLayout; body->setSpacing(12);
     root->addLayout(body, 1);
+    m_body = body;
 
     auto* left = new ui::Panel(QCoreApplication::translate("ai", "Models & integrations"), this);
     m_list = new ModelList(left);
     auto* scroll = new QScrollArea(left);
     scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame); scroll->setWidget(m_list);
     left->body()->addWidget(scroll, 1);
+    m_listScroll = scroll;
     m_empty = ui::label(QCoreApplication::translate("ai", "No model downloaded yet: get one in AI › LLM › Local models, then drag it onto a cube."),
                         theme::sans(12), c.textMute, left);
     m_empty->setWordWrap(true);
@@ -443,6 +738,7 @@ public:
     m_stack->addWidget(gridHost);
     m_chatView = new ChatView(m_stack);
     m_chatView->onBack = [this] { closeChat(); };
+    m_chatView->onLayoutChanged = [this] { m_scroll.relayout(); };   // WEB ticked or not: what stands under the chat
     m_stack->addWidget(m_chatView);
     body->addWidget(m_stack, 7);
     layoutCards();
@@ -455,6 +751,7 @@ public:
     foot->setWordWrap(true);
     root->addWidget(foot);
 
+    m_scroll.height = [this](int w, int vh) { return scrollHeight(w, vh); };
     connect(&ai::ModelHub::instance(), &ai::ModelHub::installedChanged, this, [this] { refresh(); });
     connect(&ai::Slots::instance(), &ai::Slots::changed, this, [this](int i) { if (i >= 0 && i < m_cards.size()) m_cards[i]->slotChanged(); refresh(); });
     refresh();
@@ -463,6 +760,35 @@ public:
     if (qEnvironmentVariableIsSet("DW_AI_TOOLTEST")) runToolTest(qEnvironmentVariable("DW_AI_TOOLTEST"));
     // DW_AI_MLTEST=<out file>: calls the "ml" skill's tools one after the other (valid and invented arguments) as environment 1
     if (qEnvironmentVariableIsSet("DW_AI_MLTEST")) runMlTest(qEnvironmentVariable("DW_AI_MLTEST"));
+    // DW_AI_EVAL="probe" or "run:2026-11-05,2026-11-17,4,6,1" (from, to, horizon h, decisions, repeats): starts the
+    // evaluation protocol of environment 1 after launch; DW_AI_EVAL_QUIT=1 quits when it ends (tests)
+    if (qEnvironmentVariableIsSet("DW_AI_EVAL")) {
+      QTimer::singleShot(3000, this, [] {
+        const QString v = qEnvironmentVariable("DW_AI_EVAL");
+        QString why;
+        if (v == "probe") why = ai::Evaluation::instance().startProbe(0);
+        else if (v.startsWith("forward:")) {   // forward:horizon h,step h,decisions
+          const QStringList a = v.mid(8).split(',');
+          ai::EvalSpec spec;
+          if (a.size() == 3) { spec.horizonHours = a[0].toInt(); spec.decisions = a[2].toInt(); }
+          why = ai::Evaluation::instance().startForward(spec, a.value(1).toInt());
+        } else {
+          const QStringList a = v.mid(4).split(',');
+          ai::EvalSpec spec;
+          auto at = [](const QString& d) { return QDateTime(QDate::fromString(d, "yyyy-MM-dd"), QTime(0, 0), QTimeZone::UTC).toSecsSinceEpoch(); };
+          if (a.size() >= 5) { spec.from = at(a[0]); spec.to = at(a[1]); spec.horizonHours = a[2].toInt(); spec.decisions = a[3].toInt(); spec.repeats = a[4].toInt(); }
+          if (a.size() >= 6) spec.mode = a[5] == "blind" ? 1 : a[5] == "both" ? 2 : 0;
+          why = ai::Evaluation::instance().startProtocol(spec);
+        }
+        if (!why.isEmpty()) qWarning("evaluation not started: %s", qPrintable(why));
+        if (qEnvironmentVariableIsSet("DW_AI_EVAL_QUIT"))
+          connect(&ai::Evaluation::instance(), &ai::Evaluation::finished, qApp, [] { QTimer::singleShot(2000, qApp, &QCoreApplication::quit); });
+      });
+    }
+    if (qEnvironmentVariableIsSet("DW_AI_EVALDLG")) {
+      const int k = qEnvironmentVariableIntValue("DW_AI_EVALDLG");
+      QTimer::singleShot(1500, this, [this, k] { if (k >= 0 && k < m_cards.size()) m_cards[k]->openEvaluation(); });
+    }
     if (qEnvironmentVariableIsSet("DW_AI_CHAT")) {
       const int k = qEnvironmentVariableIntValue("DW_AI_CHAT");
       QTimer::singleShot(0, this, [this, k] {
@@ -486,31 +812,78 @@ protected:
     if (o == m_gridHost && e->type() == QEvent::Resize) layoutCards();
     return QWidget::eventFilter(o, e);
   }
+  // A page built hidden gets Qt's default 100 x 30 first: no phone arrangement for that (it would leave the desktop
+  // layouts measured differently), the real size arrives with the show.
+  void showEvent(QShowEvent*) override { resizeEvent(nullptr); }
+  void resizeEvent(QResizeEvent*) override {
+    if (!isVisible()) return;
+    setPhone(ui::compact(width()));
+    if (!PhoneScroll::wanted(width(), height()))   // a desktop window: the heights come from the window again
+      for (QWidget* w : {static_cast<QWidget*>(m_left), static_cast<QWidget*>(m_stack), static_cast<QWidget*>(m_listScroll)}) phoneHeight(w, 0);
+    m_scroll.resize();
+  }
 private:
+  // Phones: the memory line under the title (its own row), the models above the cubes, the cubes in one column.
+  void setPhone(bool on) {
+    if (on == m_phone) return;
+    m_phone = on;
+    if (on) { m_head->removeWidget(m_mem); m_root->insertWidget(1, m_mem); }
+    else { m_root->removeWidget(m_mem); m_head->addWidget(m_mem); }
+    m_mem->setWordWrap(on);
+    m_body->setDirection(on ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    for (auto* card : m_cards) card->setPhone(on);
+    layoutCards();
+  }
+  // The content's height when the page scrolls (phones, or short windows), after giving the body's parts theirs.
+  int scrollHeight(int w, int vh) {
+    const bool phone = ui::compact(w);
+    const int inner = w - 32;   // the root's side margins
+    const int top = 12 + m_head->sizeHint().height() + 10 + (phone ? m_mem->heightForWidth(inner) + 10 : 0);
+    if (m_stack->currentWidget() == m_chatView) {
+      // the conversation fills what the screen leaves under the title (at least 460 px sideways); below it on a phone,
+      // its activity panel or its nodes
+      const int screen = phone ? qMax(320, vh - top - 12) : qMax(460, vh - top - 12);
+      phoneHeight(m_stack, screen + m_chatView->phoneExtra(inner));
+    } else if (phone) {
+      phoneHeight(m_listScroll, m_list->sizeHint().height());
+      phoneHeight(m_left, layoutHeight(m_left->layout(), inner));
+      phoneHeight(m_stack, CubeCard::kPhoneHeight * 4 + 12 * 3);
+    } else {
+      phoneHeight(m_listScroll, 0);
+      phoneHeight(m_left, CubeCard::kPhoneHeight * 2 + 12);
+      phoneHeight(m_stack, CubeCard::kPhoneHeight * 2 + 12);
+    }
+    return layoutHeight(m_root, w);
+  }
   void openChat(int i) {
     if (i < 0 || i >= ai::Slots::kCount || ai::Slots::instance().slot(i).isEmpty()) return;
     m_chatView->setEnvironment(i);
     m_left->hide(); m_foot->hide();
     m_stack->setCurrentWidget(m_chatView);
+    m_scroll.relayout();
     m_chatView->focusInput();
     ai::Engines::instance().at(i)->start();   // load the model while the user types
   }
   void closeChat() {
     m_stack->setCurrentIndex(0);
     m_left->show(); m_foot->show();
+    m_scroll.relayout();
   }
-  // four in a row or 2 × 2: whichever gives the bigger cube in the space the grid really has (card: cube side = min(w-24, h-120))
+  // four in a row or 2 × 2: whichever gives the bigger cube in the space the grid really has (card: cube side = min(w-24, h-120));
+  // phones: one column (two cards side by side would cut their titles)
   void layoutCards() {
     const qreal w = m_gridHost->width(), h = m_gridHost->height(), gap = m_grid->spacing();
     const qreal rowSide = qMin((w - 3 * gap) / 4 - 24, h - 120);
     const qreal gridSide = qMin((w - gap) / 2 - 24, (h - gap) / 2 - 120);
     const bool row = rowSide > gridSide && (w - 3 * gap) / 4 >= 290;   // a row card must still fit title + state pill
-    if (row == m_rowMode && m_grid->count() == m_cards.size()) return;
-    m_rowMode = row;
-    for (int i = 0; i < m_cards.size(); ++i) { m_grid->removeWidget(m_cards[i]); m_grid->addWidget(m_cards[i], row ? 0 : i / 2, row ? i : i % 2); }
+    const int mode = m_phone ? 2 : row ? 1 : 0;
+    if (mode == m_cardMode && m_grid->count() == m_cards.size()) return;
+    m_cardMode = mode;
+    const int rows = mode == 2 ? 4 : mode == 1 ? 1 : 2, cols = mode == 2 ? 1 : mode == 1 ? 4 : 2;
+    for (int i = 0; i < m_cards.size(); ++i) { m_grid->removeWidget(m_cards[i]); m_grid->addWidget(m_cards[i], i / cols, i % cols); }
     for (int i = 0; i < 4; ++i) { m_grid->setRowStretch(i, 0); m_grid->setColumnStretch(i, 0); }
-    for (int i = 0; i < (row ? 1 : 2); ++i) m_grid->setRowStretch(i, 1);
-    for (int i = 0; i < (row ? 4 : 2); ++i) m_grid->setColumnStretch(i, 1);
+    for (int i = 0; i < rows; ++i) m_grid->setRowStretch(i, 1);
+    for (int i = 0; i < cols; ++i) m_grid->setColumnStretch(i, 1);
   }
   void refresh() {
     m_list->rebuild();
@@ -524,6 +897,7 @@ private:
     const bool over = s.memoryTotal() > 0 && s.memoryLoaded() > s.memoryTotal() * 0.75;
     m_mem->setStyleSheet(QString("color:%1;background:transparent;").arg((over ? theme::pal().warn : theme::pal().textDim).name()));
     m_mem->setToolTip(over ? QCoreApplication::translate("ai", "The loaded models together need more than 3/4 of this computer's memory.") : QString());
+    m_scroll.relayout();   // the list's length (phones: the models panel's height)
   }
   static void runToolTest(const QString& outFile) {
     const QList<QPair<QString, QJsonObject>> calls{
@@ -555,6 +929,11 @@ private:
         {"get_technical_data", QJsonObject{{"timeframe", "3h"}}},
         {"get_technical_data", QJsonObject{{"columns", QJsonArray{"nonsense"}}}},
         {"get_technical_data", QJsonObject{{"market", "ETHUSDT"}}},
+        {"get_footprint", QJsonObject{{"timeframe", "15m"}, {"bars", 6}, {"ladder", "last"}}},
+        {"get_footprint", QJsonObject{{"venue", "perp"}, {"timeframe", "1h"}, {"end", "2026-11-18 14:00"}, {"bars", 3}}},
+        {"get_order_book", QJsonObject{}},
+        {"get_order_book", QJsonObject{{"end", "2026-11-18 14:00"}}},
+        {"get_open_interest", QJsonObject{{"rows", 6}}},
         {"get_macro_chains", QJsonObject{}},
         {"get_macro_chains", QJsonObject{{"query", "united states inflation"}}},
         {"get_macro_chains", QJsonObject{{"query", "fed"}, {"kind", "implied"}}},
@@ -637,6 +1016,19 @@ private:
     QTimer::singleShot(qEnvironmentVariableIsSet("DW_AI_MLTEST_SKIP") ? 0 : 3000, qApp, *next);
   }
   static void applyHookSlots() {
+    // DW_AI_BLIND="0:12345" makes environment 1 blind with that seed (with evaluation mode; ai/Blind.h), "0:" not
+    for (const QString& part : qEnvironmentVariable("DW_AI_BLIND").split(';', Qt::SkipEmptyParts)) {
+      const int colon = int(part.indexOf(':'));
+      if (colon > 0) ai::Slots::instance().setBlind(part.left(colon).toInt(), part.mid(colon + 1).toUInt());
+    }
+    // DW_AI_ASOF="0:2026-11-10 00:00;1:" puts environments in evaluation mode at that UTC moment (nothing after the colon: off)
+    for (const QString& part : qEnvironmentVariable("DW_AI_ASOF").split(';', Qt::SkipEmptyParts)) {
+      const int colon = int(part.indexOf(':'));
+      if (colon <= 0) continue;
+      QDateTime t = QDateTime::fromString(part.mid(colon + 1).trimmed(), "yyyy-MM-dd HH:mm");
+      if (t.isValid()) t.setTimeZone(QTimeZone::UTC);
+      ai::Slots::instance().setAsOf(part.left(colon).toInt(), t.isValid() ? t.toSecsSinceEpoch() : 0);
+    }
     // DW_AI_SKILLS="2:read_data;3:" grants (or, with nothing after the colon, removes) skills before showing
     for (const QString& part : qEnvironmentVariable("DW_AI_SKILLS").split(';', Qt::SkipEmptyParts)) {
       const int colon = int(part.indexOf(':'));
@@ -664,8 +1056,13 @@ private:
   ModelList* m_list;
   QGridLayout* m_grid;
   QWidget* m_gridHost = nullptr;
-  bool m_rowMode = false;
+  int m_cardMode = 0;   // 0: 2 × 2, 1: four in a row, 2: one column (phones)
   QList<CubeCard*> m_cards;
+  PhoneScroll m_scroll;
+  QVBoxLayout* m_root;
+  QHBoxLayout *m_head, *m_body;
+  QScrollArea* m_listScroll;
+  bool m_phone = false;
 };
 }  // namespace
 }  // namespace aipage

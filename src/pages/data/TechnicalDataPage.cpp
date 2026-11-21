@@ -4,16 +4,20 @@
 // Reads src/technicaldata (Store, Collector, Indicators); nothing here computes or downloads.
 #include "app/Pages.h"
 #include "core/Settings.h"
+#include "global/PageScroll.h"
+#include "pages/data/FootprintPanel.h"
 #include "pages/data/PairDialog.h"
 #include "technicaldata/TechnicalDataSpec.h"
 #include "technicaldata/Dukascopy.h"
 #include "technicaldata/ForexCollector.h"
+#include "technicaldata/ArchiveCollector.h"
 #include "technicaldata/TechnicalDataBars.h"
 #include "technicaldata/Collector.h"
 #include "technicaldata/TechnicalDataIndicators.h"
 #include "technicaldata/TechnicalDataStore.h"
 #include "ui/Kit.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QAbstractTableModel>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -28,11 +32,13 @@
 #include <QTextStream>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QTableView>
 #include <QTimeZone>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -95,12 +101,16 @@ protected:
     p.setRenderHint(QPainter::Antialiasing);
     const auto& c = theme::pal();
     const int w = width();
-    // columns: TF | BARS | FROM → TO | INDICATORS | HOLES | STATE
-    const double x[] = {0, 44, 128, 278, 394, 478};
+    // columns: TF | BARS | FROM → TO | INDICATORS | HOLES | STATE. A phone (this view under 520 px) drops INDICATORS
+    // (the state says when they lag) and keeps the others narrower; the column of a dropped value is skipped below.
+    const bool phone = w < 520;
+    const double xd[] = {0, 44, 128, 278, 394, 478}, xp[] = {0, 38, 102, 216, 216, 268};
+    const double* x = phone ? xp : xd;
     const QStringList heads = {QCoreApplication::translate("data", "TF"), QCoreApplication::translate("data", "BARS"), QCoreApplication::translate("data", "FROM → TO"), QCoreApplication::translate("data", "INDICATORS"), QCoreApplication::translate("data", "HOLES"), QCoreApplication::translate("data", "STATE")};
     p.setFont(theme::microLabel());
     p.setPen(c.textMute);
-    for (int i = 0; i < heads.size(); ++i) p.drawText(QRectF(x[i] + 6, 0, (i + 1 < 6 ? x[i + 1] - x[i] : w - x[i]) - 6, kHead), Qt::AlignVCenter | Qt::AlignLeft, heads[i]);
+    for (int i = 0; i < heads.size(); ++i)
+      if (!(phone && i == 3)) p.drawText(QRectF(x[i] + 6, 0, (i + 1 < 6 ? x[i + 1] - x[i] : w - x[i]) - 6, kHead), Qt::AlignVCenter | Qt::AlignLeft, heads[i]);
     p.setPen(c.divider);
     p.drawLine(QPointF(0, kHead - 0.5), QPointF(w, kHead - 0.5));
     const qint64 nowS = QDateTime::currentSecsSinceEpoch();
@@ -122,11 +132,11 @@ protected:
       p.drawText(QRectF(x[2] + 6, y + 22, x[3] - x[2] - 6, 18), Qt::AlignVCenter, "→ " + when(s.last, row.seconds));
       p.setFont(theme::mono(11));
       p.setPen(is.count >= s.count && s.count > 0 ? c.up : c.text);
-      p.drawText(QRectF(x[3] + 6, y + 4, x[4] - x[3] - 6, 20), Qt::AlignVCenter, QLocale(QLocale::English).toString(is.count));
+      if (!phone) p.drawText(QRectF(x[3] + 6, y + 4, x[4] - x[3] - 6, 20), Qt::AlignVCenter, QLocale(QLocale::English).toString(is.count));
       const auto h = m_holes.value(row.seconds, {0, 0, 0});
       p.setPen(h[2] ? c.warn : c.textDim);
       p.drawText(QRectF(x[4] + 6, y + 4, x[5] - x[4] - 6, 20), Qt::AlignVCenter, h[0] ? QString::number(h[0]) : QStringLiteral("—"));
-      if (h[0]) {
+      if (h[0] && !phone) {   // the missing bars: no room on a phone
         p.setFont(theme::mono(9));
         p.setPen(c.textMute);
         p.drawText(QRectF(x[4] + 6, y + 22, x[5] - x[4] - 6, 18), Qt::AlignVCenter,
@@ -222,28 +232,49 @@ class TechnicalDataPage : public QWidget {
 public:
   explicit TechnicalDataPage(QWidget* parent) : QWidget(parent) {
     const auto& c = theme::pal();
-    auto* root = new QVBoxLayout(this);
+    // the page's content: in the page itself, or (one column, or a page this short) in a vertical page scroller (see
+    // setScroll). Its widgets are made in m_content, not moved there by the layouts: a widget moved under another parent
+    // is polished again, which can change cached sizes and so the desktop layout.
+    m_outer = new QVBoxLayout(this);
+    m_outer->setContentsMargins(0, 0, 0, 0);
+    m_outer->setSpacing(0);
+    m_content = new QWidget(this);
+    m_outer->addWidget(m_content);
+    m_content->installEventFilter(this);
+    auto* root = new QVBoxLayout(m_content);
+    m_root = root;
     root->setContentsMargins(16, 12, 16, 10);
     root->setSpacing(8);
     auto* head = new QHBoxLayout;
+    m_head = head;
     head->setSpacing(12);
-    head->addWidget(ui::label(QCoreApplication::translate("data", "TECHNICAL DATA"), theme::title(), c.accentText, this));
-    head->addWidget(ui::label(QCoreApplication::translate("data", "market bars of the pairs you record, with their indicators"), theme::mono(11), c.textDim, this));
+    head->addWidget(ui::label(QCoreApplication::translate("data", "TECHNICAL DATA"), theme::title(), c.accentText, m_content));
+    m_subtitle = ui::label(QCoreApplication::translate("data", "market bars of the pairs you record, with their indicators"), theme::mono(11), c.textDim, m_content);
+    head->addWidget(m_subtitle);
     head->addStretch(1);
-    m_status = ui::label(QString(), theme::mono(10), c.textDim, this);
+    m_status = ui::label(QString(), theme::mono(10), c.textDim, m_content);
     head->addWidget(m_status);
     // everything paused / resumed (kept across restarts)
-    m_pauseAll = button(QString(), this);
+    m_pauseAll = button(QString(), m_content);
     connect(m_pauseAll, &QPushButton::clicked, this, [] { Store::instance().setAllPaused(!Store::instance().allPaused()); });
     head->addWidget(m_pauseAll);
     root->addLayout(head);
+    // one column: the subtitle (wrapped) and the file's size under the title row (hidden, and empty, otherwise)
+    m_head2 = new QWidget(m_content);
+    m_head2L = new QVBoxLayout(m_head2);
+    m_head2L->setContentsMargins(0, 0, 0, 0);
+    m_head2L->setSpacing(4);
+    m_head2->hide();
+    root->addWidget(m_head2);
 
     auto* body = new QHBoxLayout;
+    m_body = body;
     body->setSpacing(12);
     root->addLayout(body, 1);
 
     // left: the collection
-    auto* left = new ui::Panel(QCoreApplication::translate("data", "Collection"), this);
+    auto* left = new ui::Panel(QCoreApplication::translate("data", "Collection"), m_content);
+    m_left = left;
     left->setInfo(QCoreApplication::translate("data", "Closed bars of each pair you record: its timeframes, from its first day or a day you choose, "
                      "and its indicators (SETTINGS; + PAIR for another). Crypto: Binance's public klines, caught up at launch and "
                      "kept up every minute; a hole is asked for once more, what stays is the exchange's own outage. Forex: "
@@ -271,6 +302,15 @@ public:
     left->headerRight()->addWidget(m_cancel);
     left->headerRight()->addWidget(m_settings);
     left->headerRight()->addWidget(addPair);
+    m_pairButtons = {m_pausePair, m_cancel, m_settings, addPair};
+    // phones: these four buttons on a row of their own at the top of the panel (its title row has no room for them)
+    m_tools = new QWidget(left);
+    m_toolsL = new QHBoxLayout(m_tools);
+    m_toolsL->setContentsMargins(0, 0, 0, 0);
+    m_toolsL->setSpacing(6);
+    m_toolsL->addStretch(1);
+    m_tools->hide();
+    left->body()->addWidget(m_tools);
     m_pairBar = new ui::PillBar({}, left);
     connect(m_pairBar, &ui::PillBar::changed, this, [this](int i) {
       if (i >= 0 && i < m_pairs.size()) settings::setValue("technicaldata.pair", m_pairs[i]);
@@ -283,6 +323,8 @@ public:
     left->body()->addWidget(m_market);
     m_view = new CollectionView(left);
     left->body()->addWidget(m_view);
+    m_fpView = new FootprintCollectionView(left);   // the pair's footprint markets, when it records them
+    left->body()->addWidget(m_fpView);
     m_jobs = ui::label(QString(), theme::mono(10), c.textDim, left);
     m_jobs->setWordWrap(true);
     left->body()->addWidget(m_jobs);
@@ -293,7 +335,8 @@ public:
     body->addWidget(left);
 
     // right: the last bars of a timeframe
-    auto* right = new ui::Panel(QCoreApplication::translate("data", "Last bars"), this);
+    auto* right = new ui::Panel(QCoreApplication::translate("data", "Last bars"), m_content);
+    m_rightPanel = right;
     right->setInfo(QCoreApplication::translate("data", "The newest 300 bars of the timeframe as stored, newest first, with every indicator. Taker buy % is the "
                       "share of the volume bought by market orders. Greyed values are in the warm-up."));
     QStringList tfs;
@@ -317,7 +360,13 @@ public:
                                    "QTableView::item { border-bottom: 1px solid %5; padding: 0 8px; }")
                                .arg(c.panel.name(), c.text.name(), c.textMute.name(), c.divider.name(), theme::alpha(c.divider, 120).name(QColor::HexArgb)));
     right->body()->addWidget(m_table, 1);
-    body->addWidget(right, 1);
+    // the footprint's own table (user's choice 2026-11-20), under the bars
+    auto* rightCol = new QVBoxLayout;
+    rightCol->setSpacing(12);
+    rightCol->addWidget(right, 1);
+    m_fpPanel = new FootprintPanel(m_content);
+    rightCol->addWidget(m_fpPanel, 1);
+    body->addLayout(rightCol, 1);
 
     connect(m_tfBar, &ui::PillBar::changed, this, [this](int) { m_barsDirty = true; refresh(); });
     connect(&Store::instance(), &Store::pairsChanged, this, [this](const QString&) { m_deleting.clear(); reloadPairs(); });
@@ -325,6 +374,8 @@ public:
     auto dirty = [this] { m_dirty = true; };
     connect(&Collector::instance(), &Collector::progressChanged, this, dirty);
     connect(&ForexCollector::instance(), &ForexCollector::progressChanged, this, dirty);
+    connect(&ArchiveCollector::instance(), &ArchiveCollector::progressChanged, this, dirty);
+    connect(&Store::instance(), &Store::footprintChanged, this, dirty);
     connect(&Indicators::instance(), &Indicators::progressChanged, this, dirty);
     connect(&Store::instance(), &Store::changed, this, [this](const QString&, int tf, qint64) { m_dirty = true; if (tf == currentTf()) m_barsDirty = true; });
     connect(&Store::instance(), &Store::indicatorsChanged, this, [this](const QString&, int tf) { m_dirty = true; if (tf == currentTf()) m_barsDirty = true; });
@@ -365,8 +416,95 @@ protected:
     m_timer.stop();
     QWidget::hideEvent(e);
   }
+  // Under 960 px (a phone, upright or sideways) the panels go in one column and the header on two rows; on a phone
+  // (ui::compact) the panels' title rows also give their buttons rows of their own. One column, or a page this short,
+  // scrolls.
+  // From 960 px wide and 420 px tall, the desktop layout as it was.
+  void resizeEvent(QResizeEvent* e) override {
+    QWidget::resizeEvent(e);
+    const int W = width();
+    setColumn(W < 960);
+    setPhone(ui::compact(W));
+    setScroll(m_oneCol || height() < 420);
+    if (m_pageScroll) m_pageScroll->relayout();
+  }
+  // the content's layout changed (a text, a panel shown): its height in the page scroller follows, once per pass
+  bool eventFilter(QObject* o, QEvent* e) override {
+    if (o == m_content && e->type() == QEvent::LayoutRequest && m_pageScroll && !m_relayoutQueued) {
+      m_relayoutQueued = true;
+      QTimer::singleShot(0, this, [this] { m_relayoutQueued = false; if (m_pageScroll) m_pageScroll->relayout(); });
+    }
+    return QWidget::eventFilter(o, e);
+  }
 
 private:
+  void setColumn(bool on) {
+    if (on == m_oneCol) return;
+    m_oneCol = on;
+    m_body->setDirection(on ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_left->setMinimumWidth(on ? 0 : 660);
+    m_left->setMaximumWidth(on ? QWIDGETSIZE_MAX : 700);
+    // header: title and PAUSE ALL; under them the subtitle, wrapped, and the file's size (one row is ~1000 px wide)
+    m_head->removeWidget(m_subtitle); m_head->removeWidget(m_status);
+    m_head2L->removeWidget(m_subtitle); m_head2L->removeWidget(m_status);
+    m_subtitle->setWordWrap(on);
+    if (on) { m_head2L->addWidget(m_subtitle); m_head2L->addWidget(m_status); }
+    else { m_head->insertWidget(1, m_subtitle); m_head->insertWidget(3, m_status); }   // title, subtitle, stretch, status, PAUSE ALL
+    m_head2->setVisible(on);
+    if (!on)
+      for (QWidget* w : {static_cast<QWidget*>(m_rightPanel), static_cast<QWidget*>(m_fpPanel)}) { w->setMinimumHeight(0); w->setMaximumHeight(QWIDGETSIZE_MAX); }
+  }
+  void setPhone(bool on) {
+    if (on == m_phone) return;
+    m_phone = on;
+    // the collection's buttons: the panel's title row, or their own row
+    for (int i = 0; i < m_pairButtons.size(); ++i) {
+      m_left->headerRight()->removeWidget(m_pairButtons[i]);
+      m_toolsL->removeWidget(m_pairButtons[i]);
+      if (on) m_toolsL->insertWidget(i, m_pairButtons[i]);
+      else m_left->headerRight()->addWidget(m_pairButtons[i]);
+      m_pairButtons[i]->setMinimumHeight(on ? 34 : 0);
+    }
+    m_tools->setVisible(on);
+    m_pauseAll->setMinimumHeight(on ? 34 : 0);
+    // the timeframes: the panel's title row, or over the table
+    m_rightPanel->headerRight()->removeWidget(m_tfBar);
+    m_rightPanel->body()->removeWidget(m_tfBar);
+    if (on) m_rightPanel->body()->insertWidget(0, m_tfBar, 0, Qt::AlignLeft);
+    else m_rightPanel->headerRight()->addWidget(m_tfBar);
+    // pills a finger can hit (28 px tall)
+    m_tfBar->setFontPx(on ? 14 : 11);
+    m_pairBar->setFontPx(on ? 14 : 11);
+    m_fpPanel->setPhone(on);
+  }
+  void setScroll(bool on) {
+    if (on == (m_pageScroll != nullptr)) return;
+    if (on) {
+      m_outer->removeWidget(m_content);
+      m_pageScroll = new global::PageScroll(m_content, this);
+      m_pageScroll->layout = [this](int w, int vh) { return contentHeight(w, vh); };
+      m_outer->addWidget(m_pageScroll);
+      m_content->show();
+    } else {
+      m_outer->removeWidget(m_pageScroll);
+      m_pageScroll->takeWidget();
+      m_content->setParent(this);
+      m_outer->addWidget(m_content);
+      m_content->show();
+      m_pageScroll->hide();
+      m_pageScroll->deleteLater();
+      m_pageScroll = nullptr;
+    }
+  }
+  // height of the content in the page scroller: two columns (a short page), taller than the page; one column, each
+  // panel's own height, the two tables about a screen each
+  int contentHeight(int w, int vh) {
+    if (!m_oneCol) return std::max(vh, 640);
+    m_rightPanel->setFixedHeight(std::clamp(vh - 40, 360, 480));
+    m_fpPanel->setFixedHeight(m_phone ? std::clamp(vh, 560, 760) : std::clamp(vh + 60, 420, 560));
+    const int h = m_root->hasHeightForWidth() ? m_root->totalHeightForWidth(w) : m_root->totalSizeHint().height();
+    return std::max(h, m_root->totalMinimumSize().height());
+  }
   static QPushButton* button(const QString& text, QWidget* parent) {
     auto* b = new QPushButton(text, parent);
     const auto& c = theme::pal();
@@ -428,6 +566,7 @@ private:
     else if (cmd == "cancel") { if (m_cancel->isEnabled()) cancelPair(false); }
     else if (cmd == "pauseall" || cmd == "resumeall") m_pauseAll->click();
     else if (cmd == "shot") window()->grab().save(arg);
+    else if (cmd == "fptab") m_fpPanel->setMode(arg);   // the order flow panel's tab: fp, depth, oi, live
     else if (cmd == "dump") dump(arg, QString::number(m_stepNo));
     else if (cmd == "quit") { qApp->quit(); return; }
     else if (cmd == "waitfor") {   // waitfor:<text in every row's state>:<ms>
@@ -456,6 +595,10 @@ private:
     o << "summary: " << m_market->text() << "\n";
     for (const auto& r : m_view->rows())
       o << "row " << r.tf << " bars=" << r.state.count << " state=\"" << stateOf(r, m_view->collecting()).first << "\"\n";
+    for (const auto& r : m_fpView->rows())
+      o << "archive " << r.kind << " days=" << r.stored << "/" << r.wanted << " missing=" << r.missing << " bytes=" << r.bytes
+        << " state=\"" << footprintState(r, ArchiveCollector::instance().started()).first << "\"\n";
+    if (m_fpPanel->isVisible()) o << m_fpPanel->dumpText() << "\n";
     o << "note: " << m_note->text() << "\n";
     if (!m_jobs->text().isEmpty()) o << "jobs: " << m_jobs->text().replace('\n', " / ") << "\n";
   }
@@ -508,6 +651,7 @@ private:
     m_tfBar->setItems(m_tfNames);
     const int i = int(m_tfNames.indexOf(was)), h = int(m_tfNames.indexOf("1h"));
     m_tfBar->setCurrent(i >= 0 ? i : h >= 0 ? h : 0);
+    m_fpPanel->setMarket(market());
     m_dirty = m_barsDirty = m_firstFill = true;
     refresh();
   }
@@ -535,6 +679,11 @@ private:
       for (const auto& r : fx ? fxc.progress() : col.progress()) if (r.market == mk) rows << r;
       m_view->setRows(rows, is, holes, collecting);
       m_view->setVisible(!mk.isEmpty());
+      QVector<ArchiveCollector::Progress> fpRows;
+      for (const auto& r : ArchiveCollector::instance().progress()) if (r.market == mk) fpRows << r;
+      m_fpView->setRows(fpRows, ArchiveCollector::instance().started());
+      m_fpView->setVisible(!fpRows.isEmpty());
+      m_fpPanel->setMarket(mk);   // its settings may have changed
       const int nCols = int(columnsOf(spec).size());
       m_market->setText(mk.isEmpty() ? QCoreApplication::translate("data", "No pair recorded: add one with + PAIR.")
                         : QStringList{mk + "  ·  " + (fx ? QCoreApplication::translate("data", "Dukascopy, bid prices") : QCoreApplication::translate("data", "Binance spot")),
@@ -581,6 +730,8 @@ private:
 
   QLabel *m_status, *m_market, *m_jobs, *m_note;
   CollectionView* m_view;
+  FootprintCollectionView* m_fpView;
+  FootprintPanel* m_fpPanel;
   ui::PillBar *m_tfBar, *m_pairBar;
   QPushButton *m_settings, *m_pausePair, *m_cancel, *m_pauseAll;
   QStringList m_pairs, m_tfNames, m_pillNames, m_steps;
@@ -591,6 +742,15 @@ private:
   BarsModel m_model;
   QTimer m_timer;
   bool m_dirty = true, m_barsDirty = true, m_firstFill = true;
+  // one column / phone layout (see setColumn / setPhone / setScroll)
+  QVBoxLayout *m_outer = nullptr, *m_root = nullptr, *m_head2L = nullptr;
+  QHBoxLayout *m_head = nullptr, *m_body = nullptr, *m_toolsL = nullptr;
+  QWidget *m_content = nullptr, *m_head2 = nullptr, *m_tools = nullptr;
+  QLabel* m_subtitle = nullptr;
+  ui::Panel *m_left = nullptr, *m_rightPanel = nullptr;
+  QList<QPushButton*> m_pairButtons;
+  global::PageScroll* m_pageScroll = nullptr;
+  bool m_oneCol = false, m_phone = false, m_relayoutQueued = false;
 };
 }  // namespace technicaldatapage
 

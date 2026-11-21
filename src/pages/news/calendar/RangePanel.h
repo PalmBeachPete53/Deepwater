@@ -19,6 +19,7 @@ protected:
   void paintEvent(QPaintEvent*) override;
   void mouseMoveEvent(QMouseEvent*) override;
   void mousePressEvent(QMouseEvent*) override;
+  void mouseReleaseEvent(QMouseEvent*) override;
   void leaveEvent(QEvent*) override;
   void wheelEvent(QWheelEvent*) override;
 private:
@@ -30,6 +31,10 @@ private:
   bool m_hoverClose = false;
   bool m_pin = false;
   double m_off = 0, m_contentH = 0;
+  // touch screens (no wheel): a finger drag scrolls the panel; a tap acts on release, once it is not a drag
+  double m_dragY = -1, m_dragOff = 0;
+  bool m_dragged = false;
+  QRectF closeHit() const;   // the ✕ (a finger-sized target on phones)
   mutable QList<Link> m_links;
 };
 }  // namespace news::pages

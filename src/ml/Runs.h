@@ -5,7 +5,7 @@
 #include <QObject>
 #include <QString>
 
-class QProcess;
+#include "core/Process.h"
 
 // AI › ML trainings. A run = a folder <data>/ml/runs/<id>/ holding run.json (name, state, data set), log.txt and
 // stderr.txt, written by the app only, and work/: what was asked (job.json) and the outcome (result.json,
@@ -27,11 +27,18 @@ struct Run {
   QString id, dir, name, dataset;   // dataset: title shown ("EUR/USD · 1d")
   QString work;                      // the trainer's folder (dir + "/work", or dir for older runs)
   QString by;                        // "" (the user, from the page) or "environment 2 · Claude Code" (an AI's ML skill)
+  QString dataPath;                  // the app's data set read in place (run.json "data_path"); empty when copied to work/data.csv
   QDateTime created;
   QJsonObject job, result;
   RunState state = RunState::Running;
   QString stage, error;
   double pct = 0;
+  // the trainer's live curve (event "point"): the score of each fold, the loss of each epoch, the return of each episode.
+  // curve = its name ("cv_mae", "loss", "return"), points = {"x", "values": {line: number or null}}. Read from log.txt
+  // the first time a run loaded from disk is asked for them (Runs::points).
+  QString curve;
+  QList<QJsonObject> points;
+  bool pointsRead = false;
 };
 
 class Runs : public QObject {
@@ -48,10 +55,17 @@ public:
   void stop();
   void remove(const QString& id);
   QString predictionsPath(const QString& id) const;
+  const Run* withPoints(const QString& id);   // find(), with the curve read from log.txt for a run from an earlier session
+  // Supervised and semi-supervised runs made before the references (no_skill, persistence, data fingerprint) were
+  // written get them, one at a time in the trainer's sandbox (train.py --refs), only where the data set still gives
+  // exactly their test rows (checked by the trainer; refs.json says why not). Started once after launch.
+  void completeReferences();
 
 signals:
   void listChanged();
   void runChanged(const QString& id);
+  // completeReferences() has no run left to try: how many got their references this time, how many were refused
+  void referencesDone(int added, int refused);
 
 private:
   Runs();
@@ -60,7 +74,10 @@ private:
   Run* findMut(const QString& id);
   QString sandboxProfile(const QString& runDir, const QString& script, const QString& data = {}) const;
   QList<Run> m_runs;
-  QProcess* m_proc = nullptr;
+  dw::Process* m_proc = nullptr;
+  dw::Process* m_refsProc = nullptr;   // completeReferences(), apart from trainings
+  int m_refsAdded = 0, m_refsRefused = 0;
+  bool writeScript(QString* path) const;   // <data>/ml/train.py from the app's resources
   QString m_current, m_dataset;
   QByteArray m_buf;
 };

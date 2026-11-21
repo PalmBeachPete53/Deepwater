@@ -81,6 +81,59 @@ the reference picture. Drag an installed model onto a cube to load it (cube ligh
 another to move it; EJECT empties it. Saved in ai.slots; each environment has its own folder <data>/ai/env-N/ with
 environment.json. The grid picks 2x2 or 4 in a row, whichever gives the bigger cube; checked from 1024x600 to 2560x1360.
 Hooks DW_AI_SLOTS, DW_AI_HOVER, DW_AI_LIGHT, DW_AI_CHAT, DW_AI_ASK.
+ml_compare (2026-11-19, src/ai/MlCompare.cpp + src/ml/Compare, tests/ml): the agents compare trainings with figures the app
+computes. SAME MARKET (one question on one market and test period): ranked by edge over no skill, p vs no skill and best vs
+second by a paired moving-block bootstrap on the same test rows (blocks ≥ the horizon), adj. p = p × distinct setups tried
+on that market and question (re-runs count once, shown "×N same setup"), verdict follows the edge's sign. SEVERAL MARKETS
+(one setup on several markets): each against its own no skill / buy & hold, how many it beats. Reinforcement: excess
+over buy & hold, random agents beaten, their 5–95 % band as noise; clustering: silhouette / Davies-Bouldin / BIC, no test.
+References (2026-11-19, user chose all four): predictions.csv carries no_skill and persistence columns (probe_predictions.csv
+for self-supervised probes); result.json "persistence" scores (the target's last seen value: last change over the same
+horizon, last direction, today's level) and "data" (SHA-256, bytes, rows, first/last date of the data set read); run.json
+keeps data_path. ml_compare groups SAME MARKET runs by data version too, tests against both references, verdict says which
+it beats. Older supervised/semi runs: Runs::completeReferences (20 s after launch, one at a time, sandboxed train.py --refs)
+rebuilds their test rows and adds the columns only if dates, actual values and the no-skill score match the run exactly
+(else refs.json says why; originals kept as *.before-refs.*). ML page shows a PERSISTENCE column.
+COMPARE in the app (2026-11-19): the comparison moved to src/ml/Comparison (gather on the window's thread, build on a
+worker: a structured Report; toText = the agents' ml_compare answer, unchanged). AI › ML › Runs: a tick box on each row
+(or ⌘-click), COMPARE (n) compares the ticked runs; with none ticked, the selected run and the runs like it
+(ml::comparison::similarTo: same question on the same market, same setup on other markets). src/pages/ai/MlCompareView
+draws the Report as painted tables (headers wrap; the setup column shows only the parameters that differ), verdicts and
+refs.json reasons translated; a row opens its run with ‹ BACK TO THE COMPARISON (no recompute). Hooks: DW_ML_COMPARE=
+similar|<rows>, DW_ML_COMPARE_SCROLL=<px>, DW_ML_COMPARE_OPEN=1 (with DW_ML_RUN, without DW_ML_LOAD).
+Constellation (2026-11-19, user's hand drawing photo_2026-11-19_20-31-57.jpg, not in git): AI › Agents chat header, box
+WEB (TOILE in French, renamed from CONSTELLATION by the user) left of the state (ai.constellation, key kept). src/pages/ai/Constellation: the conversation card (transcript + input,
+moved out of ChatView's splitter) in the middle, linked to COLLECTE (left: data tool calls get_*/read_*/ml_*dataset*,
+what each asked for, the running one with its clock), ENTRAÎNEMENT (upper right: an AgentActivity in trainings-only mode)
+and COMPARAISON (lower right: the agent's last ml_compare redone by ml::comparison::choose + build from its arguments,
+each group's question, best and verdict). A link lights and carries moving points while its work runs; only the link
+rectangles repaint (33 ms). Hooks: DW_AI_CONSTELLATION=0|1 (not saved), DW_AI_CONSTELLATION_FLIP=<ms>.
+Activity panel (2026-11-19, src/pages/ai/AgentActivity): right of an environment's conversation, what its agent does in
+small: the tool call running now and for how long (ai::Engine::beginTool / activeTool, set by the local tool loop and by
+McpServer), the last ML training it started (ml::Run.by) with progress, stage, the trainer's live curve (train.py's
+"point" events: score of each CV fold, loss of each epoch, return of each episode; kept in ml::Run.points, read back from
+log.txt for older runs), its result or error and STOP, then its last tool calls. Its width drags (QSplitter, 240 px
+minimum, the conversation keeps 360), saved in ai.activityWidth. A finished run shows the ML page's own result chart, small
+(aipage::mlMiniChart in MlPage.cpp, the page's widgets with `compact`): map of the rows by group + groups along time
+(clustering such as the Gaussian mixture, anomalies), map of rows / embeddings (reduction, self-supervised), actual vs
+predicted or hit rate (supervised), simulated equity vs buy & hold (reinforcement). The trainings are a stack of tiles (one
+per run of that agent): a new one slides in on top (240 ms), ← → (panel focused by a click) or ‹ › beside "n / N" go
+back and forth; edges of the tiles underneath show below. Sliding tiles are pictures (paintTile Picture mode, the chart
+rendered with QWidget::render); the tile on top is live (its chart widget and STOP). PUT ASIDE 2026-11-19 (user: "on reviendra dessus plus
+tard"): kOffer3D = false in AgentActivity.cpp hides the box and keeps the flat stack; the code stays. Navigation speed (2026-11-19): tile pictures cached per run state
+(facePicture) and drawn ahead for 4 tiles each way while idle (prefetch); presses faster than a slide jump without one;
+the small charts draw once into a picture (`compact` cache in PredChart/ScatterMap/EquityChart/RegimeStrip), dense lines
+one stroke per pixel column (denseLine), map dots stamped from one atlas (drawPixmapFragments). Measured: a press used
+to block 9–57 ms before the slide; now 0 ms, held key included. Fast browsing (presses < 250 ms apart): only the place moves, tiles
+come from their pictures or drawn without their chart, the full tile ~0.2 s after the last press. A chart's files (real
+runs: up to 80 000 rows) are read and thinned (≤ 8000 map rows, ≤ 4000 line points) on a worker thread (mlMiniRows), the
+widgets built from that; the tile shows an empty frame until then. "3D" box
+(ai.activity3d): the same stack as standing
+cards seen almost from the front (paint3D: slight turn and perspective so the charts stay readable, each tile on its
+card's face through QTransform::quadToQuad, thickness on the top and far edges): the selected card in front, up to 4 older
+ones behind, fanned up and to the right; a new one comes in from the front, ← sends the front one towards the viewer;
+a click on a card behind brings it forward. Face pictures cached per run state (facePicture). The conversation itself (ChatView) only
+re-inserts the HTML parts that changed and slides to the end (it used to setHtml the whole transcript 4×/s).
 Running the models (2026-11-15): llama.cpp b12409 vendored in third_party/llama.cpp (library only, MIT, Metal, GGML_NATIVE
 off), helper helpers/llm/main.cpp → Deepwater.app/Contents/MacOS/deepwater-llm (JSON lines, KV cache reused across turns,
 oldest turns dropped when the context is full). ai::Engine runs one helper per lit cube under `sandbox-exec -p`: reads
@@ -481,3 +534,257 @@ in PineTS for what Charts lacks; Deepwater goes AGPL-3.0 (LICENSE). Then Facts �
   (7) forex rows "running" only for the timeframes fetched, Binance errors forgotten on a change, removal message.
   Also found by the new tests: forex settings change mid-turn looked idle between the abort and the new turn (queued
   first now); the new hour tail had to be re-read after a jump. technicaldata_tests: 32, five runs in a row all pass.
+- 2026-11-20 (user: years of 1-minute BTCUSDT footprint for ML and the agents; archives, not REST; levels as fractions
+  of the price; both spot and USD-M; "ces données de footprint sont des données techniques": in technical-data.sqlite,
+  part of the collection, shown in a table of their own). **Footprint history.** src/technicaldata/FootprintArchive (pure:
+  zip inflated as it is read with third_party/miniz 3.0.2 tinfl, MIT; both CSV formats, spot time in µs since 2025;
+  1 bp geometric grid g = 1.0001, level k = floor(ln p / ln g); Minute = OHLC, bought / sold (double), trades, first /
+  last id, dense float levels; merge() level by level; encodeDay columnar + qCompress; statsOf: POC, 70 % value area,
+  diagonal imbalances and stacks via charts::flow::analyze on the levels). ArchiveCollector: pairs whose spec has
+  "footprint": {"venues", "start"}; newest day first, both markets of a day together; .CHECKSUM then zip, sha256 checked,
+  built on a worker (≈ 0.5 s a day); 404 older than 3 days → fp_missing, recent → asked again in an hour; network
+  failure stops the turn (timer 15 min). Store: fp_days(market, venue, day, minutes, trades, levels, bytes, zip_bytes,
+  built, data) + fp_missing; deleted with the pair, a venue removed, a later first day, a cancel; written only while
+  wanted and not paused. Source "binance-archive" (data.binance.vision, pace 250 ms). UI: PairDialog Footprint section
+  (Spot / Perpetual USD-M, first archive or a day, 3 months back by default, size, deletions asked); Collection gains a
+  footprint row per market (days, period, missing, size, state); FootprintPanel under Last bars: a stored day's minutes
+  (volume, bought, sold, delta, trades, levels, POC, VA, imbalances, stacks) and the levels of the minute picked.
+  Charts: FootprintFeed falls back to the stored days for bars the live trades don't cover (fixed-length timeframes;
+  minutes merged, each level at the tick nearest its middle), rows never finer than a level; legend "live from …, stored
+  history from …". Measured on 2026-11-18: spot 0.9 M trades → 142 KB, perp 1.7 M → 125 KB a day, ≈ 9 levels a minute.
+  Checked: 13 footprint tests (fixtures = 1 trade in 20 of the real 2026-11-18 files, expected values from
+  fixtures/make_footprint.py in Python; fake archive for the collector); tools/check_footprint_history.py compares random
+  stored minutes with Binance REST aggTrades by id (USD-M serves only the last 2 days): all match, float error ≤ 6e-8.
+- 2026-11-20 (user: which of Charts' three liquidity views gives an informational edge, then collect it like the
+  footprint; choices: 1 book depth archive, 2 open interest, 3 the live book "seulement en mémoire cache", for live
+  trading). Answer given: only the order book is not a function of the bars (SMC levels come from OHLC; the liquidation
+  map is a model whose real input is the open interest); Binance publishes no full L2 history, but USD-M bookDepth
+  (±0.2/1/2/3/4/5 %, ~30 s, from 2023-01-01; ±0.2 % only later) and metrics (OI + long/short ratios, 5 min, from
+  2020-09-01; the first months list rows twice). Built: src/technicaldata/PerpArchive (parse, depth day blob "PDD1",
+  imbalance); FootprintCollector renamed **ArchiveCollector** with kinds spot / perp / depth / oi, up to 4 days in flight
+  (one footprint day), source binance-archive parallel 4 → ≈ 2 day-files a second (full depth + OI ≈ 30 min). Store:
+  depth_days, oi (+ oi_days), arch_missing; PairSpec "perp": {"depth", "oi"}, "liveBook". **Live book**:
+  charts/core/BookBands.h (the bookDepth bands from the local OrderBook + how far the REST snapshot reached), computed in
+  DepthStream's depth thread each whole second, GUI keeps 24 h (bands()); technicaldata/LiveBook holds the spot and perp
+  DepthStreams of liveBook pairs, record(false) as its wish, nothing written (checked: charts/depth empty). Measured: the
+  perp snapshot (1000 levels) reaches only ≈ −0.3 / +0.1 %, so live perp bands past ±0.2 % undercount (≈ 30 % at ±1 %,
+  half at ±5 % vs the archive); spot (5000 levels) reaches ≈ ±2.2 %. UI: PairDialog "Order book and positions" (3
+  toggles, size, deletions asked); Collection rows per archive kind; FootprintPanel → "Order flow" tabs Footprint / Book
+  depth / Open interest / Live book (1 s refresh, bands past the reach greyed). Depth ≈ 120 KB a day, OI ≈ 17 KB.
+  Checked: 3 parser tests (Python expected values, fixtures/make_perp.py), collector test with the fake archive, 2
+  BookBands tests; tools/check_perp_history.py: 5 depth days + 5 OI days re-downloaded, all match; charts data 154, core
+  286, technicaldata 48 pass. Not done: agents / ML reading these (step 3), the live book for an agent tool.
+  User's rule (same day): Charts' heatmap recordings (charts/depth/*.dwhm, its own on/off and days kept) may go on but
+  are not part of technical data: nothing reads them into technical-data.sqlite, the Data page or ML; the live book's
+  bands come only from the live stream.
+- 2026-11-20 (user: "la suite" = step 3, does the order flow help a model?). src/technicaldata/OrderFlowFeatures: a bar's
+  scale-free order flow values known at its close (footprint per venue: delta_pct, poc_dist, va_width, va_pos,
+  imbalances, stacks, low/high quarter deltas, perp volume ratio; depth: bids' share ±0.2/1/5 %, ±1 % depth changes,
+  last snapshot strictly before the close; OI: change over the bar, top positions / accounts / takers ratios).
+  ml::DatasetSpec::orderFlow ("-of" data set): those columns, and only the bars every recorded family covers, so runs
+  with and without them share their rows; ml_load_dataset order_flow, ML page checkbox "order flow". Test: 1 (values,
+  coverage, no look-ahead). **Result** (scratch profile, BTCUSDT, 2026-08-20 → 11-18, test 11-01 → 11-18, direction of
+  the close, A = 23 scale-free bar columns, B = A + 30 order flow columns, same rows): 15m h1 linear A 52.6 / B 50.6,
+  hist_gb A 51.6 / B 52.0; 15m h4 linear A 52.0 / B 50.2, hist_gb A 49.7 / B 51.2 (A+footprint 51.5, A+depth/OI 51.0):
+  none distinguishable from no skill after tries; 5m h1 hist_gb A 52.5 % (adj. p < 0.001) / B 51.4, linear A 51.6 / B
+  51.1. No gain from these order flow features on 3 months; the only significant edge is bars-only at 5m. Next options
+  given to the user: more footprint history, other targets (1m, size of the move / volatility), better features.
+  User's decision: keep the data as is (3 months + the collection), no longer history, no step 4.
+- 2026-11-20 (user: "il le faut", an agent reading the order flow as a trader reads a chart). src/ai/OrderFlowTools.cpp,
+  skill read_data: get_footprint (bars 1m … 1D of spot or perp: volume, buy %, delta, CVD, POC, value area, imbalances,
+  stacks; ladder = one bar level by level with POC / VA / imbalances / stacks / open / close marks, levels grouped to
+  ≤ rows), get_order_book (live, both markets: best bid / ask, spread, bands ±0.2 … ±5 % with the snapshot-reach caveat,
+  changes over 1 min … 1 h, 5 largest resting orders each side within ±0.5 % and how long they stood; end = the
+  perpetual's stored bookDepth at a past time), get_open_interest (metrics rows at a step). get_technical_coverage
+  lists each pair's order flow. Today's bars: src/technicaldata/LiveFootprint (pure) folds the live TradeStream tape into
+  1-minute footprints on the archive's 1 bp grid (DayBuilder, same minutes), whole minutes only (first / open / holed
+  minutes left out), 48 h kept; LiveBook now keeps the TradeStreams too (memory only) and folds every 30 s. Limit: the
+  live footprint starts with the trades the tape loads (TradeStream budget 300 000 ≈ 30-40 min on the perpetual, ~3 h
+  on spot), so today's bars before Deepwater started are not covered until tomorrow's archive. Test: 1 (same minutes as
+  the archive builder, partial / holed minutes, 48 h). Verified with the fake claude on the scratch profile.
+- 2026-11-20 (user: "Commençons par l'étape 1" of reports/Architecture agents ML évaluation.md). Trial registry,
+  src/trials: <data>/trials/trials.sqlite, append-only by construction (SQLite triggers abort UPDATE / DELETE). Every
+  backtest of Charts › Tester (user), bt_run / bt_quant_checks (agents) and every finished AI › ML training (user or
+  ml_train, one row per run id) is a try: family (bt|market|tf seconds, ml|market␟question), setup fingerprint, who,
+  period, per-bar Sharpe / skew / kurtosis, returns compounded per UTC day (for later PBO across tries), ML score vs no
+  skill. Readers: the agents' deflated Sharpe (bt_run, bt_quant_checks, bt_trials) now counts everyone's tries on that
+  data, not one environment's; ml_compare's Bonferroni tries come from the registry (deleted runs still count); the
+  Tester shows "Registre d'essais : N stratégies… (x par vous, y par les agents)" and the best one's deflated Sharpe.
+  The environments' old ledgers (<env>/backtest-trials.jsonl) and the existing ML runs are imported once. Tool tests
+  (env < 0) are not tries. Charts test hook: DW_CHARTS_STEPS step click:<button text>. Tests: tests/trials (8).
+  Verified on the scratch profile (agent tools, Tester screenshot, ml_compare). Not done yet (step 2): the quant
+  checks' own deflated Sharpe still counts only their ~25 nearby settings.
+- 2026-11-20 (user: "Feu vert étape 2"). (1) Quant checks on the trial registry (trials::withRegistry, Charts › Tester
+  box and bt_quant_checks): the deflated Sharpe counts the strategy's nearby settings AND the other strategies tried on
+  that data ("after 28 tries on this data: 24 nearby settings and 4 other strategies"); new gate "Overfitting across
+  tries (PBO)": CSCV on the returns per UTC day of every strategy tried on this data (those run on ≥ 75 % of this run's
+  days, other days flat; needs 3 strategies, 40 days). Port change: Checks.trialSharpes (not in toJson). (2) AI › ML
+  walk-forward (supervised): job validation = walk_forward, wf_folds 2..20 (page: "Partie test prédite par", 5 or 10
+  retrainings; ml_train: validation / wf_folds): the test part in blocks, each predicted by a model retrained on every
+  row before it minus the h rows whose target reaches into the block (purge), no-skill per block written per row; same
+  test rows as one cut, so ml_compare compares both (setup gets "|wf<k>", algorithm shown "· walk-forward k"). (3)
+  ml_compare: PBO across the setups of a SAME MARKET prediction group (ml::compare::pbo on per-row scores whose mean is
+  the balanced accuracy, or −|error|), in the agents' text and the COMPARE view. Tests: trials 10, ml 10, charts quant
+  17. Verified on the scratch profile: WF run 52.5 % vs one cut 52.6 % on the same 1688 rows; PBO 81 % / 76 % across
+  the BTCUSDT 15m setups. Not done: CPCV (the existing purged TimeSeriesSplit CV and walk-forward cover choosing and
+  deployment); walk-forward for the semi-/self-supervised and reinforcement families.
+- 2026-11-20 (user: "On continue" = step 3). Evaluation clock for the agents: ai::Slots::asOf (settings ai.asof), set per
+  environment from the cube's EVALUATION button (dialog: on/off, UTC date; badge "ÉVALUATION · date" on the cube) or
+  DW_AI_ASOF="0:2026-11-10 00:00". ToolDef::clock declared in ONE place (Tools::Tools): Live by default = REFUSED in
+  evaluation mode (closed by default; refusal journaled), AsOf (get_technical_coverage, get_technical_data, get_footprint,
+  get_order_book, get_open_interest, get_macro_facts, bt_run, bt_quant_checks, bt_trials), Timeless (bt_indicators,
+  ml_status, ml_methods). Checked in both dispatchers (McpServer, Engine); ToolCaller.asOf; tools read it via
+  ai::asOfFor(name). AsOf rules: a bar counts once closed (t + tf <= asOf); stored footprint days begun before asOf, no
+  live memory; book = stored perp snapshot at asOf; OI rows strictly before asOf; macro facts as_of forced (chain totals
+  and later "recorded" stamps hidden); backtests on stored bars only; registry tries visible only when their period had
+  ended (trials::visibleAt); an explicit later time is refused. Prompts say "EVALUATION MODE: the date is …". Leak test:
+  tools/check_asof_leaks.py (+ tools/asof_leaks/fake_claude.py): same calls on a profile copy and on one whose future
+  is random (bars, indicators, sync, gaps, fp/depth/oi days, OI rows, future registry tries); answers must match; then
+  DW_PLANT_LEAK=get_technical_data (scratch profiles only) must be caught; refusals checked. PASS at 2026-11-10 00:00
+  and 2026-11-14 13:20; it caught 2 real leaks on the way (OI header's stored day, OI row at exactly D). Not covered:
+  ML tools (Live: refused in evaluation mode), the macro DB (empty on the scratch profile: not leak-tested), a day
+  archive begun before a mid-day D (minutes after D in it not randomised).
+- 2026-11-20 (user: "il faut d'abord tester l'horloge"). Tested with the REAL Claude Code on a scratch profile copy at
+  2026-11-14 13:20: present-tense question → get_quotes / get_price_history / get_news refused, answer built from the
+  bars, OI and book as of that moment and dated so; explicit 18-20 Nov asks → refused (journaled), said so, nothing
+  invented, backtest cut at 14/11 12:00; mode off → live again. Found a real leak: the conversation crossed clock changes
+  (a live answer stayed in Claude's session after switching to evaluation). Fixed by construction: Engine::syncClock()
+  at each question (and on Slots::asOfChanged) compares the clock the conversation was held under (last "clock"
+  message) with the environment's; when they differ: a "clock" message (shown in the chat as a line) and a new Claude
+  Code session; a local model is sent only the messages after the last "clock". Re-tested: the model no longer sees
+  the earlier answer. tools/check_asof_leaks.py still PASS.
+- 2026-11-20 (user: "ok et la suite ?" = step 4). AI › ML supervised runs are judged in money after costs: train.py
+  trading_eval() trades the test predictions (position decided at each test row's close, held to the next row; long
+  when the model says up, flat otherwise, or long_short) when the target is a price (all values > 0) and the classes are
+  up / down (or a change / level regression). Cost a side: job cost_bp, defaulted in ml::Runs::start by market (Binance
+  15 bp = 0.10 % fee + 0.05 % slippage as the Strategy tester; forex 2; others 5); costs ×0/×1/×2/×3. References on the
+  same rows: buy & hold, trend (above its 20-row average), constant exposure = the model's average position held all
+  along (timing apart from exposure) with a paired moving-block bootstrap p (and p_worse). Shown in ml_run (TRADED
+  block), AI › ML (table TRADÉ APRÈS FRAIS), ml_compare / COMPARE (net after costs per run, buy & hold), and the trial
+  registry's ML rows (sharpe, net). ml_train: trade_side, cost_bp. Verified: BTCUSDT 15m direction, linear 52.6 %
+  balanced accuracy → −45.9 % after costs (362 trades), before costs −6.8 %, buy & hold −19.4 %; hist_gb −63.5 %;
+  both lose against their own constant exposure, not by chance. Not done: semi-/self-supervised trading, a cost field
+  on the page (default by market only).
+- 2026-11-20 (user: "oui on y va" = step 5). AI › ML targets of how much a price moves (train.py frame, VOL_TARGETS):
+  realized_vol, range, abs_return, big_move (beyond move_pct, default the training rows' 80th percentile, windows ending
+  before the test) over the next h rows; persistence = the same measure over the last h rows. Every such run is judged
+  against HAR (regression on the realized vol of the last h, 5h, 22h rows) and EWMA (λ 0.94), fitted on the same
+  training rows (walk-forward: per block), balanced classes for big_move; paired moving-block bootstrap (p, p_worse);
+  predictions.csv gets har / ewma columns; result "references". Shown in ml_run (AGAINST HAR / EWMA), AI › ML (CONTRE
+  LES RÉFÉRENCES DE VOLATILITÉ), ml_compare / COMPARE. Order flow: new column fp_<venue>_open_delta_pct (the bar's
+  opening minute delta; arXiv 2607.09426). Checked: targets look ahead exactly h rows, references unchanged by a changed
+  future. Experiment (scratch profile, BTCUSDT 15m, 8537 rows, test 1 704 rows 2026-11-01 → 11-18, h = 16 = 4 h):
+  realized vol: no model beats HAR / EWMA (hist_gb bars MAE 0.348, with order flow 0.367, EWMA 0.343, HAR 0.353);
+  big move (≥ 1.19 %): hist_gb 56.5 % (bars) / 55.7 % (order flow, AUC 66.1 vs 62.6) vs EWMA 57.6 %, HAR 53.5 %, all
+  not distinguishable; persistence 59.6 % best; direction 4 h / 12 h with order flow: 44-48 % balanced accuracy, lose
+  after costs and against their own exposure. Caveat: 18 test days (≈ 27 independent 12 h windows).
+- 2026-11-20 (user: "on continue" = step 6). Agents' evaluation protocol: src/ai/Evaluation (runner) + src/trials/
+  AgentEval (pure figures, tests/trials 13). KNOWLEDGE PROBE: fresh context, clock set to 2015 (tools useless), the
+  model gives Bitcoin's monthly closes from memory; against Binance's 1M candles → last month known (within 10 %, and 2
+  of the 3 months ending there) = measured frontier, <env>/knowledge-probe.json. PROTOCOL: N moments over a period (at
+  least one horizon apart), R repeats; at each, Slots::setAsOf (fresh context via Engine::syncClock), the question
+  Evaluation::prompt, the last "DECISION: LONG|SHORT|FLAT" line read (none = flat, "unparsed"); scored on stored 1h bars
+  after 15 bp a side against buy & hold, flat, trend (above 20-hour average), and the newest ML run answering the same
+  question (direction, H rows, the market's 1h data set) at the same moments; tier A = after frontier + 1 month, tier
+  B = before; repeat spread; paired bootstrap. Report as a "report" message in the conversation (never sent to the
+  model), <env>/evaluations/<stamp>.json, a try (kind agent) in the registry. UI: the cube's ÉVALUATION dialog gets a
+  Protocole section (period, horizon, decisions, repeats, Sonder sa mémoire / Lancer); the cube's badge shows progress.
+  Test hooks: DW_AI_EVAL=probe | run:from,to,h,n,r, DW_AI_EVAL_QUIT; tools/asof_leaks/fake_claude.py FAKE_CLAUDE_EVAL.
+  Real Claude Code probe: every monthly close Jan 2024 → Nov 2025 within 0.1 % (although told the date is 2015), unknown
+  from Dec 2025: frontier 2025-11, decisions from 2026-01 are tier A. Not built: blind trials (masked ticker and dates:
+  tool texts would need rewriting, prices give BTC away), forward paper test (tier C).
+  Real run (Claude Code, 6 decisions 2026-11-05 → 11-17, 4 h, tier A): 2 SHORT + 4 FLAT, +0.75 % total vs buy & hold
+  −2.68 %, trend −0.97 %, ML without LLM (walk-forward linear, 1h, direction 4 rows) −1.71 %; none distinguishable
+  (p 0.07-0.24). Fixes found by the runs: probe answers "~42 580" (tilde, narrow spaces) now read; inside a QObject,
+  tr() is QObject::tr (context "ai::Evaluation"): the helper is T(); duplicate ai_fr.ts entries removed.
+- 2026-11-20 (user: "on continue" = step 7). Replayable journal: <env>/tool-journal.jsonl now has kind question
+  (question_id, text, question_sha, system_prompt_sha, skills, as_of, app_version) / tool (arguments, result_sha =
+  SHA-256 of the exact text, 16 hex, clock class, external, ms) / answer (answer_sha, model, device = version, reason,
+  tool_calls); evaluation decisions carry their question_id. tools/replay_journal.py replays the asof calls at the same
+  clock on a profile copy through the MCP server and compares fingerprints (5/5 identical incl. bt_run; a tampered
+  fingerprint reported). MCP hardening: token compared in constant time; ToolDef::external (get_news, get_squawk,
+  get_bank_research, declared in Tools::Tools) → result wrapped in <external-text> (inner marks defused) + kExternalRule
+  in both system prompts. Host / Origin checks were already there. tools/check_asof_leaks.py still PASS. Not done:
+  MCP outputSchema / structured content (the tools answer text), a wrong-token request not tested by hand.
+- 2026-11-20 (user: "partons là-dessus" = the four follow-ups). (1) Trading after costs for semi-supervised runs (result
+  "trading") and self-supervised probes (probe "trading", each test window decides at its last row); cost by market for
+  those families too (Runs::start); shown in ml_run, AI › ML (addTrading), ml_compare, registry. (2) ML tools under the
+  clock: ml_load_dataset cuts technical-data sets at the moment (DatasetSpec::asOf, id "-asof-yyyyMMddHHmm", title
+  "· as of …"; other sources refused), ml_datasets / ml_read_dataset / ml_train / ml_runs / ml_run / ml_run_rows /
+  ml_compare see only those sets and the runs on them; declared AsOf; leak test extended (17 calls, PASS). (3) Forward
+  test, tier C (Evaluation::startForward / forwardTick, <env>/forward-test.json): asked in the present now and every N h,
+  missed times recorded (never asked late), scored when the horizon has passed, report + registry; agent changes flagged
+  (compared to the first answered decision); scheduler started in main.cpp (resumeForward). Fixed on the way: a lambda
+  with Qt::UniqueConnection asserted at launch (would have crashed every start). (4) Blind trials (src/ai/Blind, tests
+  3): dates shifted 9-13 years ahead, BTCUSDT / Bitcoin / Binance masked (MARKET:ASSET1), price-level numbers × a secret
+  factor; arguments mapped back; applied in both dispatchers when Slots::blindSeed and asOf; prompts say BLIND; a
+  change of blind starts a fresh context; protocol modes named / blind / both with agreement rate; replay skips blind
+  rows. Statistic fix: no p under 6 decisions (kMinTested). Tests: trials 16, ml 10, technicaldata 50, leak test PASS.
+- 2026-11-20 (user: "Tu pourrais lancer l'évaluation ?"). First real run of the protocol with Claude Code (opus-5-5), on a
+  copy of the test profile, BTCUSDT, 30 moments 2026-10-12 → 2026-11-19, 4 h, mode both, 15 bp a side, ML baseline =
+  linear walk-forward direction 4 h (balanced accuracy 0.514). Fixed on the way: (a) the probe ran at the 2015 clock in
+  evaluation mode, so Claude obeyed "do not use what you remember" and refused; a refusal was counted as "knows no
+  month" = everything tier A. Now: present clock, no skills (put back after), fresh context (Engine::freshContext),
+  and no price at all = "inconclusive" (frontier 0, every decision tier B). (b) A question cut by the timeout left the
+  Claude process ending; the next ask failed and the evaluation stopped ("did not take the question"). askNext now
+  waits up to 60 s for the environment to be free. Result: probe frontier 2025-10 (closes within 0.01 %), all 60
+  decisions tier A, none unparsed. Agent named −7.26 %, blind −8.54 %, buy & hold −9.89 %, trend rule −4.02 %, ML
+  −8.59 %; no difference significant (p ≥ 0.36); same decision named/blind at 24 of 30 moments. Tool calls: 4h bars
+  refused (not recorded in that profile), calendar / news refused as live: correct.
+- 2026-11-21 (user: "Fais un build de deepwater pour IOS"). iOS device build (arm64) in build-ios: `~/Qt/6.12.0/ios/bin/qt-cmake
+  -S . -B build-ios -G Ninja -DQT_HOST_PATH=$HOME/Qt/6.12.0/macos -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_ARCHITECTURES=arm64`,
+  then `cmake --build build-ios` → build-ios/Deepwater.app (64 MB, unsigned). Qt WebSockets + HttpServer for iOS added with
+  aqtinstall. No simulator build: the aqt iOS kit's simulator slice is x86_64 only (needs Rosetta, absent). Changes:
+  core/Process.h (dw::Process = QProcess, or on iOS a stand-in whose start() fails with FailedToStart: Claude Code, local
+  models, ML trainer, translation helper unavailable there), CMake iOS branches (UIKit, no AppKit/WebKit, no
+  deepwater-llm / dw-translate, NativeTv.mm out → NativeTvStub), Pdf.mm print off on iOS. The Mac build is unchanged.
+  Signed + installed on the user's iPhone 15 Plus the same day (user: "oui"): Xcode project build-ios-xcode (qt-cmake -G
+  Xcode, DEVELOPMENT_TEAM from the Apple Development certificate, automatic signing, xcodebuild -allowProvisioningUpdates),
+  `xcrun devicectl device install app`; profile expires 2026-11-28 (free account: 7 days). Crash at launch fixed:
+  Q_COREAPP_STARTUP_FUNCTION bodies starting a QTimer run before iOS's run loop exists (CFRunLoopAddTimer on null) →
+  core/Startup.h DW_STARTUP_FUNCTION (iOS: kept and run by main() right after QApplication; elsewhere unchanged), used by
+  the 6 startup functions; main.cpp: no GL 3.3 core format on iOS. Runs with live data (Global › Overview seen). Debug
+  trick: devicectl launch --start-stopped --json-output, then `lldb --batch -o "device select <udid>" -o "device process
+  attach --pid N" -o "process continue" -k "bt"` (-k: commands run on crash). Not done: touch / phone layout (the
+  window wants 960 x 540: texts overlap on the phone), GL pages not checked.
+- 2026-11-21 (user: "il faudrait que ça soit responsive"; choices: hamburger menu, iPhone portrait + landscape). Step 1
+  (bases) done: ui/Touch.h (ui::compact(width) < 760 = phone layout, each widget decides from its own width;
+  ui::touch::install: a QScroller on every scroll area's viewport, finger on iOS, left mouse with DW_TOUCH_SIM=1 on a
+  Mac); Header compact (one 48 px row: ☰, TAB › SUB, time, gear) when narrow or the window < 500 high (phone turned);
+  app/NavDrawer (menu from the left, every tab and sub-tab, tap = open); window minimum lifted on iOS, and on a Mac by
+  `--size 430x932` and by `--layout-audit --audit-sizes 430x932,932x430`. Pilot page Global › Overview: one column
+  (OverviewPage::layoutPanels), tape without session clocks, risk gauge above its history, strength controls on a
+  second row, banks table without the year. Checked on Mac captures (430x932, 932x430) and on the iPhone.
+  Next (feu vert per group): Global + News, Economy + Positioning, Market + Account, Data + AI + Sources, Charts.
+- 2026-11-21 phone layout, group 1 (Global + News) done by three agents, checked on captures and on the iPhone:
+  Session recap (one column; also a landscape layout; fixed a crash at 430 wide: an hour-label bound check in
+  CentreView), Market hours (clock, timeline with names above the bars, cards), Calendar (2-line rows, pinned headers,
+  SURPRISE/MIN/MAX dropped on phones, values open the range panel), Squawk (wire, TV, calendar in one column), News feed
+  (two-row header, lead story, headlines, cards; reader full width), Bank research (notes, globe, registry in a scroll
+  area). Rule used: page `ui::compact(W)` (Calendar/Squawk also `H < 420`), widgets `width() < 520`; desktop
+  unchanged (compared with captures). Known leftovers: lists that scroll inside a scrolling page (a drag on the list
+  scrolls the list), Bank research's last note under its sources footer (as on desktop), Feed reader's side panel cut.
+- 2026-11-21 phone layout, group 2 (Economy + Positioning) done by three agents, checked on captures: Macro (globe on
+  top, registry with finger scrolling, Asset File and detail view stacked), Rates (2x2 cards, two-band bank rows,
+  charts and committees in one column), Retail sentiment (cards 2x3, table reduced to symbol / bar / long % / status,
+  modal one column), COT (header buttons wrap, every panel full width, report tables condensed), Bank positioning
+  (three-row header, two-line calls, overlay one column), Risk sentiment (one column). Desktop unchanged (pixel diffs).
+  Installed on the iPhone; the launch failed because the phone was locked. Possible shared tweak not made:
+  pk::TitleBar dropping its badge itself when it would reach the title.
+- 2026-11-21 phone layout, group 3 (Market + Account) done by three agents, checked on captures (desktop pixel diffs at
+  1600x1042 and 1024x600): Markets watch (wrapping pills, 2x2 cards, stacked panels; instrument sheet two-row toolbar),
+  Seasonality (toolbar wraps and scrolls with the cards), Fundamental heatmap (two-line currency rows), Technical heatmap
+  (two-line instrument rows with six tiles, pinned header, signal file as an overlay; MarketKit setTitleRoom/setWrap),
+  Liquidity (stacked cards, wrapped legend, touch instrument list), Track record (three-row toolbar, one-column
+  dashboard, two-line trade rows, full-width dialogs), Risk calculator (form first, stacked cards). New test hooks:
+  DW_TH_FILE, DW_RC_SCROLL. Installed on the iPhone; the launch failed because the phone was locked.
+- 2026-11-21 phone layout, group 4 (Data + AI + Sources) done by four agents, checked on captures (desktop pixel diffs):
+  Macro data (one column, chains panel then the view; fixed a crash of the DW_MACRODATA_SELECT hook), Technical data
+  (one column below 960, narrow tables, order-flow tabs scroll sideways; PairDialog phone version), LLM (Local models
+  and Integration stacked; new src/pages/ai/PhoneScroll.h), Agents (cubes in one column, chat full screen with the
+  activity panel below, EVALUATION dialog phone version; drag a model onto a cube by finger NOT done), ML (DATA |
+  MODEL | RUNS bar showing one column at a time, compare rows on two lines), Sources (cards with 48x34 switches, 2x3
+  filter grid, stacked key fields), Sources graph (two columns fitted to the width, tap lights a node's links). Also:
+  the EVALUATION dialog scrolls above OK / Cancel at every size (macOS squeezed its rows at 1600x1042); with touch,
+  MainWindow::open clears a text field's focus so iOS doesn't open the keyboard by itself. iOS message of ML ("install
+  Python from python.org") not adapted yet. Charts (group 5) remains.

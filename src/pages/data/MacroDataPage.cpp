@@ -15,6 +15,8 @@
 #include "pages/data/Landscape.h"
 #include "pages/data/MacroCube.h"
 #include "pages/ai/Fit.h"
+#include "global/PageScroll.h"
+#include "ui/Touch.h"
 #include <QSlider>
 #include <QStackedWidget>
 #include <QSignalBlocker>
@@ -263,6 +265,8 @@ public:
 
 protected:
   static constexpr int kAxis = 30, kLane = 58, kLabel = 190;
+  // the label strip: narrower on a phone (the timeline keeps two thirds of a 400 px canvas)
+  int lw() const { return width() < 520 ? 128 : kLabel; }
   static constexpr qint64 kMaxFacts = 1000000;   // ~150 MB of facts (three strings each) across the loaded lanes
 
   // the (period, target) slot a block stands for, as build() groups the facts
@@ -296,8 +300,8 @@ protected:
     for (const auto& b : l.blocks) { const double v = l.facts[b.fact].value; if (std::isfinite(v)) { l.vmin = qMin(l.vmin, v); l.vmax = qMax(l.vmax, v); } }
   }
 
-  double xOf(qint64 t) const { return kLabel + double(t - m_t0) / double(m_t1 - m_t0) * (width() - kLabel - 12); }
-  qint64 tOf(double x) const { return m_t0 + qint64((x - kLabel) / (width() - kLabel - 12) * double(m_t1 - m_t0)); }
+  double xOf(qint64 t) const { return lw() + double(t - m_t0) / double(m_t1 - m_t0) * (width() - lw() - 12); }
+  qint64 tOf(double x) const { return m_t0 + qint64((x - lw()) / (width() - lw() - 12) * double(m_t1 - m_t0)); }
   QRectF laneRect(int i) const { return QRectF(0, kAxis + i * kLane, width(), kLane); }
 
   void paintEvent(QPaintEvent*) override {
@@ -314,7 +318,7 @@ protected:
     drawAxis(p, vis, true);   // the date row stays at the top of the view while scrolling
     if (m_lanes.isEmpty()) {
       p.setFont(theme::sans(12)); p.setPen(c.textMute);
-      p.drawText(rect().adjusted(kLabel, kAxis + 20, -20, 0), Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap,
+      p.drawText(rect().adjusted(lw(), kAxis + 20, -20, 0), Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap,
                  QCoreApplication::translate("data", "Tick chains on the left to show them here."));
     }
   }
@@ -324,10 +328,10 @@ protected:
     const double y0 = vis.top();
     if (band) {
       p.fillRect(QRectF(0, y0, width(), kAxis), c.bg);
-      p.setPen(QPen(c.border, 1)); p.drawLine(QPointF(kLabel, y0 + kAxis - 0.5), QPointF(width(), y0 + kAxis - 0.5));
+      p.setPen(QPen(c.border, 1)); p.drawLine(QPointF(lw(), y0 + kAxis - 0.5), QPointF(width(), y0 + kAxis - 0.5));
     }
     // tick step from the room available: at least ~56 px between two labels
-    const double pxPerDay = (width() - kLabel - 12) / (double(m_t1 - m_t0) / 86400000.0);
+    const double pxPerDay = (width() - lw() - 12) / (double(m_t1 - m_t0) / 86400000.0);
     // the tick loops below never end on invalid dates (an invalid QDate compares below every valid one and
     // addMonths/addDays leave it invalid): both ends are checked
     const QDateTime a = QDateTime::fromMSecsSinceEpoch(m_t0, QTimeZone::UTC), b = QDateTime::fromMSecsSinceEpoch(m_t1, QTimeZone::UTC);
@@ -355,7 +359,7 @@ protected:
     p.setFont(theme::mono(9));
     for (const auto& t : ticks) {
       const double x = xOf(t.t.toMSecsSinceEpoch());
-      if (x < kLabel || x > width()) continue;
+      if (x < lw() || x > width()) continue;
       if (!band) { p.setPen(QPen(theme::alpha(c.grid, 120), 1)); p.drawLine(QPointF(x, y0 + kAxis), QPointF(x, vis.bottom())); }
       else if (x + 3 + QFontMetricsF(p.font()).horizontalAdvance(t.label) <= width()) {   // no label cut at the right edge
         p.setPen(c.textMute); p.drawText(QRectF(x + 3, y0 + 6, 80, kAxis - 10), Qt::AlignLeft | Qt::AlignVCenter, t.label);
@@ -363,7 +367,7 @@ protected:
     }
     // today
     const double xn = xOf(QDateTime::currentMSecsSinceEpoch());
-    if (!band && xn > kLabel && xn < width()) { p.setPen(QPen(theme::alpha(c.accent, 160), 1, Qt::DashLine)); p.drawLine(QPointF(xn, y0 + kAxis), QPointF(xn, vis.bottom())); }
+    if (!band && xn > lw() && xn < width()) { p.setPen(QPen(theme::alpha(c.accent, 160), 1, Qt::DashLine)); p.drawLine(QPointF(xn, y0 + kAxis), QPointF(xn, vis.bottom())); }
   }
 
   void drawLane(QPainter& p, int li) {
@@ -372,22 +376,22 @@ protected:
     const QRectF lr = laneRect(li);
     const QColor fc = familyColour(isForecast(l.chain.def.kind) ? "forecasts" : l.chain.def.family);
     // label strip
-    p.fillRect(QRectF(0, lr.top(), kLabel - 6, lr.height() - 6), c.panel);
+    p.fillRect(QRectF(0, lr.top(), lw() - 6, lr.height() - 6), c.panel);
     p.setPen(Qt::NoPen); p.setBrush(fc); p.drawRect(QRectF(0, lr.top(), 3, lr.height() - 6));
     p.setFont(theme::sans(11)); p.setPen(c.text);
-    p.drawText(QRectF(10, lr.top() + 3, kLabel - 20, 16), Qt::AlignLeft | Qt::AlignVCenter,
-               QFontMetrics(p.font()).elidedText(l.chain.def.subject, Qt::ElideRight, kLabel - 22));
+    p.drawText(QRectF(10, lr.top() + 3, lw() - 20, 16), Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetrics(p.font()).elidedText(l.chain.def.subject, Qt::ElideRight, lw() - 22));
     p.setFont(theme::sans(10)); p.setPen(c.textDim);
-    p.drawText(QRectF(10, lr.top() + 19, kLabel - 20, 14), Qt::AlignLeft | Qt::AlignVCenter,
-               QFontMetrics(p.font()).elidedText(withSource(l.chain.def), Qt::ElideRight, kLabel - 22));
+    p.drawText(QRectF(10, lr.top() + 19, lw() - 20, 14), Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetrics(p.font()).elidedText(withSource(l.chain.def), Qt::ElideRight, lw() - 22));
     p.setFont(theme::mono(8, QFont::Bold, 1.0)); p.setPen(fc);
-    p.drawText(QRectF(10, lr.top() + 34, kLabel - 20, 13), Qt::AlignLeft | Qt::AlignVCenter,
+    p.drawText(QRectF(10, lr.top() + 34, lw() - 20, 13), Qt::AlignLeft | Qt::AlignVCenter,
                kindLabel(l.chain.def.kind) + "  ·  " + QLocale(QLocale::English).toString(l.chain.count));
-    p.setPen(QPen(c.divider, 1)); p.drawLine(QPointF(kLabel, lr.bottom() - 3), QPointF(width(), lr.bottom() - 3));
+    p.setPen(QPen(c.divider, 1)); p.drawLine(QPointF(lw(), lr.bottom() - 3), QPointF(width(), lr.bottom() - 3));
 
     if (l.blocks.isEmpty()) return;
     p.save();
-    p.setClipRect(QRectF(kLabel, lr.top(), width() - kLabel, lr.height()));
+    p.setClipRect(QRectF(lw(), lr.top(), width() - lw(), lr.height()));
     const double top = lr.top() + 12, h = lr.height() - 22;
     const bool fcLane = isForecast(l.chain.def.kind);
     // visible blocks (binary search on x0)
@@ -465,7 +469,7 @@ protected:
   }
 
   QPair<int, int> hit(const QPointF& pos) const {
-    if (pos.x() < kLabel || pos.y() < visibleRegion().boundingRect().top() + kAxis) return {-1, -1};   // the date row
+    if (pos.x() < lw() || pos.y() < visibleRegion().boundingRect().top() + kAxis) return {-1, -1};   // the date row
     const int li = int((pos.y() - kAxis) / kLane);
     if (li < 0 || li >= m_lanes.size() || !m_lanes[li].loaded) return {-1, -1};
     const qint64 t = tOf(pos.x());
@@ -474,7 +478,7 @@ protected:
     if (it == bl.begin()) return {-1, -1};
     --it;
     // tolerance: a few pixels for thin blocks
-    const qint64 tol = qint64(4.0 / (width() - kLabel - 12) * double(m_t1 - m_t0));
+    const qint64 tol = qint64(4.0 / (width() - lw() - 12) * double(m_t1 - m_t0));
     if (t > it->x1 + tol) return {-1, -1};
     return {li, int(it - bl.begin())};
   }
@@ -484,7 +488,7 @@ protected:
       const double dx = e->position().x() - m_drag.x();
       if (std::abs(dx) > 3) m_moved = true;
       const qint64 span = m_t1 - m_t0;
-      const qint64 shift = qint64(dx / (width() - kLabel - 12) * double(span));
+      const qint64 shift = qint64(dx / (width() - lw() - 12) * double(span));
       m_t0 = m_dragT0 - shift; m_t1 = m_t0 + span;
       update();
       return;
@@ -512,7 +516,7 @@ protected:
     const double steps = e->angleDelta().y() / 120.0;
     if (steps == 0) return;
     const double x = e->position().x();
-    const qint64 at = x > kLabel ? tOf(x) : (m_t0 + m_t1) / 2;
+    const qint64 at = x > lw() ? tOf(x) : (m_t0 + m_t1) / 2;
     const double k = std::pow(0.82, steps);
     const qint64 span = qBound<qint64>(5 * 86400000LL, qint64((m_t1 - m_t0) * k), 200LL * 365 * 86400000LL);
     const double frac = double(at - m_t0) / double(m_t1 - m_t0);
@@ -534,24 +538,42 @@ class MacroDataPage : public QWidget {
 public:
   explicit MacroDataPage(QWidget* parent) : QWidget(parent) {
     const auto& c = theme::pal();
-    auto* root = new QVBoxLayout(this);
+    // the page's content: in the page itself, or (phone, or a page this short) in a vertical page scroller, see setScroll
+    m_outer = new QVBoxLayout(this);
+    m_outer->setContentsMargins(0, 0, 0, 0); m_outer->setSpacing(0);
+    m_content = new QWidget(this);
+    m_outer->addWidget(m_content);
+    m_content->installEventFilter(this);
+    // the content's widgets are made in m_content (not in the page, then moved there by the layouts): a widget moved
+    // under another parent is polished again, which changed the 3D bars' cached height and moved the desktop view 5 px
+    auto* root = new QVBoxLayout(m_content);
+    m_root = root;
     root->setContentsMargins(16, 12, 16, 10); root->setSpacing(8);
 
     auto* head = new QHBoxLayout; head->setSpacing(12);
-    head->addWidget(ui::label(QCoreApplication::translate("data", "MACRO DATA"), theme::title(), c.accentText, this));
-    head->addWidget(fit::label(QCoreApplication::translate("data", "economic facts, linked in chains"), theme::mono(11), c.textDim, this));
+    m_head = head;
+    head->addWidget(ui::label(QCoreApplication::translate("data", "MACRO DATA"), theme::title(), c.accentText, m_content));
+    head->addWidget(fit::label(QCoreApplication::translate("data", "economic facts, linked in chains"), theme::mono(11), c.textDim, m_content));
     head->addStretch(1);
-    m_status = fit::label(QString(), theme::mono(10), c.textDim, this, 80);   // import progress: elides on a narrow window
+    m_status = fit::label(QString(), theme::mono(10), c.textDim, m_content, 80);   // import progress: elides on a narrow window
     head->addWidget(m_status);
-    m_counts = ui::label(QString(), theme::mono(10), c.textDim, this);
+    m_counts = ui::label(QString(), theme::mono(10), c.textDim, m_content);
     head->addWidget(m_counts);
     root->addLayout(head);
+    // phones: the import progress and the counts on a second row (hidden, and empty, otherwise)
+    m_head2 = new QWidget(m_content);
+    m_head2L = new QHBoxLayout(m_head2);
+    m_head2L->setContentsMargins(0, 0, 0, 0); m_head2L->setSpacing(12);
+    m_head2->hide();
+    root->addWidget(m_head2);
 
     auto* body = new QHBoxLayout; body->setSpacing(12);
+    m_body = body;
     root->addLayout(body, 1);
 
     // left: chains
-    auto* left = new ui::Panel(QCoreApplication::translate("data", "Chains"), this);
+    auto* left = new ui::Panel(QCoreApplication::translate("data", "Chains"), m_content);
+    m_left = left;
     left->setMinimumWidth(290); left->setMaximumWidth(360);
     m_search = new QLineEdit(left);
     m_search->setPlaceholderText(QCoreApplication::translate("data", "Search a chain (country, indicator, market…)"));
@@ -573,6 +595,7 @@ public:
       b->setStyleSheet(QString("QPushButton { background: transparent; color: %1; border: 1px solid %2; border-radius: 3px; padding: 3px 8px; }"
                                "QPushButton:hover { color: %3; border-color: %3; }").arg(c.textDim.name(), c.border.name(), c.accent.name()));
       bulk->addWidget(b);
+      m_touchButtons << b;
       return b;
     };
     auto* checkAll = mk(QCoreApplication::translate("data", "✓ TICK ALL"));
@@ -608,10 +631,12 @@ public:
 
     // right: canvas + range + inspector
     auto* right = new QVBoxLayout; right->setSpacing(6);
+    m_right = right;
     // view switch: the 2D chains (default) or one of the 3D views, each with its own bar
     auto* top = new QHBoxLayout; top->setSpacing(6);
+    m_top = top;
     auto viewButton = [&](const QString& t) {
-      auto* b = new QPushButton(t, this);
+      auto* b = new QPushButton(t, m_content);
       b->setCheckable(true); b->setCursor(Qt::PointingHandCursor); b->setFont(theme::mono(9, QFont::Bold, 1.2));
       b->setStyleSheet(QString("QPushButton { background: transparent; color: %1; border: 1px solid %2; border-radius: 3px; padding: 3px 10px; }"
                                "QPushButton:checked { color: %3; border-color: %3; background: %4; }")
@@ -625,31 +650,33 @@ public:
     viewButton(QCoreApplication::translate("data", "MACRO CUBE 3D"));
     for (int i = 0; i < m_viewButtons.size(); ++i) connect(m_viewButtons[i], &QPushButton::clicked, this, [this, i] { setView(i); });
     top->addSpacing(10);
-    m_bars = new CurrentStack(this);
+    m_bars = new CurrentStack(m_content);
     top->addWidget(m_bars, 1);
     right->addLayout(top);
     auto* bar2d = new QWidget(m_bars);
     auto* ranges = new QHBoxLayout(bar2d); ranges->setSpacing(6); ranges->setContentsMargins(0, 0, 0, 0);
-    ranges->addWidget(ui::label(QCoreApplication::translate("data", "Range"), theme::mono(9, QFont::Bold, 1.4), c.textMute, this));
+    ranges->addWidget(ui::label(QCoreApplication::translate("data", "Range"), theme::mono(9, QFont::Bold, 1.4), c.textMute, m_content));
     for (const auto& [label, years] : QList<QPair<QString, double>>{{"1M", 1.0 / 12}, {"6M", 0.5}, {"1Y", 1}, {"5Y", 5}, {"20Y", 20}, {QCoreApplication::translate("data", "ALL"), 0}}) {
-      auto* b = new QPushButton(label, this);
+      auto* b = new QPushButton(label, m_content);
       b->setCursor(Qt::PointingHandCursor); b->setFont(theme::mono(9, QFont::Bold, 1.2));
       b->setStyleSheet(QString("QPushButton { background: transparent; color: %1; border: 1px solid %2; border-radius: 3px; padding: 2px 8px; }"
                                "QPushButton:hover { color: %3; border-color: %3; }").arg(c.textDim.name(), c.border.name(), c.accent.name()));
       connect(b, &QPushButton::clicked, this, [this, y = years] { setYears(y); });
       ranges->addWidget(b);
+      m_touchButtons << b;
     }
     ranges->addStretch(1);
-    ranges->addWidget(fit::label(QCoreApplication::translate("data", "Wheel: zoom · drag: move · click a block: details"), theme::sans(10), c.textMute, this, 30));
+    m_rangeHint = fit::label(QCoreApplication::translate("data", "Wheel: zoom · drag: move · click a block: details"), theme::sans(10), c.textMute, m_content, 30);
+    ranges->addWidget(m_rangeHint);
     m_bars->addWidget(bar2d);
     buildBars3d();
-    m_views = new QStackedWidget(this);
+    m_views = new QStackedWidget(m_content);
     right->addWidget(m_views, 1);
     auto* page2d = new QWidget(m_views);
     auto* p2 = new QVBoxLayout(page2d); p2->setContentsMargins(0, 0, 0, 0); p2->setSpacing(6);
-    m_canvas = new ChainCanvas(this);
+    m_canvas = new ChainCanvas(m_content);
     m_canvas->loader = [](qint64 id) { return macrodata::Store::instance().facts(id); };
-    auto* cs = new QScrollArea(this);
+    auto* cs = new QScrollArea(m_content);
     cs->setWidgetResizable(true); cs->setFrameShape(QFrame::NoFrame); cs->setWidget(m_canvas);
     // the date row stays on top: repaint the whole view on scroll (lanes coming into view load then)
     connect(cs->verticalScrollBar(), &QScrollBar::valueChanged, m_canvas, qOverload<>(&QWidget::update));
@@ -658,13 +685,13 @@ public:
     cs->setStyleSheet(QString("QScrollArea { background:%1; }").arg(c.bg.name()));
     p2->addWidget(cs, 1);
     // the box grows with its text (up to 140 px, then scrolls): the idle note takes 4 lines on a 1024 px window
-    m_inspBox = textBox(this, 86, 140, 8, 12);
+    m_inspBox = textBox(m_content, 86, 140, 8, 12);
     m_inspector = m_inspBox->label();
     m_inspector->setFont(font());
     m_inspector->setTextFormat(Qt::RichText);
     m_inspector->setTextInteractionFlags(Qt::TextSelectableByMouse);
     auto* nav = new QHBoxLayout; nav->setSpacing(6);
-    m_prevBtn = new QPushButton(QCoreApplication::translate("data", "◀ PREVIOUS"), this); m_nextBtn = new QPushButton(QCoreApplication::translate("data", "NEXT ▶"), this);
+    m_prevBtn = new QPushButton(QCoreApplication::translate("data", "◀ PREVIOUS"), m_content); m_nextBtn = new QPushButton(QCoreApplication::translate("data", "NEXT ▶"), m_content);
     for (auto* b : {m_prevBtn, m_nextBtn}) {
       b->setCursor(Qt::PointingHandCursor); b->setFont(theme::mono(9, QFont::Bold, 1.2));
       b->setStyleSheet(QString("QPushButton { background: transparent; color: %1; border: 1px solid %2; border-radius: 3px; padding: 3px 10px; }"
@@ -674,8 +701,10 @@ public:
     connect(m_prevBtn, &QPushButton::clicked, this, [this] { step(-1); });
     connect(m_nextBtn, &QPushButton::clicked, this, [this] { step(+1); });
     auto* insp = new QHBoxLayout; insp->setSpacing(8);
+    m_insp = insp;
     insp->addWidget(m_inspBox, 1);
     auto* navCol = new QVBoxLayout; navCol->addWidget(m_prevBtn); navCol->addWidget(m_nextBtn); navCol->addStretch(1);
+    m_navCol = navCol;
     insp->addLayout(navCol);
     p2->addLayout(insp);
     m_views->addWidget(page2d);
@@ -736,8 +765,82 @@ protected:
   void hideEvent(QHideEvent*) override {
     if (m_reload.isActive()) { m_reload.stop(); m_stale = true; }
   }
+  // Phones (ui::compact): one column (header on two rows, the chains above the view, the inspector over its arrows);
+  // a phone upright or a page this short (phone sideways) scrolls. Wider and taller, the desktop layout as it was.
+  void resizeEvent(QResizeEvent* e) override {
+    QWidget::resizeEvent(e);
+    const bool phone = ui::compact(width());
+    setPhone(phone);
+    setScroll(phone || height() < 420);
+    if (m_pageScroll) m_pageScroll->relayout();
+  }
+  // the content's layout changed (a text, a view): its height in the page scroller follows, once per event loop pass
+  bool eventFilter(QObject* o, QEvent* e) override {
+    if (o == m_content && e->type() == QEvent::LayoutRequest && m_pageScroll && !m_relayoutQueued) {
+      m_relayoutQueued = true;
+      QTimer::singleShot(0, this, [this] { m_relayoutQueued = false; if (m_pageScroll) m_pageScroll->relayout(); });
+    }
+    return QWidget::eventFilter(o, e);
+  }
 
 private:
+  void setPhone(bool on) {
+    if (on == m_phone) return;
+    m_phone = on;
+    m_head->removeWidget(m_status); m_head->removeWidget(m_counts);
+    m_head2L->removeWidget(m_status); m_head2L->removeWidget(m_counts);
+    if (on) { m_head2L->addWidget(m_status, 1); m_head2L->addWidget(m_counts); }
+    else { m_head->addWidget(m_status); m_head->addWidget(m_counts); }
+    m_head2->setVisible(on);
+    m_body->setDirection(on ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_left->setMinimumWidth(on ? 0 : 290); m_left->setMaximumWidth(on ? QWIDGETSIZE_MAX : 360);
+    // the chains get a box of their own (their list scrolls inside it); the view comes under it
+    if (on) m_left->setFixedHeight(520);
+    else { m_left->setMinimumHeight(0); m_left->setMaximumHeight(QWIDGETSIZE_MAX); }
+    // the view buttons on one row, the range (or slice) bar on the next
+    m_top->removeWidget(m_bars); m_right->removeWidget(m_bars);
+    if (on) m_right->insertWidget(1, m_bars);
+    else m_top->addWidget(m_bars, 1);
+    m_rangeHint->setVisible(!on);   // wheel and mouse: not on a phone
+    m_sliceBy->setVisible(!on);     // the cube's bar fits a phone without its label (the axis buttons say it)
+    m_insp->setDirection(on ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_navCol->setDirection(on ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom);
+    if (!on) { m_views->setMinimumHeight(0); m_views->setMaximumHeight(QWIDGETSIZE_MAX); }
+    // finger targets
+    for (auto* b : std::as_const(m_touchButtons)) b->setMinimumHeight(on ? 34 : 0);
+    for (auto* b : std::as_const(m_famButtons)) b->setMinimumHeight(on ? 34 : 0);
+    for (auto* b : std::as_const(m_viewButtons)) b->setMinimumHeight(on ? 34 : 0);
+    for (auto* b : {m_prevBtn, m_nextBtn}) b->setMinimumHeight(on ? 34 : 0);
+    m_search->setMinimumHeight(on ? 36 : 0);
+  }
+  void setScroll(bool on) {
+    if (on == (m_pageScroll != nullptr)) return;
+    if (on) {
+      m_outer->removeWidget(m_content);
+      m_pageScroll = new global::PageScroll(m_content, this);
+      m_pageScroll->layout = [this](int w, int vh) { return contentHeight(w, vh); };
+      m_outer->addWidget(m_pageScroll);
+      m_content->show();
+    } else {
+      m_outer->removeWidget(m_pageScroll);
+      m_pageScroll->takeWidget();
+      m_content->setParent(this);
+      m_outer->addWidget(m_content);
+      m_content->show();
+      m_pageScroll->hide();
+      m_pageScroll->deleteLater();
+      m_pageScroll = nullptr;
+    }
+  }
+  // height of the content in the page scroller: phone sideways, the two columns made taller than the page; phone
+  // upright, the column's own height with the view about a screen tall
+  int contentHeight(int w, int vh) {
+    if (!m_phone) return std::max(vh, 680);
+    m_views->setFixedHeight(std::clamp(vh - 110, 420, 640));
+    const int h = m_root->hasHeightForWidth() ? m_root->totalHeightForWidth(w) : m_root->totalSizeHint().height();
+    return std::max(h, m_root->totalMinimumSize().height());
+  }
+
   // a panel-coloured box of wrapped text whose height follows the text (see fit::TextBox)
   static fit::TextBox* textBox(QWidget* parent, int minH, int maxH, int padV, int padH) {
     const auto& c = theme::pal();
@@ -759,6 +862,7 @@ private:
       b->setStyleSheet(QString("QPushButton { background: transparent; color: %1; border: 1px solid %2; border-radius: 3px; padding: 2px 8px; }"
                                "QPushButton:hover { color: %3; border-color: %3; } QPushButton:checked { color: %3; border-color: %3; }")
                            .arg(c.textDim.name(), c.border.name(), c.accent.name()));
+      m_touchButtons << b;
       return b;
     };
     auto sliderStyle = [&](QSlider* sl) {
@@ -790,7 +894,8 @@ private:
     // cube: slice axis + position
     auto* bc = new QWidget(m_bars);
     auto* k = new QHBoxLayout(bc); k->setContentsMargins(0, 0, 0, 0); k->setSpacing(6);
-    k->addWidget(ui::label(QCoreApplication::translate("data", "Slice by"), theme::mono(9, QFont::Bold, 1.4), c.textMute, bc));
+    m_sliceBy = ui::label(QCoreApplication::translate("data", "Slice by"), theme::mono(9, QFont::Bold, 1.4), c.textMute, bc);
+    k->addWidget(m_sliceBy);
     for (const QString& t : {QCoreApplication::translate("data", "DATE"), QCoreApplication::translate("data", "COUNTRY"),
                              QCoreApplication::translate("data", "INDICATOR")}) {
       auto* b = small(bc, t, true);
@@ -1044,7 +1149,7 @@ private:
       const auto& c = theme::pal();
       m_familyIds = QStringList{QString()} + macrodata::Importer::families();
       for (int i = 0; i < m_familyIds.size(); ++i) {
-        auto* b = new QPushButton(this);
+        auto* b = new QPushButton(m_content);
         b->setCheckable(true); b->setCursor(Qt::PointingHandCursor); b->setFont(theme::mono(8, QFont::Bold, 1.0));
         const QColor fc = i == 0 ? c.accent : familyColour(m_familyIds[i]);
         b->setStyleSheet(QString("QPushButton { background: transparent; color: %1; border: 1px solid %2; border-radius: 3px; padding: 3px 4px; }"
@@ -1053,6 +1158,7 @@ private:
         connect(b, &QPushButton::clicked, this, [this, i] { m_family = i; for (int k = 0; k < m_famButtons.size(); ++k) m_famButtons[k]->setChecked(k == i); applyFilter(); });
         m_famGrid->addWidget(b, i / 3, i % 3);
         m_famButtons << b;
+        if (m_phone) b->setMinimumHeight(34);
       }
     }
     for (int i = 0; i < m_famButtons.size(); ++i) {
@@ -1104,7 +1210,14 @@ private:
       for (int i = 0; i < lanes.size(); ++i) if (lanes[i].chain.def.key == s.section('|', 0, 0)) {
         m_canvas->ensureLoaded(i);
         const int b = s.contains('|') ? s.section('|', 1).toInt() : int(m_canvas->lanes()[i].blocks.size()) - 1;
-        QTimer::singleShot(0, this, [this, i, b] { m_canvas->select(i, qBound(0, b < 0 ? int(m_canvas->lanes()[i].blocks.size()) + b : b, int(m_canvas->lanes()[i].blocks.size()) - 1)); });
+        // the lanes may have been set again (and unloaded) by then: loaded again, and nothing picked in an empty one
+        // (qBound(0, x, -1) asserted)
+        QTimer::singleShot(0, this, [this, i, b] {
+          if (i >= m_canvas->lanes().size()) return;
+          m_canvas->ensureLoaded(i);
+          const int n = int(m_canvas->lanes()[i].blocks.size());
+          if (n > 0) m_canvas->select(i, qBound(0, b < 0 ? n + b : b, n - 1));
+        });
       }
     } else inspect(sel.first, sel.second);   // a selection that is gone resets the inspector and the arrows
   }
@@ -1214,6 +1327,15 @@ private:
   int m_view = 0;
   bool m_loading3d = false, m_pending3d = false, m_cubeHookDone = false;
   bool m_started = false, m_selectedOnce = false;
+  // phone layout (see setPhone / setScroll)
+  QVBoxLayout *m_outer = nullptr, *m_root = nullptr, *m_right = nullptr, *m_navCol = nullptr;
+  QHBoxLayout *m_head = nullptr, *m_head2L = nullptr, *m_body = nullptr, *m_top = nullptr, *m_insp = nullptr;
+  QWidget *m_content = nullptr, *m_head2 = nullptr;
+  ui::Panel* m_left = nullptr;
+  QLabel *m_rangeHint = nullptr, *m_sliceBy = nullptr;
+  QList<QPushButton*> m_touchButtons;
+  global::PageScroll* m_pageScroll = nullptr;
+  bool m_phone = false, m_relayoutQueued = false;
 };
 }  // namespace macrodatapage
 

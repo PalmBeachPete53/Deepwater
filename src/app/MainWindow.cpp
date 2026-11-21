@@ -1,9 +1,13 @@
+#include "ui/Touch.h"
+#include <QApplication>
+#include "app/NavDrawer.h"
 #include "app/MainWindow.h"
 #include "app/Header.h"
 #include "app/Pages.h"
 #include "core/Settings.h"
 #include "ui/Theme.h"
 #include "app/OptionsDialog.h"
+#include "app/HelpWindow.h"
 #include "core/I18n.h"
 #include "charts/data/Store.h"
 #include "app/Preload.h"
@@ -25,7 +29,11 @@
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   setWindowTitle("Deepwater");
+#ifdef Q_OS_IOS
+  setMinimumSize(1, 1);        // the screen's size, whatever it is (pages lay out for phones: ui/Touch.h)
+#else
   setMinimumSize(1024, 600);   // smallest laptop work area we support (e.g. 1280x720 at 125–150 % scaling, minus taskbar and title bar)
+#endif
   auto* central = new QWidget(this);
   central->setAutoFillBackground(true);
   auto* v = new QVBoxLayout(central);
@@ -37,6 +45,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   setCentralWidget(central);
   connect(m_header, &Header::navigate, this, &MainWindow::open);
   connect(m_header, &Header::optionsRequested, this, &MainWindow::showOptions);
+  connect(m_header, &Header::helpRequested, this, [this] { showHelp(); });
+  m_drawer = new app::NavDrawer(central);
+  connect(m_header, &Header::menuRequested, this, [this] { m_drawer->open(m_header->currentMain(), m_header->currentSub()); });
+  connect(m_drawer, &app::NavDrawer::navigate, this, &MainWindow::open);
   connect(&i18n::Notifier::instance(), &i18n::Notifier::changed, this, &MainWindow::rebuildPages);
   connect(&theme::Notifier::instance(), &theme::Notifier::changed, this, &MainWindow::rebuildPages);
   // Options: gear in the header, Cmd+, and the application menu's Settings… entry on macOS
@@ -47,6 +59,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   addAction(prefs);
   // macOS shows it in the system menu bar (application menu › Settings…); elsewhere the gear is enough
   if (QGuiApplication::platformName() == "cocoa") menuBar()->addMenu("Deepwater")->addAction(prefs);
+  // Documentation: the header's ?, F1 and Cmd+? (macOS: the Help menu)
+  auto* help = new QAction(QCoreApplication::translate("help", "Deepwater documentation"), this);
+  help->setShortcuts({QKeySequence(Qt::Key_F1), QKeySequence::HelpContents});
+  help->setShortcutContext(Qt::ApplicationShortcut);
+  connect(help, &QAction::triggered, this, [this] { showHelp(); });
+  addAction(help);
+  if (QGuiApplication::platformName() == "cocoa") menuBar()->addMenu(QCoreApplication::translate("help", "Help"))->addAction(help);
 
   // Cmd+1..9 then Cmd+0: main tabs (Key_1 + 9 would be ':'); Cmd+[ / Cmd+]: previous / next sub-tab
   for (int i = 0; i < app::tabs().size() && i < 10; ++i) {
@@ -137,6 +156,13 @@ void MainWindow::open(int main, int sub) {
   QWidget* page = ensurePage(id);
   m_stack->setCurrentWidget(page);
   m_header->setCurrent(main, sub);
+  // touch: a page's first text field could take the focus as it shows, and on iOS that opens the keyboard over the
+  // page; nothing is focused until the user taps a field
+  if (ui::touch::enabled())
+    QTimer::singleShot(0, this, [] {
+      QWidget* f = QApplication::focusWidget();
+      if (f && f->testAttribute(Qt::WA_InputMethodEnabled)) f->clearFocus();
+    });
   settings::setValue("ui.page", id);
 }
 
@@ -157,6 +183,16 @@ void MainWindow::showOptions() {
   dlg->show();
 }
 
+void MainWindow::showHelp(const QString& chapter, const QString& section) {
+  if (!m_help) m_help = new HelpWindow(this);
+  const int m = m_header->currentMain();
+  const QString id = !chapter.isEmpty() ? chapter : m >= 0 && m < app::tabs().size() ? app::tabs()[m].id : QStringLiteral("start");
+  m_help->showChapter(id, section);
+  m_help->show();
+  m_help->raise();
+  m_help->activateWindow();
+}
+
 void MainWindow::rebuildPages() {
   const QString id = currentPageId();
   // Non-current pages first, the current one last: removing the current page makes the stack show the next one, whose
@@ -169,6 +205,12 @@ void MainWindow::rebuildPages() {
   if (!openPage(id)) open(0, 0);
   QTimer::singleShot(0, this, &MainWindow::keepPaperOrdersWatched);   // the Charts page went with the others
   schedulePreloads(2000);
+}
+
+void MainWindow::resizeEvent(QResizeEvent* e) {
+  QMainWindow::resizeEvent(e);
+  m_header->syncHeight();
+  if (m_drawer->isVisible()) m_drawer->setGeometry(centralWidget()->rect());
 }
 
 QWidget* MainWindow::currentPage() const { return m_stack->currentWidget(); }

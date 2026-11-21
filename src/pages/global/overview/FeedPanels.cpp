@@ -487,9 +487,15 @@ void RiskPanel::paintEvent(QPaintEvent*) {
   p.fillRect(QRectF(1, 33, W - 2, 1), theme::map("#181714"));
   const bool have = std::isfinite(m_r.value);
 
-  // ---- gauge (designed for a 245 px panel; scaled down on short windows)
-  const qreal gs = qBound(0.6, (height() - 33) / 212.0, 1.0);
+  // ---- gauge (designed for a 245 px panel; scaled down on short windows). A phone upright (stacked): the gauge
+  // centred on top at full size, the history below it across the panel.
+  const bool stacked = W < 520;
+  const qreal gs = stacked ? 1.0 : qBound(0.6, (height() - 33) / 212.0, 1.0);
+  const qreal hx = stacked ? 11 : 297 * gs;    // the history's left edge (its label)
+  const qreal hy = stacked ? 218 : 0;          // and how far down it starts
+  const qreal ly = stacked ? 22 : 0;           // stacked: the legend on its own line under the label
   p.save();
+  if (stacked) p.translate(W / 2 - 145, 0);
   p.translate(0, 33); p.scale(gs, gs); p.translate(0, -33);
   const QPointF hub(144, 132);
   auto at = [&](qreal r, qreal v) {   // v 0..100 → 240° dial, 50 at the top
@@ -582,10 +588,11 @@ void RiskPanel::paintEvent(QPaintEvent*) {
 
   p.restore();
   // ---- history · 1 year
-  const QRectF pl(304 * gs, 75, W - 57 - 304 * gs, height() - 75 - 32);
+  const QRectF pl(hx + 7, 75 + hy + ly, W - 57 - hx - 7, height() - 75 - hy - ly - 32);
   const QFont lf = theme::mono(10, QFont::Normal, 2.5);
-  const qreal labelRight = 297 * gs + look::width(QCoreApplication::translate("global", "HISTORY · 1 YEAR"), lf);
-  look::text(p, 297 * gs, 44, QCoreApplication::translate("global", "HISTORY · 1 YEAR"), lf, theme::map("#605c55"));
+  if (stacked) p.fillRect(QRectF(11, 33 + hy - 4, W - 22, 1), theme::map("#181714"));
+  const qreal labelRight = stacked ? 0 : hx + look::width(QCoreApplication::translate("global", "HISTORY · 1 YEAR"), lf);
+  look::text(p, hx, 44 + hy, QCoreApplication::translate("global", "HISTORY · 1 YEAR"), lf, theme::map("#605c55"));
   {
     struct L { QString t; QColor c; };
     const QList<L> leg{{QCoreApplication::translate("global", "RISK-OFF < 40"), theme::map("#d48a8f")}, {QCoreApplication::translate("global", "NEUTRAL 40-60"), theme::map("#fbde84")}, {QCoreApplication::translate("global", "RISK-ON > 60"), theme::map("#76cad1")}};
@@ -597,9 +604,9 @@ void RiskPanel::paintEvent(QPaintEvent*) {
     const auto& leg2 = legend;
     qreal x = W - 15 - total(ls);
     for (const auto& l : leg2) {
-      p.fillRect(QRectF(x, 44.5, 7, 7), l.c);
+      p.fillRect(QRectF(x, 44.5 + hy + ly, 7, 7), l.c);
       x += 11;
-      x += look::text(p, x, 51.5, l.t, theme::mono(10, QFont::Normal, ls), l.c) + 12;
+      x += look::text(p, x, 51.5 + hy + ly, l.t, theme::mono(10, QFont::Normal, ls), l.c) + 12;
     }
   }
   for (int z = 0; z < 5; ++z) {
@@ -692,11 +699,12 @@ void CentralBanksPanel::paintEvent(QPaintEvent*) {
   const QFont hf = theme::mono(9, QFont::Normal, 0.8);
   const qreal hy = 53;
   const bool narrow = W < 700;   // compact windows: rate and meeting columns move left
-  const qreal xRate = narrow ? 212 : 267, xNext = narrow ? 240 : 329, xCut = W - 139, xHold = W - 74, xHike = W - 11;
+  const bool phone = W < 520;    // a phone upright: the meeting without its year, a short header
+  const qreal xRate = phone ? 176 : narrow ? 212 : 267, xNext = phone ? 190 : narrow ? 240 : 329, xCut = W - 139, xHold = W - 74, xHike = W - 11;
   const QColor hc = theme::map("#66635b");
   look::text(p, 11, hy, QCoreApplication::translate("global", "CENTRAL BANK"), hf, hc);
   look::textRight(p, xRate - 14, hy, QCoreApplication::translate("global", "RATE"), hf, hc);
-  look::text(p, xNext, hy, QCoreApplication::translate("global", "NEXT MEETING"), hf, hc);
+  if (!phone) look::text(p, xNext, hy, QCoreApplication::translate("global", "NEXT MEETING"), hf, hc);   // phone: no room, the dates speak
   look::textRight(p, xCut, hy, QCoreApplication::translate("global", "CUT"), hf, hc);
   look::textRight(p, xHold, hy, QCoreApplication::translate("global", "HOLD"), hf, hc);
   look::textRight(p, xHike, hy, QCoreApplication::translate("global", "HIKE"), hf, hc);
@@ -716,7 +724,7 @@ void CentralBanksPanel::paintEvent(QPaintEvent*) {
     const QColor dash = theme::map("#4c4a44");
     look::textRight(p, xRate, b, std::isfinite(r.rate) ? fmt::num(r.rate, 2) + "%" : fmt::dash(), bf,
                     std::isfinite(r.rate) ? theme::map("#fffffc") : dash);
-    look::text(p, xNext, b, r.nextMeeting.isValid() ? en.toString(r.nextMeeting, "dd MMM yyyy") : fmt::dash(), vf,
+    look::text(p, xNext, b, r.nextMeeting.isValid() ? en.toString(r.nextMeeting, phone ? "dd MMM" : "dd MMM yyyy") : fmt::dash(), vf,
                r.nextMeeting.isValid() ? theme::map("#f5f2ed") : dash);
     auto prob = [&](double v, int dp) { return std::isfinite(v) ? fmt::num(v, dp) + "%" : fmt::dash(); };
     // the most likely outcome in bold (ties to hold, as macro::Bank::action()); all three with 0 decimals

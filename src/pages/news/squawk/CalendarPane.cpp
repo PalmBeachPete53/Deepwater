@@ -27,12 +27,20 @@ inline QColor kGold() { return theme::map("#ffd200"); }
 inline QColor kCountdown() { return theme::map("#e0574a"); }
 inline QColor kNextTime() { return theme::map("#dab31b"); }
 
-struct Cols { int time = 10, flag = 84, ccy = 111, dot = 164, name = 175, actual, forecast, previous; bool narrow = false; };
+struct Cols { int time = 10, flag = 84, ccy = 111, dot = 164, name = 175, actual, forecast, previous; bool narrow = false, phone = false; };
 // Columns narrower than the reference's 665 px (laptops): the three value columns keep their place on a 62 px
 // pitch and the time / currency columns close up, so the event name keeps room (it was cut to "Pre…" and
 // PREVIOUS was dropped below 560 px).
+// Phones (< 520 px): two-line rows. Line 1: time, flag, currency, impact, name; line 2: chips on the left, then the
+// three values on an 86 px pitch from the right edge (the header labels sit above them).
 Cols cols(int w) {
   Cols c;
+  if (w < 520) {
+    c.narrow = c.phone = true;
+    c.flag = 60; c.ccy = 86; c.dot = 128; c.name = 60;
+    c.previous = w - 10; c.forecast = w - 96; c.actual = w - 182;
+    return c;
+  }
   if (w < 665) {
     c.narrow = true;
     c.flag = 62; c.ccy = 88; c.dot = 126; c.name = 137;
@@ -90,7 +98,7 @@ int CalendarRows::rowAt(int y) const {
 }
 void CalendarRows::resizeEvent(QResizeEvent* e) {
   QAbstractScrollArea::resizeEvent(e);
-  m_eventH = viewport()->height() < 220 ? 46 : 59;   // short windows: compact rows so two events stay visible
+  m_eventH = viewport()->height() < 220 && viewport()->width() >= 520 ? 46 : 59;   // short windows: compact rows so two events stay visible (phones: two-line rows need 59)
   relayout();
 }
 void CalendarRows::scrollToFirstUpcoming() {
@@ -198,6 +206,80 @@ void CalendarRows::paintEvent(QPaintEvent* e) {
       p.drawText(b, Qt::AlignCenter, today);
     }
   };
+  // phone row (see cols): same colours and fonts as the desktop row, on two lines
+  auto phoneRow = [&](int i, int y0, int rh) {
+    const auto& ev = m_rows[i].ev;
+    if (i == m_hover) p.fillRect(QRect(0, y0, w, rh - 1), theme::map("#1a1000"));
+    p.fillRect(QRect(0, y0 + rh - 1, w, 1), theme::map("#212208"));
+    const int cy1 = y0 + 18, cy2 = y0 + 42;
+    const bool noTime = untimed(ev);
+    const bool isNext = !noTime && next.isValid() && ev.time == next;
+    p.setFont(isNext ? fTimeB : fTime); p.setPen(isNext ? kNextTime() : theme::map("#63625c"));
+    p.drawText(QPointF(c.time, cy1 + 5), noTime ? QStringLiteral("—") : ev.time.toLocalTime().toString("HH:mm"));
+    p.drawPixmap(QPointF(c.flag, cy1 - 6.5), ui::flag(ev.currency, QSize(20, 13), devicePixelRatioF()));
+    p.setFont(theme::mono(13)); p.setPen(theme::map("#8b8a81"));
+    p.drawText(QPointF(c.ccy, cy1 + 5), ev.currency);
+    p.setPen(Qt::NoPen);
+    qreal nx = c.ccy + QFontMetricsF(p.font()).horizontalAdvance(ev.currency) + 10;
+    if (ev.impact >= 3) { p.setBrush(kGold()); p.drawEllipse(QPointF(nx, cy1), 3.2, 3.2); p.drawEllipse(QPointF(nx + 8, cy1), 3.2, 3.2); nx += 18; }
+    else if (ev.impact == 2) { p.setBrush(kGold()); p.drawEllipse(QPointF(nx, cy1), 3.2, 3.2); nx += 10; }
+    else { p.setBrush(theme::map("#5d5c56")); p.drawEllipse(QPointF(nx, cy1), 2.6, 2.6); nx += 10; }
+    p.setFont(fName); p.setPen(theme::map("#c4c3bf"));
+    const QFontMetricsF fmN(fName);
+    const QString nm = fmN.elidedText(ev.title, Qt::ElideRight, w - 10 - 16 - nx);
+    p.drawText(QPointF(nx, cy1 + 5), nm);
+    const qreal chx = nx + fmN.horizontalAdvance(nm) + 8;
+    p.setPen(QPen(theme::map("#5a574f"), 1.2)); p.setBrush(Qt::NoBrush);
+    const bool open = m_expanded.contains(ev.id);
+    QPainterPath ch; const qreal sg = open ? -1 : 1;
+    ch.moveTo(chx + 1, cy1 - 1.5 * sg); ch.lineTo(chx + 4.5, cy1 + 1.5 * sg); ch.lineTo(chx + 8, cy1 - 1.5 * sg);
+    p.drawPath(ch);
+    // line 2, left: frequency chip, then the range chip when it still fits before ACTUAL
+    const qint64 secs = now.secsTo(ev.time);
+    const bool counting = !ev.released() && secs > 0 && !noTime;
+    const QString cd = QCoreApplication::translate("wire", "in") + " " + countdown(secs);
+    const qreal valueLeft = c.actual - (counting ? QFontMetricsF(fNum).horizontalAdvance(cd) : 60) - 8;
+    const QFont fChip = theme::mono(9, QFont::Bold, 0.5), fChipR = theme::mono(10, QFont::Bold);
+    qreal x = c.name;
+    if (!ev.frequency.isEmpty()) {
+      const QString t = ev.frequency.toUpper();
+      const QRectF r(x, cy2 - 9, QFontMetricsF(fChip).horizontalAdvance(t) + 16, 18);
+      if (r.right() <= valueLeft) {
+        p.setPen(QPen(theme::map("#1f5560"), 1)); p.setBrush(Qt::NoBrush); p.drawRoundedRect(r.adjusted(.5, .5, -.5, -.5), 2, 2);
+        p.setFont(fChip); p.setPen(theme::map("#46c3d7")); p.drawText(QPointF(r.left() + 8, cy2 + 3.5), t);
+        x = r.right() + 6;
+      }
+    }
+    if (!ev.rangeLow.isEmpty() && !ev.rangeHigh.isEmpty()) {
+      const QString t = ev.rangeLow + " – " + ev.rangeHigh;
+      const QRectF r(x, cy2 - 9, QFontMetricsF(fChipR).horizontalAdvance(t) + 16, 18);
+      if (r.right() <= valueLeft) {
+        p.setPen(QPen(theme::map("#bd9c19"), 1)); p.setBrush(theme::map("#140d02")); p.drawRoundedRect(r.adjusted(.5, .5, -.5, -.5), 2, 2);
+        p.setFont(fChipR); p.setPen(theme::map("#f0d070")); p.drawText(r, Qt::AlignCenter, t);
+      }
+    }
+    const QRectF v2(0, cy2 - 12, 0, 24);
+    auto col = [&](int right, int width) { return QRectF(right - width, v2.top(), width, v2.height()); };
+    if (ev.released()) { p.setFont(fNumB); p.setPen(theme::map("#f5f2eb")); p.drawText(col(c.actual, 150), Qt::AlignRight | Qt::AlignVCenter, ev.actual); }
+    else if (counting) { p.setFont(fNum); p.setPen(kCountdown()); p.drawText(col(c.actual, 170), Qt::AlignRight | Qt::AlignVCenter, cd); }
+    else { p.setFont(fNum); p.setPen(theme::map("#5f5d57")); p.drawText(col(c.actual, 120), Qt::AlignRight | Qt::AlignVCenter, "—"); }
+    p.setFont(fNum); p.setPen(theme::map("#898882"));
+    p.drawText(col(c.forecast, 80), Qt::AlignRight | Qt::AlignVCenter, ev.forecast.isEmpty() ? "—" : ev.forecast);
+    p.setPen(theme::map("#76756e"));
+    p.drawText(col(c.previous, 80), Qt::AlignRight | Qt::AlignVCenter, ev.previous.isEmpty() ? "—" : ev.previous);
+    if (open) {
+      QString d = ev.detail;
+      if (d.isEmpty()) {
+        d = QCoreApplication::translate("wire", "%1 · %2 impact · %3 local").arg(ev.title, impactName(ev.impact),
+              noTime ? i18n::locale().toString(ev.time.toTimeZone(QTimeZone("America/New_York")).date(), "ddd d MMM")
+                     : i18n::locale().toString(ev.time.toLocalTime(), "ddd d MMM HH:mm"));
+        if (!ev.rangeLow.isEmpty()) d += QCoreApplication::translate("wire", " · economists' range %1 – %2").arg(ev.rangeLow, ev.rangeHigh);
+        if (!ev.frequency.isEmpty()) d += " · " + ev.frequency.toLower() + (ev.frequencyInferred ? QCoreApplication::translate("wire", " (inferred)") : QString());
+      }
+      p.setFont(theme::sans(11)); p.setPen(theme::map("#8a877e"));
+      p.drawText(QRectF(c.time, y0 + m_eventH - 4, w - c.time - 12, kExpandH), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, d);
+    }
+  };
   int i = qMax(0, rowAt(top + e->rect().top()));
   for (; i < m_rows.size() && m_y[i] - top <= e->rect().bottom(); ++i) {
     const auto& row = m_rows[i];
@@ -206,6 +288,7 @@ void CalendarRows::paintEvent(QPaintEvent* e) {
       paintDay(y0, row.date);
       continue;
     }
+    if (c.phone) { phoneRow(i, y0, rh); continue; }
     const auto& ev = row.ev;
     if (i == m_hover) p.fillRect(QRect(0, y0, w, rh - 1), theme::map("#1a1000"));
     p.fillRect(QRect(0, y0 + rh - 1, w, 1), theme::map("#212208"));
@@ -434,15 +517,25 @@ void CalendarPane::resizeEvent(QResizeEvent*) {
   m_footer->setGeometry(0, height() - 28, width(), 28);
 }
 
-QRectF CalendarPane::prevRect() const { return QRectF(8, kWeekY - 11, 20, 22); }
+// Phones (< 520 px): finger-sized targets around the same centres, country chips 30 px high from the left edge
+// (no COUNTRIES label), impact segments 30 px high; the bands between the rules stay where they are.
+bool CalendarPane::phone() const { return width() < 520; }
+QRectF CalendarPane::prevRect() const { return phone() ? QRectF(0, kWeekY - 16, 36, 32) : QRectF(8, kWeekY - 11, 20, 22); }
 QRectF CalendarPane::nextRect() const {
   const QFontMetricsF fm(theme::mono(13, QFont::Bold));
   const QString t = weekLabel(m_week);
+  if (phone()) return QRectF(35 + fm.horizontalAdvance(t), kWeekY - 16, 36, 32);
   return QRectF(35 + fm.horizontalAdvance(t) + 8, kWeekY - 11, 20, 22);
 }
 QList<QRectF> CalendarPane::countryRects() const {
   QList<QRectF> out;
   const auto majors = market::majorCurrencies();
+  if (phone()) {
+    qreal x = 10;
+    const qreal pitch = (width() - 10 - 80) / qreal(majors.size());
+    for (int i = 0; i < majors.size(); ++i) { out << QRectF(x, kCountryY - 15, pitch - 5, 30); x += pitch; }
+    return out;
+  }
   qreal x = 64;
   const qreal pitch = qMin<qreal>(59.5, (width() - 64 - 80) / qreal(majors.size()));
   for (int i = 0; i < majors.size(); ++i) { out << QRectF(x, kCountryY - 11, pitch - 5, 22); x += pitch; }
@@ -450,6 +543,7 @@ QList<QRectF> CalendarPane::countryRects() const {
 }
 QRectF CalendarPane::moreRect() const {
   const auto r = countryRects();
+  if (phone()) return QRectF(r.last().right() + 5, kCountryY - 15, width() - 10 - r.last().right() - 5, 30);
   return QRectF(r.last().right() + 6, kCountryY - 11, 69, 22);
 }
 QList<QRectF> CalendarPane::impactRects() const {
@@ -460,8 +554,8 @@ QList<QRectF> CalendarPane::impactRects() const {
   for (int i = 0; i < 4; ++i) {
     qreal w = fm.horizontalAdvance(names[i]) + 14;
     if (m_counts[i] >= 0) w += fc.horizontalAdvance(QString::number(m_counts[i])) + 4;
-    out << QRectF(x, kImpactY - 11, w, 22);
-    x += w + 4;
+    out << (phone() ? QRectF(x, kImpactY - 15, w + 4, 30) : QRectF(x, kImpactY - 11, w, 22));
+    x += phone() ? w + 8 : w + 4;
   }
   return out;
 }
@@ -489,7 +583,7 @@ void CalendarPane::paintEvent(QPaintEvent*) {
   chevron(nextRect(), false, m_hover == 21);
   // COUNTRIES
   p.setFont(theme::mono(8, QFont::Normal, 1)); p.setPen(theme::map("#4a473d"));
-  p.drawText(QPointF(10, kCountryY + 3), QCoreApplication::translate("wire", "COUNTRIES"));
+  if (!phone()) p.drawText(QPointF(10, kCountryY + 3), QCoreApplication::translate("wire", "COUNTRIES"));
   const auto majors = market::majorCurrencies();
   const auto cr = countryRects();
   const bool flags = cr.first().width() >= 50;
@@ -545,8 +639,8 @@ void CalendarPane::paintEvent(QPaintEvent*) {
   p.setFont(theme::mono(9, QFont::Normal, c.narrow ? 0.3 : 1.2)); p.setPen(theme::map("#6a665d"));   // 62 px pitch: "PRÉCÉDENT" fits
   const int hy = kHeadTop + 18;
   p.drawText(QPointF(c.time, hy), QCoreApplication::translate("wire", "TIME"));
-  p.drawText(QPointF(c.flag, hy), QCoreApplication::translate("wire", "CURRENCY"));
-  p.drawText(QPointF(c.name - 12, hy), QCoreApplication::translate("wire", "EVENT"));
+  if (!c.phone) p.drawText(QPointF(c.flag, hy), QCoreApplication::translate("wire", "CURRENCY"));
+  p.drawText(QPointF(c.phone ? c.name : c.name - 12, hy), QCoreApplication::translate("wire", "EVENT"));
   p.drawText(QRectF(c.actual - 100, kHeadTop, 100, kHeadH + 5), Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("wire", "ACTUAL"));
   p.drawText(QRectF(c.forecast - 100, kHeadTop, 100, kHeadH + 5), Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("wire", "FORECAST"));
   if (c.previous > 0) p.drawText(QRectF(c.previous - 100, kHeadTop, 100, kHeadH + 5), Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("wire", "PREVIOUS"));

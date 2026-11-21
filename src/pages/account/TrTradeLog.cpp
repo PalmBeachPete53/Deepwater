@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include "account/Contracts.h"
 #include "ui/Format.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QMouseEvent>
@@ -19,11 +20,19 @@ public:
   enum Col { Opened, Closed, Instrument, Side, Size, Entry, Exit, Stop, Target, Held, R, Strategy, Session, Pnl, NCols };
   explicit TradeTable(TradeLogView* /*owner*/, QWidget* parent) : QWidget(parent) { setMouseTracking(true); }
   void setRows(const QList<account::Trade>& rows, const QString& ccy) { m_rows = rows; m_ccy = ccy; sortRows(); update(); }
-  int rowsHeight() const { return kTop + int(std::ceil(m_rows.size() * kPitch)) + 6; }
+  // phones: rows on two lines (instrument, side, P&L / close date, entry → exit, R), a sort bar instead of the
+  // column headers, 34 px wide action targets; the other columns are in the trade's edit dialog (eye)
+  void setPhone(bool on) { if (on != m_phone) { m_phone = on; update(); } }
+  int rowsHeight() const { return top() + int(std::ceil(m_rows.size() * pitch())) + 6; }
   std::function<void(const QString&)> onEdit, onDelete;
 protected:
   static constexpr int kTop = 31;            // header band height
   static constexpr double kPitch = 36.4;
+  int top() const { return m_phone ? 34 : kTop; }
+  double pitch() const { return m_phone ? 60 : kPitch; }
+  qreal eyeX() const { return width() - (m_phone ? 52 : 45); }
+  qreal trashX() const { return width() - (m_phone ? 19 : 22); }
+  qreal hitR() const { return m_phone ? 16 : 9; }
   struct ColDef { QString name; bool right; qreal x; };
   bool compact() const { return width() < 1440; }
   bool narrow() const { return width() < 1200; }   // also drops SESSION (row tooltip)
@@ -32,6 +41,14 @@ protected:
                       {QCoreApplication::translate("account", "SIZE"), true, 0}, {QCoreApplication::translate("account", "ENTRY"), true, 0}, {QCoreApplication::translate("account", "EXIT"), true, 0}, {QCoreApplication::translate("account", "STOP", "stop loss column"), true, 0}, {QCoreApplication::translate("account", "TARGET"), true, 0},
                       {QCoreApplication::translate("account", "HELD"), true, 0}, {QCoreApplication::translate("account", "R", "R multiple column"), true, 0}, {QCoreApplication::translate("account", "STRATEGY"), false, 0}, {QCoreApplication::translate("account", "SESSION"), false, -10000},
                       {QCoreApplication::translate("account", "P&L"), true, width() - 103.0}};
+    if (m_phone) {
+      // sort bar: CLOSED, INSTRUMENT, R, P&L side by side from the left
+      for (auto& d : out) { d.x = -10000; d.right = false; }
+      const QFontMetricsF fm(mono(10, true, 1.0));
+      qreal x = 12;
+      for (int col : {Closed, Instrument, R, Pnl}) { out[col].x = x; x += fm.horizontalAdvance(out[col].name + " ↓") + 22; }
+      return out;
+    }
     if (!compact()) {
       // positions measured at 1600 px (table starts at x 10), scaled with the width
       const qreal s = width() / 1580.0;
@@ -44,6 +61,12 @@ protected:
     struct Slot { int col; qreal w; };
     QList<Slot> sl{{Closed, 120}, {Instrument, 100}, {Side, 50}, {Size, 48}, {Entry, 74}, {Exit, 74}, {Stop, 74},
                    {Target, 74}, {Held, 50}, {R, 62}, {Strategy, 92}};
+    // tables under 990 px (a phone held sideways): STOP and TARGET go too (the trade's dialog has them), or
+    // STRATEGY ran under P&L
+    if (width() < 990) {
+      sl.erase(std::remove_if(sl.begin(), sl.end(), [](const Slot& x) { return x.col == Stop || x.col == Target; }), sl.end());
+      out[Stop].x = out[Target].x = -10000;
+    }
     if (!narrow()) sl << Slot{Session, 92};
     qreal total = 0; for (const auto& x : sl) total += x.w;
     const qreal avail = width() - 103 - 92 - 12;           // P&L slot (right edge at width - 103)
@@ -56,7 +79,7 @@ protected:
     }
     return out;
   }
-  qreal rowTop(int i) const { return std::round(kTop + i * kPitch); }
+  qreal rowTop(int i) const { return std::round(top() + i * pitch()); }
   void sortRows() {
     auto key = [&](const account::Trade& t) -> QVariant {
       switch (m_sort) {
@@ -92,12 +115,13 @@ protected:
       QString t = cl[i].name;
       if (sorted) t += m_desc ? " ↓" : " ↑";
       if (cl[i].x < -1000) continue;
-      const QRectF r = cl[i].right ? QRectF(cl[i].x - 150, 0, 150, kTop) : QRectF(cl[i].x, 0, 150, kTop);
+      const QRectF r = cl[i].right ? QRectF(cl[i].x - 150, 0, 150, top()) : QRectF(cl[i].x, 0, 150, top());
       p.drawText(r, (cl[i].right ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter, t);
     }
-    p.fillRect(QRectF(0, kTop - 1, width(), 1), theme::map("#2a2f25"));
-    const int first = std::max(0, int((e->rect().top() - kTop) / kPitch) - 1);
-    const int last = std::min<int>(m_rows.size() - 1, int((e->rect().bottom() - kTop) / kPitch) + 1);
+    p.fillRect(QRectF(0, top() - 1, width(), 1), theme::map("#2a2f25"));
+    const int first = std::max(0, int((e->rect().top() - top()) / pitch()) - 1);
+    const int last = std::min<int>(m_rows.size() - 1, int((e->rect().bottom() - top()) / pitch()) + 1);
+    if (m_phone) { paintPhoneRows(p, first, last); return; }
     const QFont fDate = mono(width() >= 1440 ? 13 : width() >= 1346 ? 12 : 11), fInst = mono(14, true), fBadge = mono(10, true, 1), fPnl = mono(15, true);
     const QFontMetricsF fmS(mono(13));
     for (int i = first; i <= last; ++i) {
@@ -147,6 +171,50 @@ protected:
       drawTrash(p, QPointF(width() - 22, cy), hov && m_hoverAct == 2 ? c().redText : c().faint);
     }
   }
+  void paintPhoneRows(QPainter& p, int first, int last) {
+    const QFont fSmall = mono(11), fInst = mono(14, true), fBadge = mono(10, true, 1), fPnl = mono(15, true);
+    const qreal pnlRight = width() - 76;
+    for (int i = first; i <= last; ++i) {
+      const auto& t = m_rows[i];
+      const qreal top = rowTop(i), bot = rowTop(i + 1);
+      const qreal y1 = top + 20, y2 = top + 42;     // centres of the two lines
+      const double v = t.net();
+      const auto sp = account::spec(t.symbol);
+      const int dec = std::min(5, std::max(sp.decimals, 2));
+      p.fillRect(QRectF(1, top, 3, bot - top - 1), v > 0 ? theme::map("#43d9ed") : v < 0 ? theme::map("#f88c83") : c().dim);
+      p.fillRect(QRectF(0, bot - 1, width(), 1), theme::map("#32372d"));
+      auto text = [&](qreal x, qreal cy, const QString& s, const QColor& col, const QFont& f, bool right = false, qreal maxW = 0) {
+        p.setFont(f); p.setPen(col);
+        const QString shown = maxW > 0 ? QFontMetricsF(f).elidedText(s, Qt::ElideRight, maxW) : s;
+        p.drawText(right ? QRectF(x - 200, cy - 11, 200, 22) : QRectF(x, cy - 11, 300, 22), (right ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter, shown);
+      };
+      // line 1: instrument, side badge, P&L
+      text(12, y1, sp.display, c().white, fInst, false, 116);
+      {
+        const bool lng = t.side == account::Side::Long;
+        const QRectF b(134, y1 - 9, 42, 18);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(lng ? theme::map("#1d7f88") : theme::map("#862d26"), 1)); p.setBrush(lng ? theme::map("#052423") : theme::map("#2f0a0a"));
+        p.drawRoundedRect(b.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.setFont(fBadge); p.setPen(lng ? theme::map("#25a2ae") : theme::map("#e0605a"));
+        p.drawText(b, Qt::AlignCenter, lng ? "LONG" : "SHORT");
+      }
+      text(184, y1, trimNum(t.lots, 2), c().grey, fSmall);
+      text(pnlRight, y1, signedMoney(v, m_ccy), v < 0 ? c().redText : theme::map("#3fc6ee"), fPnl, true);
+      // line 2: close date, entry → exit, R
+      text(12, y2, tradeDate(t.close), c().dim, fSmall);
+      const double r = t.rMultiple();
+      const QString rs = std::isfinite(r) ? fmt::signedNum(r, 2) + "R" : fmt::dash();
+      const qreal rw = QFontMetricsF(fSmall).horizontalAdvance(rs);
+      text(134, y2, trimNum(t.entry, dec) + " → " + trimNum(t.exit, dec), c().grey, fSmall, false, pnlRight - rw - 10 - 134);
+      text(pnlRight, y2, rs, !std::isfinite(r) ? c().dim : r < 0 ? c().redText : theme::map("#3fb8e8"), fSmall, true);
+      const bool hov = i == m_hoverRow;
+      const qreal cy = (top + bot) / 2;
+      drawEye(p, QPointF(eyeX(), cy), hov && m_hoverAct == 1 ? c().white : c().faint);
+      drawTrash(p, QPointF(trashX(), cy), hov && m_hoverAct == 2 ? c().redText : c().faint);
+    }
+  }
   static void drawEye(QPainter& p, const QPointF& ctr, const QColor& col) {
     p.save(); p.setRenderHint(QPainter::Antialiasing);
     p.setPen(QPen(col, 1.2)); p.setBrush(Qt::NoBrush);
@@ -165,13 +233,14 @@ protected:
     p.drawLine(ctr + QPointF(-1.3, -1.5), ctr + QPointF(-1.3, 3.5)); p.drawLine(ctr + QPointF(1.3, -1.5), ctr + QPointF(1.3, 3.5));
     p.restore();
   }
-  int rowAt(qreal y) const { if (y < kTop) return -1; const int i = int((y - kTop) / kPitch); return i < m_rows.size() ? i : -1; }
+  int rowAt(qreal y) const { if (y < top()) return -1; const int i = int((y - top()) / pitch()); return i < m_rows.size() ? i : -1; }
+  int actionAt(qreal x) const { return std::abs(x - eyeX()) < hitR() ? 1 : std::abs(x - trashX()) < hitR() ? 2 : 0; }
   int colAt(qreal x) const {
     const auto cl = cols();
     for (int i = 0; i < cl.size(); ++i) {
       const qreal w = QFontMetricsF(mono(10, true, compact() ? 1.0 : 2.4)).horizontalAdvance(cl[i].name) + 16;
-      const QRectF r = cl[i].right ? QRectF(cl[i].x - w, 0, w, kTop) : QRectF(cl[i].x - 4, 0, w, kTop);
-      if (r.contains(x, kTop / 2)) return i;
+      const QRectF r = cl[i].right ? QRectF(cl[i].x - w, 0, w, top()) : QRectF(cl[i].x - 4, 0, w, top());
+      if (r.contains(x, top() / 2)) return i;
     }
     return -1;
   }
@@ -179,21 +248,22 @@ protected:
     const QPointF pt = e->position();
     const int row = rowAt(pt.y());
     int act = 0;
-    if (row >= 0) { if (std::abs(pt.x() - (width() - 45)) < 9) act = 1; else if (std::abs(pt.x() - (width() - 22)) < 9) act = 2; }
-    const int col = pt.y() < kTop ? colAt(pt.x()) : -1;
+    if (row >= 0) act = actionAt(pt.x());
+    const int col = pt.y() < top() ? colAt(pt.x()) : -1;
     if (row != m_hoverRow || act != m_hoverAct || col != m_hoverCol) {
       const int old = m_hoverRow;
       m_hoverRow = row; m_hoverAct = act; m_hoverCol = col;
-      if (old >= 0) update(QRect(width() - 60, int(rowTop(old)), 60, 40));
-      if (row >= 0) update(QRect(width() - 60, int(rowTop(row)), 60, 40));
-      update(QRect(0, 0, width(), kTop));
+      const int aw = m_phone ? 72 : 60, ah = m_phone ? 64 : 40;
+      if (old >= 0) update(QRect(width() - aw, int(rowTop(old)), aw, ah));
+      if (row >= 0) update(QRect(width() - aw, int(rowTop(row)), aw, ah));
+      update(QRect(0, 0, width(), top()));
     }
     setCursor(act || col >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
   }
   void leaveEvent(QEvent*) override { m_hoverRow = -1; m_hoverAct = 0; m_hoverCol = -1; update(); }
   void mousePressEvent(QMouseEvent* e) override {
     const QPointF pt = e->position();
-    if (pt.y() < kTop) {
+    if (pt.y() < top()) {
       const int col = colAt(pt.x());
       if (col < 0) return;
       if (col == m_sort) m_desc = !m_desc; else { m_sort = col; m_desc = col == Closed || col == Opened || col == Pnl || col == R; }
@@ -202,8 +272,9 @@ protected:
     }
     const int row = rowAt(pt.y());
     if (row < 0) return;
-    if (std::abs(pt.x() - (width() - 45)) < 9 && onEdit) onEdit(m_rows[row].id);
-    else if (std::abs(pt.x() - (width() - 22)) < 9 && onDelete) onDelete(m_rows[row].id);
+    const int act = actionAt(pt.x());
+    if (act == 1 && onEdit) onEdit(m_rows[row].id);
+    else if (act == 2 && onDelete) onDelete(m_rows[row].id);
   }
   bool event(QEvent* e) override {
     if (e->type() == QEvent::ToolTip) {
@@ -212,8 +283,8 @@ protected:
       QString tip;
       if (row >= 0) {
         const auto& t = m_rows[row];
-        if (std::abs(he->pos().x() - (width() - 45)) < 9) tip = QCoreApplication::translate("account", "View / edit this trade");
-        else if (std::abs(he->pos().x() - (width() - 22)) < 9) tip = QCoreApplication::translate("account", "Delete this trade");
+        if (actionAt(he->pos().x()) == 1) tip = QCoreApplication::translate("account", "View / edit this trade");
+        else if (actionAt(he->pos().x()) == 2) tip = QCoreApplication::translate("account", "Delete this trade");
         else if (he->pos().x() > cols()[Pnl].x - 120 && he->pos().x() < cols()[Pnl].x)
           tip = QCoreApplication::translate("account", "Profit %1 · commission %2 · swap %3").arg(money(t.pnl, m_ccy), money(t.commission, m_ccy), money(t.swap, m_ccy));
         else tip = QCoreApplication::translate("account", "Opened %1 · closed %2 · %3 session%4").arg(longDate(t.open), longDate(t.close), account::session(t.open),
@@ -229,6 +300,7 @@ private:
   QString m_ccy;
   int m_sort = Closed; bool m_desc = true;
   int m_hoverRow = -1, m_hoverAct = 0, m_hoverCol = -1;
+  bool m_phone = false;
 };
 
 TradeLogView::TradeLogView(QWidget* parent) : TrView(parent) {
@@ -237,8 +309,8 @@ TradeLogView::TradeLogView(QWidget* parent) : TrView(parent) {
                            QCoreApplication::translate("account", "OPEN POSITIONS"), QCoreApplication::translate("account", "UNREALIZED")};
   for (int i = 0; i < 6; ++i) {
     auto* k = new PaintPanel(this);
-    k->setPaint([this, i, labels](QPainter& p, const QRectF&, const QPointF&, double) {
-      p.setFont(mono(9, false, 2.2)); p.setPen(c().dim);
+    k->setPaint([this, i, labels](QPainter& p, const QRectF& r, const QPointF&, double) {
+      p.setFont(mono(9, false, r.width() < 150 ? 1.4 : 2.2)); p.setPen(c().dim);   // cards under 150 px (932 px window): tighter
       p.drawText(QPointF(12, 18), labels[i]);
       const auto& s = m_d.stats;
       QString v; QColor col = theme::map("#fbf9e5");
@@ -269,11 +341,12 @@ TradeLogView::TradeLogView(QWidget* parent) : TrView(parent) {
   const QStringList names{QCoreApplication::translate("account", "ALL"), QCoreApplication::translate("account", "WINS"),
                           QCoreApplication::translate("account", "LOSSES"), QCoreApplication::translate("account", "BREAKEVEN")};
   m_pillNames = names;
-  auto pillRects = [names](const QRectF& r) {
+  auto pillRects = [this, names](const QRectF& r) {
     QList<QRectF> out; const QFontMetricsF fm(mono(10, true, 1.6));
     qreal x = r.right();
     QList<qreal> ws; for (const auto& n : names) ws << fm.horizontalAdvance(n) + 18;
     qreal total = 0; for (qreal w : ws) total += w;
+    if (m_phone && total > 0) { const qreal k = (r.width() - 8) / total; for (qreal& w : ws) w *= k; total = r.width() - 8; }   // phones: the pills fill their row
     x = r.right() - total - 4;
     for (qreal w : ws) { out << QRectF(x, 2, w, r.height() - 4); x += w; }
     return out;
@@ -333,6 +406,25 @@ void TradeLogView::refilter() {
 }
 
 int TradeLogView::relayout(int W, int) {
+  m_phone = ui::compact(W);
+  m_table->setPhone(m_phone);
+  auto* mag = m_search->findChild<PaintPanel*>();
+  if (m_phone) {
+    // phones: KPI cards 2 x 3; under the title, the search then the outcome pills on their own 34 px rows
+    const int cw0 = W - 20;
+    const qreal cw = (cw0 - 8.6) / 2.0;
+    for (int i = 0; i < 6; ++i) m_kpi[i]->setGeometry(QRectF(10 + (i % 2) * (cw + 8.6), 10 + (i / 2) * (57 + 8.6), cw, 57).toRect());
+    const int top = 10 + 3 * 57 + 2 * 9 + 12;
+    m_search->setGeometry(12, 43, cw0 - 24, 34);
+    if (mag) mag->move(6, 10);
+    m_pills->setGeometry(12, 85, cw0 - 24, 34);
+    const int th = m_table->rowsHeight();
+    m_table->setGeometry(0, 127, cw0, th);
+    const int ph = 127 + th + 8;
+    m_panel->setGeometry(10, top, cw0, ph);
+    return top + ph + 10;
+  }
+  if (mag) mag->move(6, 5);
   // very wide windows: the table is capped at 2200 px and centred, otherwise the 15 columns drift ~200 px apart
   const int cw0 = std::min(W - 20, 2200), x0 = (W - cw0) / 2;
   const qreal cw = (cw0 - 5 * 8.6) / 6.0;

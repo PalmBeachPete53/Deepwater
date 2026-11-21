@@ -7,6 +7,7 @@
 #include "ui/Kit.h"
 #include "ui/Format.h"
 #include "core/I18n.h"
+#include "ui/Touch.h"
 #include <QCoreApplication>
 #include <QPainter>
 #include <QVBoxLayout>
@@ -34,8 +35,20 @@ public:
     cls->setPadding(7, 18); cls->setInactiveColor(theme::map(0x80, 0x7d, 0x74));
   }
   pk::Segmented* cls;
+  // phone upright: the asset classes go on a second row, finger-sized
+  void setPhone(bool on) {
+    if (on == m_phone) return;
+    m_phone = on;
+    cls->setPadding(on ? 12 : 7, on ? 28 : 18);
+    setFixedHeight(on ? 37 + 40 : 37);
+    resizeEvent(nullptr); update();
+  }
 protected:
-  void resizeEvent(QResizeEvent*) override { cls->resize(cls->sizeHint()); cls->move(width() - cls->width() - 11, 6); }
+  void resizeEvent(QResizeEvent*) override {
+    cls->resize(cls->sizeHint());
+    if (m_phone) cls->move(10, 37);
+    else cls->move(width() - cls->width() - 11, 6);
+  }
   void paintEvent(QPaintEvent*) override {
     QPainter p(this);
     QLinearGradient g(0, 0, width(), 0); g.setColorAt(0, theme::map(0x0d, 0x09, 0x03)); g.setColorAt(1, theme::map(0x14, 0x10, 0x05));
@@ -43,14 +56,17 @@ protected:
     p.fillRect(QRect(0, height() - 1, width(), 1), theme::map(0x27, 0x23, 0x0f));
     const QFont tf = theme::condensed(15, QFont::Bold);
     p.setFont(tf); p.setPen(theme::map(0xf8, 0xf5, 0xec));
-    const qreal cy = height() / 2.0;
+    const qreal cy = 37 / 2.0;   // the title row (the phone layout adds a second row below it)
     const QString title = QCoreApplication::translate("positioning", "COT Advanced");
     p.drawText(QPointF(10, cy + QFontMetricsF(tf).capHeight() / 2), title);
     const qreal x = 10 + QFontMetricsF(tf).horizontalAdvance(title) + 8;
     const QFont sf = theme::mono(9, QFont::Normal, 0.8);
     p.setFont(sf); p.setPen(theme::map(0x45, 0x41, 0x38));
-    p.drawText(QPointF(x, cy + QFontMetricsF(sf).capHeight() / 2), QCoreApplication::translate("positioning", "CFTC · FREE, WEEKLY, OFFICIAL"));
+    const QString sub = QCoreApplication::translate("positioning", "CFTC · FREE, WEEKLY, OFFICIAL");
+    p.drawText(QPointF(x, cy + QFontMetricsF(sf).capHeight() / 2), m_phone ? QFontMetricsF(sf).elidedText(sub, Qt::ElideRight, width() - x - 10) : sub);
   }
+private:
+  bool m_phone = false;
 };
 
 // ------------------------------------------------------------------------------------------------ market buttons
@@ -61,17 +77,41 @@ public:
   QWidget* rightWidget = nullptr;
   void setMarkets(const QList<CotMarket>& m, const QString& cur) { m_m = m; m_cur = cur; update(); }
   void setCurrent(const QString& id) { m_cur = id; update(); }
+  // phone upright: finger-sized buttons that wrap onto as many rows as needed, the range after them (its own row when
+  // it does not fit on the last one); the bar is then as tall as phoneHeight()
+  void setPhone(bool on) { if (on != m_phone) { m_phone = on; update(); } }
+  int phoneHeight() const { return int(std::ceil(rightRect().bottom())) + 6; }
+  void setMarketsPhone(int w) { resize(w, height()); setFixedHeight(m_phone ? phoneHeight() : 38); resizeEvent(nullptr); }
 protected:
-  QList<QRectF> rects() const {
-    QList<QRectF> out; qreal x = 10;
+  QList<QRectF> rects() const { return rects(width()); }
+  QList<QRectF> rects(int W) const {
+    QList<QRectF> out; qreal x = 10, y = 6;
     const QFontMetricsF fm(theme::mono(11));
     for (const auto& m : m_m) {
-      const qreal w = fm.horizontalAdvance(QCoreApplication::translate("positioning", m.label.toUtf8().constData())) + (m.flagCode.isEmpty() ? 16 : 33);   // USD button 54 px wide
-      out << QRectF(x, 6, w, 25); x += w + 6;
+      qreal w = fm.horizontalAdvance(QCoreApplication::translate("positioning", m.label.toUtf8().constData())) + (m.flagCode.isEmpty() ? 16 : 33);   // USD button 54 px wide
+      if (m_phone) {
+        w += 8;
+        if (x > 10 && x + w > W - 10) { x = 10; y += 38; }
+      }
+      out << QRectF(x, y, w, m_phone ? 32 : 25); x += w + 6;
     }
     return out;
   }
-  void resizeEvent(QResizeEvent*) override { if (rightWidget) { rightWidget->resize(rightWidget->sizeHint()); rightWidget->move(width() - rightWidget->width() - 11, 6); } }
+  // where the range selector goes on a phone
+  QRectF rightRect() const {
+    const QSize s = rightWidget ? rightWidget->sizeHint() : QSize(0, 0);
+    const auto rs = rects();
+    if (rs.isEmpty()) return QRectF(10, 6, s.width(), s.height());
+    const QRectF last = rs.last();
+    if (last.right() + 12 + s.width() <= width() - 10) return QRectF(width() - 10 - s.width(), last.top() + (last.height() - s.height()) / 2, s.width(), s.height());
+    return QRectF(10, last.bottom() + 6, s.width(), s.height());
+  }
+  void resizeEvent(QResizeEvent*) override {
+    if (!rightWidget) return;
+    rightWidget->resize(rightWidget->sizeHint());
+    if (m_phone) rightWidget->move(rightRect().topLeft().toPoint());
+    else rightWidget->move(width() - rightWidget->width() - 11, 6);
+  }
   void paintEvent(QPaintEvent*) override {
     QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
     p.fillRect(rect(), pk::col::kPage());
@@ -99,7 +139,7 @@ protected:
     for (int i = 0; i < rs.size(); ++i) if (rs[i].contains(e->position()) && onPick) onPick(m_m[i].id);
   }
 private:
-  QList<CotMarket> m_m; QString m_cur; int m_hover = -1;
+  QList<CotMarket> m_m; QString m_cur; int m_hover = -1; bool m_phone = false;
 };
 
 // ------------------------------------------------------------------------------------------------ content
@@ -125,6 +165,8 @@ public:
   cotui::StatsPanel *legacyStats, *secondStats;
   cotui::ReadPanel* read;
   int m_advY = 567;
+  int m_top = 0;                              // phone mode: height of the title row + market buttons above the panels
+  std::function<int(int width)> layoutTop;    // phone mode: lays them out at the top of the content, returns their height
 protected:
   // Layout. Reference (1600 wide): summary row of three panels, then two columns (net charts | tables, donuts,
   // stats, read). Below 1320 px the report tables would be squeezed under 640 px, so the page reflows to one column
@@ -135,8 +177,26 @@ protected:
     const double f = std::clamp(W / 1600.0, 1.0, 1.35);
     const int sumH = int(495 * f), netA = int(392 * f), netB = int(382 * f);
     const int readH = std::max(277, read->neededHeight());
+    const int t = m_top = layoutTop ? layoutTop(W) : 0;
+    for (cotui::Panel* pn : std::initializer_list<cotui::Panel*>{price, split, donut, legacyNet, secondNet, nonrepNet, legacyTable, secondTable,
+                                                              legacySector, secondSector, legacyStats, secondStats, read})
+      pn->setPhone(W < 520);
+    if (W < 520) {
+      // phone upright: every panel full width, one under the other, at heights that suit a 390–440 px screen
+      const int fw = right - m;
+      int y = 49 + t;
+      auto put = [&](QWidget* w, int h, int after = 6) { w->setGeometry(m, y, fw, h); y += h + after; };
+      put(price, 440, g); put(split, 380, g); put(donut, 360, 0);
+      m_advY = y + 23; y += 50;
+      put(legacyNet, 340, 5); put(legacyTable, 66 + 4 * cotui::ReportTable::kPhonePitch + 4); put(legacySector, 331); put(legacyStats, 150);
+      put(secondNet, 360, 5); put(secondTable, 66 + 6 * cotui::ReportTable::kPhonePitch + 4); put(secondSector, 472); put(secondStats, 205);
+      put(nonrepNet, 320); put(read, std::max(277, read->neededHeight()), 0);
+      if (minimumHeight() != y + 10) setMinimumHeight(y + 10);
+      update();
+      return;
+    }
     if (W < 1320) {
-      int y = 49;
+      int y = 49 + t;
       price->setGeometry(m, y, right - m, sumH); y += sumH + g;
       const int sw = int((right - m - g) * 0.6);
       split->setGeometry(m, y, sw, 420);
@@ -157,11 +217,11 @@ protected:
     }
     const int avail = W - m - 3 * g - 8 + g;   // three summary panels
     const int pw = int(std::round(avail * 789.0 / 1569)), sw = int(std::round(avail * 486.0 / 1569));
-    price->setGeometry(m, 49, pw, sumH);
-    split->setGeometry(m + pw + g, 49, sw, sumH);
-    donut->setGeometry(m + pw + g + sw + g, 49, right - (m + pw + g + sw + g), sumH);
-    const int top = 49 + sumH + 50;                 // 594 at the reference size
-    m_advY = 49 + sumH + 23;
+    price->setGeometry(m, 49 + t, pw, sumH);
+    split->setGeometry(m + pw + g, 49 + t, sw, sumH);
+    donut->setGeometry(m + pw + g + sw + g, 49 + t, right - (m + pw + g + sw + g), sumH);
+    const int top = t + 49 + sumH + 50;             // 594 at the reference size
+    m_advY = t + 49 + sumH + 23;
     const int lw = pw, rx = m + lw + g, rw = right - rx;
     legacyNet->setGeometry(m, top, lw, netA);
     secondNet->setGeometry(m, top + netA + 5, lw, netB);   // content y measured on t002.0 / t004.5
@@ -184,11 +244,14 @@ protected:
   void paintEvent(QPaintEvent*) override {
     QPainter p(this);
     p.fillRect(rect(), pk::col::kPage());
-    pk::drawSectionHeading(p, QRectF(16, 23, width() - 32, 12), QCoreApplication::translate("positioning", "SUMMARY"));
+    pk::drawSectionHeading(p, QRectF(16, 23 + m_top, width() - 32, 12), QCoreApplication::translate("positioning", "SUMMARY"));
     pk::drawSectionHeading(p, QRectF(16, m_advY, width() - 32, 12), QCoreApplication::translate("positioning", "ADVANCED"));
     if (!message.isEmpty()) {
       p.setFont(theme::mono(11)); p.setPen(theme::map(0xe0, 0x62, 0x60));
-      p.drawText(QRectF(140, 17, width() - 300, 14), Qt::AlignVCenter | Qt::AlignRight, message);
+      if (width() < 520) {   // phone: right of the heading, elided to the room left
+        const QRectF r(130, 17 + m_top, width() - 146, 14);
+        p.drawText(r, Qt::AlignVCenter | Qt::AlignRight, QFontMetricsF(p.font()).elidedText(message, Qt::ElideRight, r.width()));
+      } else p.drawText(QRectF(140, 17 + m_top, width() - 300, 14), Qt::AlignVCenter | Qt::AlignRight, message);
     }
   }
 };
@@ -233,13 +296,54 @@ CotPage::CotPage(QWidget* parent) : QWidget(parent) {
   const QByteArray hv = qgetenv("DW_COT_HOVER"), sc = qgetenv("DW_COT_SCROLL");
   if (!hv.isEmpty() || !sc.isEmpty())
     QTimer::singleShot(4000, this, [this, hv, sc] {
-      if (!sc.isEmpty()) m_scroll->verticalScrollBar()->setValue(sc.toInt());
+      if (!sc.isEmpty()) {
+        m_scroll->verticalScrollBar()->setValue(sc.toInt());
+        // the automated read sizes itself on its first paint (just now, if it came into view): scroll again once the
+        // page has grown, so a capture of the bottom shows it whole
+        QTimer::singleShot(1500, this, [this, sc] { m_scroll->verticalScrollBar()->setValue(sc.toInt()); });
+      }
       const auto xy = QString::fromUtf8(hv).split(',');
       if (xy.size() != 2) return;
       const QPoint pg(xy[0].toInt(), xy[1].toInt());
       if (auto* pp = m_content->price; pp->rect().contains(pp->mapFrom(this, pg))) pp->setHover(pp->mapFrom(this, pg));
       if (auto* sp = m_content->split; sp->rect().contains(sp->mapFrom(this, pg))) sp->setHover(sp->mapFrom(this, pg));
     });
+}
+
+void CotPage::resizeEvent(QResizeEvent* e) {
+  QWidget::resizeEvent(e);
+  // phone upright, or a page this short (phone sideways: ~380 px)
+  setPhoneMode(ui::compact(width()) || height() < 420);
+}
+
+void CotPage::setPhoneMode(bool on) {
+  if (on == m_phone) return;
+  m_phone = on;
+  auto* v = static_cast<QVBoxLayout*>(layout());
+  if (on) {
+    v->removeWidget(m_header); v->removeWidget(m_markets);
+    m_header->setParent(m_content); m_markets->setParent(m_content);
+    m_markets->setPhone(true);
+    m_range->setPadding(12, 28);   // finger-sized
+    m_content->layoutTop = [this](int w) {
+      m_header->setPhone(w < 520);   // upright: asset classes on a second row
+      m_header->setGeometry(0, 0, w, m_header->height());
+      m_markets->setMarketsPhone(w);
+      m_markets->setGeometry(0, m_header->height(), w, m_markets->height());
+      return m_header->height() + m_markets->height();
+    };
+    m_header->show(); m_markets->show();
+  } else {
+    m_content->layoutTop = nullptr;
+    m_header->setPhone(false);
+    m_markets->setPhone(false);
+    m_range->setPadding(7, 19);
+    m_markets->setFixedHeight(38);
+    m_header->setParent(this); m_markets->setParent(this);
+    v->insertWidget(0, m_header); v->insertWidget(1, m_markets);
+    m_header->show(); m_markets->show();
+  }
+  QTimer::singleShot(0, this, [this] { QResizeEvent ev(m_content->size(), m_content->size()); QCoreApplication::sendEvent(m_content, &ev); });
 }
 
 int CotPage::rangeWeeks() const { static const int w[4] = {26, 52, 104, 156}; return w[qBound(0, m_range->current(), 3)]; }
@@ -263,6 +367,7 @@ void CotPage::setAssetClass(const QString& cls, bool keep) {
   QString id = m_market;
   if (!keep || !Cot::market(id) || Cot::market(id)->assetClass != cls) id = ms.isEmpty() ? QString() : ms.first().id;
   m_markets->setMarkets(ms, id);
+  if (m_phone) { QResizeEvent ev(m_content->size(), m_content->size()); QCoreApplication::sendEvent(m_content, &ev); }   // more or fewer button rows
   selectMarket(id);
 }
 

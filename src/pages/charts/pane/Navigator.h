@@ -1,9 +1,9 @@
 #pragma once
-// Charts tab — the navigator: a thin range slider under a chart pane. It shows the loaded history as a mini curve of
-// the closes and the part visible in the chart as a window with two handles. The window's width is the zoom
-// (nav::ZoomMap, user's rule 2026-11-19): kMinWindowPx is always the chart's deepest zoom, from kLinearPx up the
-// navigator is the plain map of the whole history, between them it shows a narrower span around the view, the window
-// staying exact:
+// Charts tab — the navigator: a thin range slider under a chart pane. It shows the whole loaded history as a mini curve
+// of the closes (never zoomed: user's rule 2026-11-20) and the part visible in the chart as a window with two handles.
+// The window's width is the zoom (nav::ZoomMap): kMinWindowPx is always the chart's deepest zoom (5 bars, ChartPane's
+// minVisibleBars), from kLinearPx up the window is the plain map of the history, between them it is wider than the bars
+// it stands for, placed by the view's position in the data (nav::windowOf):
 //   drag inside = pan (same zoom), press outside = centre the window there then keep panning, drag a handle = zoom
 //   (horizontal only; the chart's price scale fits the visible bars by itself).
 // The chart's visible logical range is the only source of truth: the navigator reads it (repaints on the time
@@ -37,7 +37,7 @@ public:
   // appended), redrawn only when it shows.
   void dataChanged(bool lastBarOnly = false);
   void restyle();                // theme changed
-  std::optional<nav::Span> shownSpan() const { return disp_; }   // the span drawn last (test hook log)
+  nav::Win window() const;       // the window, in pixels (also the test hook log)
 
 protected:
   void paintEvent(QPaintEvent*) override;
@@ -49,7 +49,6 @@ protected:
 
 private:
   nav::Span domain() const;                 // everything loaded
-  nav::Span display();                      // the part the navigator shows (the gesture's during a drag)
   nav::ZoomMap zoomMap() const;
   std::optional<nav::Span> view() const;   // chart's visible span (edges), not clipped
   void apply(const nav::Span& s);
@@ -67,8 +66,6 @@ private:
   bool curveDirty_ = true, curveFull_ = true;
   int curveRev_ = -1;
   nav::Span curveDom_;
-  std::optional<nav::Span> disp_;   // last displayed span (shownSpan keeps it while it still works)
-  nav::Span dragShown_;             // the span the running gesture shows
   // what the drawn curve was made from (rebuildCurve skips a redraw that would draw the same pixels)
   int curveN_ = -1, curveLastY_ = 0;
   double curveLo_ = 0, curveHi_ = 0, curveLastX_ = 0;

@@ -4,10 +4,13 @@
 #include "net/Http.h"
 #include "technicaldata/Collector.h"
 #include "technicaldata/Dukascopy.h"
+#include "technicaldata/FootprintArchive.h"
+#include "technicaldata/PerpArchive.h"
 #include "technicaldata/TechnicalDataSpec.h"
 #include "technicaldata/TechnicalDataStore.h"
 #include "ui/Kit.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -37,6 +40,7 @@
 #include <QUrlQuery>
 #include <QVBoxLayout>
 #include <QtConcurrent>
+#include <climits>
 #include <cmath>
 
 namespace technicaldatapage {
@@ -115,6 +119,26 @@ QLabel* note(const QString& t, QWidget* p, const QColor& col = theme::pal().text
   l->setWordWrap(true);
   return l;
 }
+// Phones (the app window under ui::kCompactWidth): the dialog as wide as the window, one column, fields and buttons a
+// finger can hit (36 px), long radio texts wrapped.
+QString phoneQss() {
+  return "QLineEdit, QDateEdit, QComboBox, QSpinBox, QDoubleSpinBox { min-height: 26px; }"
+         "QPushButton[tf=\"1\"] { min-height: 24px; min-width: 40px; }"   // seven timeframes in a phone's width
+         "QRadioButton::indicator, QCheckBox::indicator { width: 15px; height: 15px; } QRadioButton::indicator { border-radius: 8px; }";
+}
+// a label that clicks its radio button (a radio's own text does not wrap)
+class RadioText : public QLabel {
+public:
+  RadioText(QRadioButton* r, QWidget* parent) : QLabel(parent), m_radio(r) {
+    setWordWrap(true);
+    setCursor(Qt::PointingHandCursor);
+    setStyleSheet(QString("QLabel { color: %1; font-size: 12px; }").arg(theme::pal().text.name()));
+  }
+protected:
+  void mousePressEvent(QMouseEvent*) override { if (m_radio->isEnabled()) m_radio->click(); }
+private:
+  QRadioButton* m_radio;
+};
 
 // ------------------------------------------------------------------------------------------------ dialog
 class PairDialog : public QDialog {
@@ -122,13 +146,15 @@ public:
   PairDialog(QWidget* parent, const QString& market, std::function<void(const QString&)> done)
       : QDialog(parent), m_market(market), m_done(std::move(done)) {
     auto& st = Store::instance();
+    m_phone = parent && ui::compact(parent->window()->width());
+    const int mx = m_phone ? 16 : 24;   // side margins
     const bool isNew = market.isEmpty();
     m_fx = dukascopy::isForex(market) || (isNew && qEnvironmentVariable("DW_TECHNICALDATA_PAIR_KIND") == "forex");
     if (!isNew) m_spec = specFromJson(st.pairSpec(market));
     else m_spec = m_fx ? defaultForexSpec() : PairSpec{allTfs(), 0, defaultSpec().indicators};
     setWindowTitle(isNew ? QCoreApplication::translate("data", "Add a pair") : QCoreApplication::translate("data", "%1 settings").arg(binanceSymbol(market)));
-    setStyleSheet(qss());
-    setMinimumWidth(680);
+    setStyleSheet(m_phone ? qss() + phoneQss() : qss());
+    setMinimumWidth(m_phone ? 0 : 680);
     const auto& c = theme::pal();
 
     auto* outer = new QVBoxLayout(this);
@@ -142,7 +168,7 @@ public:
     scroll->setWidget(inner);
     outer->addWidget(scroll, 1);
     auto* v = new QVBoxLayout(inner);
-    v->setContentsMargins(24, 20, 24, 8);
+    v->setContentsMargins(mx, 20, mx, 8);
     v->setSpacing(6);
 
     v->addWidget(ui::label(isNew ? QCoreApplication::translate("data", "ADD A PAIR") : QCoreApplication::translate("data", "%1 · SETTINGS").arg(binanceSymbol(market)), theme::title(), c.accentText, inner));
@@ -160,8 +186,8 @@ public:
         b->setCheckable(true);
         b->setAutoExclusive(true);
         b->setCursor(Qt::PointingHandCursor);
-        b->setMinimumWidth(170);
-        kindRow->addWidget(b);
+        b->setMinimumWidth(m_phone ? 0 : 170);
+        kindRow->addWidget(b, m_phone ? 1 : 0);   // phones: the two share the width
       }
       kindRow->addStretch(1);
       (m_fx ? m_kindFx : m_kindCrypto)->setChecked(true);
@@ -171,7 +197,7 @@ public:
 
     // the pair
     v->addWidget(section(QCoreApplication::translate("data", "Pair"), inner));
-    auto* symRow = new QHBoxLayout;
+    auto* symRow = new QBoxLayout(m_phone ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);   // phones: the answer under the field
     m_fxPick = new QComboBox(inner);
     m_fxPick->setMinimumWidth(200);
     for (const auto& i : dukascopy::majors())
@@ -209,7 +235,7 @@ public:
     // the first day
     v->addWidget(section(QCoreApplication::translate("data", "History"), inner));
     m_fromFirst = new QRadioButton(inner);
-    v->addWidget(m_fromFirst);
+    v->addWidget(m_phone ? radioRow(m_fromFirst, &m_fromFirstText, inner) : static_cast<QWidget*>(m_fromFirst));
     auto* dateRow = new QHBoxLayout;
     m_fromDate = new QRadioButton(QCoreApplication::translate("data", "From"), inner);
     dateRow->addWidget(m_fromDate);
@@ -246,6 +272,96 @@ public:
     m_tfNote = note(QString(), inner);
     v->addWidget(m_tfNote);
 
+    // the footprint history (user's request 2026-11-20): Binance's daily trade archives, spot and / or perpetual
+    m_fpBox = new QWidget(inner);
+    {
+      auto* fv = new QVBoxLayout(m_fpBox);
+      fv->setContentsMargins(0, 0, 0, 0);
+      fv->setSpacing(8);
+      fv->addWidget(section(QCoreApplication::translate("data", "Footprint"), m_fpBox));
+      fv->addWidget(note(QCoreApplication::translate("data", "Buyers and sellers at every price level, minute by minute, from Binance's daily trade "
+                                                     "archives (data.binance.vision, no key): every trade of the day, read once. Levels of one basis "
+                                                     "point (0.01 % of the price), the same grid in every year. About 130 KB a day per market."),
+                         m_fpBox));
+      auto* row = new QHBoxLayout;
+      row->setSpacing(6);
+      const QStringList ids{"spot", "perp"};
+      const QStringList names{QCoreApplication::translate("data", "Spot"), QCoreApplication::translate("data", "Perpetual USD-M")};
+      for (int i = 0; i < 2; ++i) {
+        auto* b = new QPushButton(names[i], m_fpBox);
+        b->setProperty("tf", "1");
+        b->setProperty("venue", ids[i]);
+        b->setCheckable(true);
+        b->setChecked(m_spec.footprint.contains(ids[i]));
+        b->setCursor(Qt::PointingHandCursor);
+        connect(b, &QPushButton::toggled, this, [this] { sync(); });
+        m_fpButtons << b;
+        row->addWidget(b);
+      }
+      row->addStretch(1);
+      fv->addLayout(row);
+      const QString fpFirst = QCoreApplication::translate("data", "From the first archive (spot 2017-08-17, perpetual 2019-12-31)");
+      m_fpFirst = new QRadioButton(m_phone ? QString() : fpFirst, m_fpBox);
+      if (m_phone) {
+        QLabel* t = nullptr;
+        fv->addWidget(radioRow(m_fpFirst, &t, m_fpBox));
+        t->setText(fpFirst);
+      } else fv->addWidget(m_fpFirst);
+      auto* dr = new QHBoxLayout;
+      m_fpFrom = new QRadioButton(QCoreApplication::translate("data", "From"), m_fpBox);
+      dr->addWidget(m_fpFrom);
+      m_fpDate = new QDateEdit(m_fpBox);
+      m_fpDate->setDisplayFormat("yyyy-MM-dd");
+      m_fpDate->setCalendarPopup(true);
+      m_fpDate->setTimeZone(QTimeZone::UTC);
+      m_fpDate->setDateRange(QDate(2017, 8, 17), QDate::currentDate());
+      // a first footprint: the last three months (user's sample, 2026-11-20)
+      m_fpDate->setDate(m_spec.footprintStart ? QDateTime::fromSecsSinceEpoch(m_spec.footprintStart, QTimeZone::UTC).date()
+                                              : QDate::currentDate().addMonths(-3));
+      m_fpDate->setMaximumWidth(150);
+      dr->addWidget(m_fpDate);
+      dr->addStretch(1);
+      fv->addLayout(dr);
+      (m_spec.footprint.isEmpty() || m_spec.footprintStart ? m_fpFrom : m_fpFirst)->setChecked(true);
+      connect(m_fpFirst, &QRadioButton::toggled, this, [this] { sync(); });
+      connect(m_fpDate, &QDateEdit::dateChanged, this, [this] { m_fpFrom->setChecked(true); sync(); });
+    }
+    v->addWidget(m_fpBox);
+
+    // the perpetual's order book and positioning, and the live book (user's choices 2026-11-20)
+    m_bookBox = new QWidget(inner);
+    {
+      auto* bv = new QVBoxLayout(m_bookBox);
+      bv->setContentsMargins(0, 0, 0, 0);
+      bv->setSpacing(8);
+      bv->addWidget(section(QCoreApplication::translate("data", "Order book and positions"), m_bookBox));
+      // (phones: the three buttons one under the other, too wide side by side)
+      bv->addWidget(note(QCoreApplication::translate("data", "From Binance's daily archives of the USD-M perpetual, each from its first day: the order "
+                                                     "book's depth out to ±0.2, 1, 2, 3, 4 and 5 % of the price every 30 seconds (from 2023), and "
+                                                     "the open interest with the long/short ratios every 5 minutes (from 2020). The live book is "
+                                                     "kept in memory while Deepwater runs (spot and perpetual, for live trading): never written "
+                                                     "to disk, gone when Deepwater closes."), m_bookBox));
+      auto* row = new QBoxLayout(m_phone ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+      row->setSpacing(6);
+      auto make = [&](const QString& text, bool on) {
+        auto* b = new QPushButton(text, m_bookBox);
+        b->setProperty("tf", "1");
+        b->setCheckable(true);
+        b->setChecked(on);
+        b->setCursor(Qt::PointingHandCursor);
+        connect(b, &QPushButton::toggled, this, [this] { sync(); });
+        row->addWidget(b);
+        return b;
+      };
+      m_depthBtn = make(QCoreApplication::translate("data", "Book depth"), m_spec.depth);
+      m_oiBtn = make(QCoreApplication::translate("data", "Open interest"), m_spec.openInterest);
+      m_liveBtn = make(QCoreApplication::translate("data", "Live book (memory)"), m_spec.liveBook);
+      m_liveBtn->setToolTip(QCoreApplication::translate("data", "The order book and the trades of the spot market and the perpetual, kept in memory while Deepwater runs, never written to disk: the agents read the live book and today's footprint from them"));
+      if (!m_phone) row->addStretch(1);
+      bv->addLayout(row);
+    }
+    v->addWidget(m_bookBox);
+
     // the indicators
     auto* indHead = new QHBoxLayout;
     indHead->addWidget(section(QCoreApplication::translate("data", "Indicators"), inner));
@@ -274,6 +390,10 @@ public:
     av->addWidget(ui::label(QCoreApplication::translate("data", "ADD AN INDICATOR"), theme::microLabel(), c.textMute, addBox));
     m_pick = new QComboBox(addBox);
     m_pick->setMaxVisibleItems(24);
+    if (m_phone) {   // its longest name ("group · indicator") would hold the dialog wider than a phone: it elides instead
+      m_pick->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+      m_pick->setMinimumContentsLength(12);
+    }
     QVector<charts::ind::DefPtr> defs;
     for (const auto& d : charts::ind::all())
       if (storable(d.id))
@@ -320,22 +440,40 @@ public:
 
     // buttons
     auto* foot = new QHBoxLayout;
-    foot->setContentsMargins(24, 10, 24, 16);
+    foot->setContentsMargins(mx, 10, mx, 16);
+    // phones: the note on a row of its own, then REMOVE, then CANCEL and SAVE (one row is too narrow for the three)
+    auto* phoneFoot = new QVBoxLayout;
+    phoneFoot->setContentsMargins(mx, 8, mx, 12);
+    phoneFoot->setSpacing(8);
+    QPushButton* remove = nullptr;
     if (!isNew) {
-      auto* remove = button(QCoreApplication::translate("data", "REMOVE THE PAIR"), false, this, true);
+      remove = button(QCoreApplication::translate("data", "REMOVE THE PAIR"), false, this, true);
       connect(remove, &QPushButton::clicked, this, [this] { removePair(); });
-      foot->addWidget(remove);
+      if (!m_phone) foot->addWidget(remove);
     }
     m_footNote = ui::label(QString(), theme::sans(11), c.warn, this);
     m_footNote->setWordWrap(true);
-    foot->addWidget(m_footNote, 1);
+    if (m_phone) phoneFoot->addWidget(m_footNote);
+    else foot->addWidget(m_footNote, 1);
     auto* cancel = button(QCoreApplication::translate("data", "CANCEL"), false, this);
     connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
-    foot->addWidget(cancel);
     m_save = button(isNew ? QCoreApplication::translate("data", "ADD THE PAIR") : QCoreApplication::translate("data", "SAVE"), true, this);
     connect(m_save, &QPushButton::clicked, this, [this] { save(); });
-    foot->addWidget(m_save);
-    outer->addLayout(foot);
+    if (m_phone) {
+      for (auto* b : {remove, cancel, m_save}) if (b) b->setMinimumHeight(38);
+      if (remove) { auto* r = new QHBoxLayout; r->addWidget(remove); r->addStretch(1); phoneFoot->addLayout(r); }
+      foot->setContentsMargins(0, 0, 0, 0);
+      foot->addStretch(1);
+      foot->addWidget(cancel);
+      foot->addWidget(m_save);
+      phoneFoot->addLayout(foot);
+      outer->addLayout(phoneFoot);
+    } else {
+      delete phoneFoot;
+      foot->addWidget(cancel);
+      foot->addWidget(m_save);
+      outer->addLayout(foot);
+    }
 
     // the stored first bar until Binance answers (edit), then Binance's
     if (!isNew)
@@ -375,10 +513,27 @@ public:
     QWidget* w = parent ? parent->window() : nullptr;
     QSize cap = w ? w->size() - QSize(40, 40) : QSize(900, 900);
     if (QScreen* sc = screen()) cap = cap.boundedTo(sc->availableGeometry().size() - QSize(40, 60));
-    resize(QSize(720, inner->sizeHint().height() + 70).boundedTo(cap));
+    if (m_phone) {   // phones: the window's width (less 12 px a side), the form scrolls between the title and the buttons
+      const QSize pc = w ? w->size() - QSize(24, 24) : cap;
+      resize(pc.width(), std::min(inner->sizeHint().height() + 120, pc.height()));
+    } else {
+      resize(QSize(720, inner->sizeHint().height() + 70).boundedTo(cap));
+    }
   }
 
 private:
+  // phones: a radio without text and its text wrapped beside it (clicking the text picks the radio)
+  QWidget* radioRow(QRadioButton* r, QLabel** text, QWidget* parent) {
+    auto* row = new QWidget(parent);
+    auto* h = new QHBoxLayout(row);
+    h->setContentsMargins(0, 0, 0, 0);
+    h->setSpacing(2);
+    r->setParent(row);
+    h->addWidget(r, 0, Qt::AlignTop);
+    *text = new RadioText(r, row);
+    h->addWidget(*text, 1);
+    return row;
+  }
   QString symbol() const { return m_symbol->text().trimmed().toUpper(); }
   QString marketKey() const {
     if (!m_market.isEmpty()) return m_market;
@@ -447,6 +602,14 @@ private:
     for (int i = 0; i < m_tfButtons.size(); ++i) if (m_tfButtons[i]->isChecked()) s.timeframes << timeframes()[i].seconds;
     s.start = m_fromDate->isChecked() ? QDateTime(m_date->date(), QTime(0, 0), QTimeZone::UTC).toSecsSinceEpoch() : 0;
     s.indicators = m_spec.indicators;
+    if (!m_fx)
+      for (QPushButton* b : m_fpButtons) if (b->isChecked()) s.footprint << b->property("venue").toString();
+    if (!m_fx && m_depthBtn) {
+      s.depth = m_depthBtn->isChecked();
+      s.openInterest = m_oiBtn->isChecked();
+      s.liveBook = m_liveBtn->isChecked();
+    }
+    if (!s.footprint.isEmpty() && m_fpFrom && m_fpFrom->isChecked()) s.footprintStart = QDateTime(m_fpDate->date(), QTime(0, 0), QTimeZone::UTC).toSecsSinceEpoch();
     return s;
   }
 
@@ -519,8 +682,16 @@ private:
       auto* row = new QWidget(m_list);
       row->setObjectName("indRow");
       row->setStyleSheet(QString("QWidget#indRow { border-bottom: 1px solid %1; }").arg(c.divider.name()));
-      auto* h = new QHBoxLayout(row);
-      h->setContentsMargins(0, 3, 0, 3);
+      // phones: the name and × on one line, the columns (wrapped) under them
+      auto* h = new QHBoxLayout;
+      QVBoxLayout* rv = nullptr;
+      if (m_phone) {
+        rv = new QVBoxLayout(row);
+        rv->setContentsMargins(0, 4, 0, 4);
+        rv->setSpacing(2);
+        rv->addLayout(h);
+      } else row->setLayout(h);
+      if (!m_phone) h->setContentsMargins(0, 3, 0, 3);
       auto* name = ui::label(describe(ind), theme::sans(12), c.text, row);
       name->setWordWrap(true);
       h->addWidget(name, 1);
@@ -534,7 +705,8 @@ private:
       }
       auto* colsLbl = ui::label(cols.join("  ") + where, theme::mono(10), c.textDim, row);
       colsLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
-      h->addWidget(colsLbl);
+      if (m_phone) colsLbl->setWordWrap(true);
+      else h->addWidget(colsLbl);
       auto* x = new QPushButton("×", row);
       x->setCursor(Qt::PointingHandCursor);
       x->setToolTip(QCoreApplication::translate("data", "Remove"));
@@ -545,6 +717,7 @@ private:
         QTimer::singleShot(0, this, [this] { fillList(); sync(); });
       });
       h->addWidget(x);
+      if (rv) rv->addWidget(colsLbl);
       m_listLayout->addWidget(row);
     }
   }
@@ -559,9 +732,12 @@ private:
     int k = 0;
     for (const auto& in : d->inputs) {
       if (in.type == "time") continue;
-      const int row = k / 3, col = (k % 3) * 2;
+      // three settings a row, label then field; phones: the label (wrapped) over its field, one setting at a time
+      const int row = m_phone ? k * 2 : k / 3, col = m_phone ? 0 : (k % 3) * 2;
       ++k;
-      m_formLayout->addWidget(ui::label(QCoreApplication::translate("charts", qPrintable(in.label)), theme::sans(11), c.textDim, m_form), row, col);
+      auto* lbl = ui::label(QCoreApplication::translate("charts", qPrintable(in.label)), theme::sans(11), c.textDim, m_form);
+      if (m_phone) lbl->setWordWrap(true);
+      m_formLayout->addWidget(lbl, row, col);
       QWidget* w = nullptr;
       if (in.type == "int") {
         auto* s = new QSpinBox(m_form);
@@ -590,10 +766,11 @@ private:
         w = b;
       }
       w->setMinimumWidth(110);
-      m_formLayout->addWidget(w, row, col + 1);
+      if (m_phone) m_formLayout->addWidget(w, row + 1, 0);
+      else m_formLayout->addWidget(w, row, col + 1);
     }
     if (k == 0) m_formLayout->addWidget(note(QCoreApplication::translate("data", "No setting."), m_form), 0, 0);
-    m_formLayout->setColumnStretch(5, 1);
+    m_formLayout->setColumnStretch(m_phone ? 0 : 5, 1);
     runCheck();
   }
   // A setting changed: the last check is for the previous values. ADD is off until the new check answers (250 ms
@@ -643,8 +820,9 @@ private:
         const QVector<IndColumn> col = columnsOf(probe);
         auto* b = new QCheckBox(QCoreApplication::translate("charts", qPrintable(o.label)), m_outs);
         auto* name = ui::label(col.isEmpty() ? QString() : col.first().name, theme::mono(10), c.textMute, m_outs);
-        m_outsLayout->addWidget(b, k / 2, (k % 2) * 2);
-        m_outsLayout->addWidget(name, k / 2, (k % 2) * 2 + 1);
+        const int per = m_phone ? 1 : 2;   // outputs a row (phones: one)
+        m_outsLayout->addWidget(b, k / per, (k % per) * 2);
+        m_outsLayout->addWidget(name, k / per, (k % per) * 2 + 1);
         ++k;
         b->setProperty("key", o.key);
         const bool usable = m_check.outputs.contains(o.key);
@@ -718,9 +896,11 @@ private:
         }
     }
     const PairSpec s = current();
-    m_fromFirst->setText(m_fx ? QCoreApplication::translate("data", "From the pair's first day on Dukascopy (about %1)").arg(day(m_listing))
-                         : m_listing ? QCoreApplication::translate("data", "From the pair's first day on Binance (%1)").arg(day(m_listing))
-                                     : QCoreApplication::translate("data", "From the pair's first day on Binance"));
+    const QString fromFirst = m_fx ? QCoreApplication::translate("data", "From the pair's first day on Dukascopy (about %1)").arg(day(m_listing))
+                              : m_listing ? QCoreApplication::translate("data", "From the pair's first day on Binance (%1)").arg(day(m_listing))
+                                          : QCoreApplication::translate("data", "From the pair's first day on Binance");
+    if (m_fromFirstText) m_fromFirstText->setText(fromFirst);   // phones: the wrapped text beside the radio
+    else m_fromFirst->setText(fromFirst);
     const qint64 now = QDateTime::currentSecsSinceEpoch();
     const qint64 from = s.start ? std::max(s.start, m_listing) : m_listing;
     const QVector<IndColumn> cols = columnsOf(s);
@@ -735,6 +915,22 @@ private:
       size += estimateBytes(n, k);
       if (n) per << tfName(tf) + " " + bars(n);
     }
+    // the footprint: days × about 130 KB a market (measured 2026-11-20 on BTCUSDT: 125-142 KB a day)
+    qint64 fpDays = 0;
+    for (const QString& id : s.footprint) {
+      const auto v = fp::venueFromId(id);
+      if (!v) continue;
+      const QDate first = std::max(fp::firstDay(*v, binanceSymbol(marketKey())),
+                                   s.footprintStart ? QDateTime::fromSecsSinceEpoch(s.footprintStart, QTimeZone::UTC).date() : QDate());
+      fpDays += std::max<qint64>(0, first.daysTo(QDate::currentDate()));
+    }
+    size += fpDays * 135000;
+    if (fpDays) per << QCoreApplication::translate("data", "footprint %n day(s)", "", int(fpDays));
+    // depth ≈ 120 KB a day, open interest ≈ 17 KB a day (measured 2026-11-20 on BTCUSDT)
+    if (s.depth) size += std::max<qint64>(0, technicaldata::perp::firstDepthDay().daysTo(QDate::currentDate())) * 120000;
+    if (s.openInterest) size += std::max<qint64>(0, technicaldata::perp::firstMetricsDay().daysTo(QDate::currentDate())) * 17000;
+    if (m_fpBox) m_fpBox->setVisible(!m_fx);
+    if (m_bookBox) m_bookBox->setVisible(!m_fx);
     if (!from) {
       m_estimate->setText("—");
       m_estimateNote->setText(QCoreApplication::translate("data", "Known once Binance gives the pair's first day."));
@@ -769,6 +965,24 @@ private:
       }
       if (n) out << QCoreApplication::translate("data", "the bars before %1 (≈ %2)").arg(day(now.start), bars(n));
     }
+    // the footprint: a market no longer recorded, or a later first day
+    for (const QString& id : m_spec.footprint) {
+      const QVector<FpDay> days = st.footprintDays(m_market, id);
+      const qint64 cut = now.footprint.contains(id) ? now.footprintStart : LLONG_MAX;
+      int n = 0;
+      for (const FpDay& d : days) n += d.day < cut;
+      if (n && !now.footprint.contains(id))
+        out << QCoreApplication::translate("data", "footprint %1: its %n day(s)", "", n).arg(id == "spot" ? QCoreApplication::translate("data", "spot") : QCoreApplication::translate("data", "perpetual"));
+      else if (n)
+        out << QCoreApplication::translate("data", "footprint %1: %n day(s) before %2", "", n).arg(id == "spot" ? QCoreApplication::translate("data", "spot") : QCoreApplication::translate("data", "perpetual"), day(cut));
+    }
+    // the perpetual's depth or open interest unticked: their days go
+    if (m_spec.depth && !now.depth)
+      if (const int n = int(st.archiveDays(m_market, "depth").size()))
+        out << QCoreApplication::translate("data", "the book depth: its %n day(s)", "", n);
+    if (m_spec.openInterest && !now.openInterest)
+      if (const int n = int(st.archiveDays(m_market, "oi").size()))
+        out << QCoreApplication::translate("data", "the open interest: its %n day(s)", "", n);
     // forex, an earlier first day: Dukascopy's minute files are read again from it, in order
     if (dukascopy::isForex(m_market) && now.start < m_spec.start) {
       qint64 n = 0;
@@ -829,8 +1043,16 @@ private:
   QString m_checkedSym;     // the Binance symbol the last answer confirmed
   qint64 m_listing = 0;
   QRadioButton *m_fromFirst, *m_fromDate;
+  QLabel* m_fromFirstText = nullptr;   // phones: m_fromFirst's text, wrapped (radioRow)
+  bool m_phone = false;
   QDateEdit* m_date;
   QVector<QPushButton*> m_tfButtons;
+  QWidget* m_fpBox = nullptr;
+  QWidget* m_bookBox = nullptr;
+  QPushButton *m_depthBtn = nullptr, *m_oiBtn = nullptr, *m_liveBtn = nullptr;
+  QVector<QPushButton*> m_fpButtons;
+  QRadioButton *m_fpFirst = nullptr, *m_fpFrom = nullptr;
+  QDateEdit* m_fpDate = nullptr;
   QWidget *m_list, *m_form, *m_outs;
   QVBoxLayout* m_listLayout;
   QGridLayout* m_formLayout;

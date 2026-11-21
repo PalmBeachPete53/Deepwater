@@ -445,6 +445,7 @@ Checks checksFrom(const Bars& bars, const RunSet& runs, int mcRuns) {
   out.dsr = deflated;
   out.sr0 = sr0 * ann;
   out.trials = srs.size();
+  out.trialSharpes = srs;
   out.costStress = np;
   for (const Gate& g : gates)
     if (g.pass) out.passed++;

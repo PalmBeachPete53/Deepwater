@@ -33,6 +33,7 @@ protected:
 private:
   void refresh();
   void layoutFeed();
+  void layoutPhone(int W, int H);
   void requestTranslations();
   void openStory(const QString& id);
   void applyHooks();

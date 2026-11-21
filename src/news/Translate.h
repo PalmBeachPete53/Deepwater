@@ -7,7 +7,7 @@
 #include <QPointer>
 #include <functional>
 
-class QProcess;
+#include "core/Process.h"
 
 // On-device EN→FR translation of headlines and article text (News Feed; usable by Squawk, Session Recap).
 //
@@ -52,7 +52,7 @@ private:
 
   struct Waiter { QPointer<QObject> ctx; bool hasCtx; QStringList texts; std::function<void()> done; };
   State m_state = State::Starting;
-  QProcess* m_proc = nullptr;
+  dw::Process* m_proc = nullptr;
   QByteArray m_buf;
   void remember(const QString& en, const QString& fr);
   QHash<QString, QString> m_cache;             // en → fr

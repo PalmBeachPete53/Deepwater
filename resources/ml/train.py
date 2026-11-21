@@ -17,9 +17,20 @@ import traceback
 import warnings
 
 warnings.filterwarnings("ignore")
-RUN = sys.argv[1] if len(sys.argv) > 1 else "."
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+FLAGS = {a for a in sys.argv[1:] if a.startswith("--")}   # --refs: add the references to a finished run (refs_only)
+RUN = ARGS[0] if len(ARGS) > 0 else "."
 # the app's data set read in place (the sandbox grants this one file, read-only) rather than a copy per run
-DATA = sys.argv[2] if len(sys.argv) > 2 else os.path.join(RUN, "data.csv")
+DATA = ARGS[1] if len(ARGS) > 1 else os.path.join(RUN, "data.csv")
+# filled by frame(): what the run learned from (result "data"), and the persistence reference of the target (see frame)
+DATA_INFO = {}
+PERSIST = None
+# filled by frame() when the target is a price (all values above 0): per row the price, the return to the next row and
+# a trend rule known at the row (price above its 20-row average) — what trading_eval() turns predictions into money with
+TRADE = None
+# filled by frame() for the volatility targets: per row, what the HAR and EWMA references read (known at the row)
+VOLREF = None
+VOL_TARGETS = ("realized_vol", "range", "abs_return", "big_move")
 T0 = time.time()
 
 
@@ -29,6 +40,12 @@ def emit(**kw):
 
 def progress(stage, pct):
     emit(event="progress", stage=stage, pct=round(pct, 1))
+
+
+def point(curve, x, **values):
+    # one point of a curve drawn live by the app (AI › Agents' activity panel): the score of a fold, the loss of an epoch,
+    # the return of an episode; values = one number per line of the curve (None = no value at this point)
+    emit(event="point", curve=curve, x=x, values={k: (None if v is None else float(v)) for k, v in values.items()})
 
 
 def clean(v):
@@ -73,31 +90,84 @@ def frame(job, pd, np, target_required=True):
             emit(event="log", text=f"{bad} row(s) with a date that cannot be read were left out")
             df = df[df[date_col].notna()]
         df = df.sort_values(date_col).reset_index(drop=True)
+    global PERSIST
+    DATA_INFO.update({"rows": int(len(df)),
+                      "first": str(df[date_col].iloc[0]) if date_col and len(df) else None,
+                      "last": str(df[date_col].iloc[-1]) if date_col and len(df) else None})
     target = job.get("target") or ""
     transform = job.get("target_transform", "raw")
     h = int(job.get("horizon", 0))
     y = None
+    persist = None
     if not target:
         if target_required:
             raise ValueError("no target column")
     elif target not in df.columns:
         raise ValueError(f"the column '{target}' is not in the data")
     elif transform != "raw" and h < 1:
-        raise ValueError("a change or direction target needs a horizon of at least 1 row")
+        raise ValueError("a change, direction or volatility target needs a horizon of at least 1 row")
+    global VOLREF
+    VOLREF = None
     y_src = pd.to_numeric(df[target], errors="coerce") if target else None
     if y_src is None:
         pass
     elif transform == "raw":
         y = y_src.shift(-h) if h > 0 else y_src
+        persist = y_src if h > 0 else y_src.shift(1)
     elif transform == "change":
         y = y_src.shift(-h) - y_src
+        persist = y_src - y_src.shift(h)
     elif transform == "pct_change":
         y = (y_src.shift(-h) / y_src - 1.0) * 100.0
+        persist = (y_src / y_src.shift(h) - 1.0) * 100.0
     elif transform == "direction":
         d = y_src.shift(-h) - y_src
         y = pd.Series(np.where(d.isna(), np.nan, np.where(d > 0, 1.0, 0.0)), index=df.index)
+        d0 = y_src - y_src.shift(h)
+        persist = pd.Series(np.where(d0.isna(), np.nan, np.where(d0 > 0, 1.0, 0.0)), index=df.index)
+    elif transform in VOL_TARGETS:
+        # step 5 of the roadmap (2026-11-20): how much the price will move, not where. Over the next h rows (t+1 … t+h):
+        #   realized_vol  √(Σ squared log returns) in %          range       (highest high − lowest low) / price now, %
+        #   abs_return    |price in h rows / price now − 1|, %     big_move    1 when the furthest excursion from the
+        #                 price now reaches move_pct (default: the 80th percentile of the training part's excursions)
+        # persistence: the same measure over the last h rows. HAR and EWMA references: see vol_refs().
+        if not (float((y_src > 0).mean()) > 0.99):
+            raise ValueError(f"{transform} needs a price column (every value above 0)")
+        lr = np.log(y_src).diff()
+        hi = pd.to_numeric(df["high"], errors="coerce") if "high" in df.columns else y_src
+        lo = pd.to_numeric(df["low"], errors="coerce") if "low" in df.columns else y_src
+        def ahead(s, how):   # the next h rows' sum / max / min, at each row (NaN where they are not all known)
+            r = getattr(s[::-1].rolling(h, min_periods=h), how)()[::-1]
+            return r.shift(-1)
+        def behind(s, how):
+            return getattr(s.rolling(h, min_periods=h), how)()
+        if transform == "realized_vol":
+            y = np.sqrt(ahead(lr ** 2, "sum")) * 100.0
+            persist = np.sqrt(behind(lr ** 2, "sum")) * 100.0
+        elif transform == "range":
+            y = (ahead(hi, "max") - ahead(lo, "min")) / y_src * 100.0
+            persist = (behind(hi, "max") - behind(lo, "min")) / y_src * 100.0
+        elif transform == "abs_return":
+            y = (y_src.shift(-h) / y_src - 1.0).abs() * 100.0
+            persist = (y_src / y_src.shift(h) - 1.0).abs() * 100.0
+        else:
+            exc = np.maximum(ahead(hi, "max") / y_src - 1.0, 1.0 - ahead(lo, "min") / y_src) * 100.0
+            past = np.maximum(behind(hi, "max") / y_src.shift(h) - 1.0, 1.0 - behind(lo, "min") / y_src.shift(h)) * 100.0
+            thr = float(job.get("move_pct", 0) or 0)
+            if thr <= 0:   # from the training part only (the rows before the test share), never from the test rows
+                cut0 = int(round(len(exc) * (1 - min(max(float(job.get("test_size", 0.2)), 0.05), 0.5))))
+                thr = float(np.nanquantile(exc.iloc[:max(1, cut0 - h)].to_numpy(dtype=float), 0.8))   # whose windows end before the test
+            DATA_INFO["move_threshold_pct"] = thr
+            y = pd.Series(np.where(exc.isna(), np.nan, (exc >= thr).astype(float)), index=df.index)
+            persist = pd.Series(np.where(past.isna(), np.nan, (past >= thr).astype(float)), index=df.index)
+        VOLREF = vol_ref_columns(lr, h, pd, np)
     else:
         raise ValueError(f"unknown target transform '{transform}'")
+    # persistence: "what was last seen happens again" — the target's own value measured up to this row (the last change
+    # over the same horizon, the last direction, the level now), known at the row: a naive rule harder to beat than the
+    # training mean. Same rows as y.
+    if persist is not None:
+        persist = persist.replace([np.inf, -np.inf], np.nan)
     if y is not None:
         # a zero in the target column gives ±inf with pct_change (or an "inf" in the file): scikit-learn stops on it
         inf = np.isinf(y.to_numpy(dtype=float))
@@ -105,6 +175,19 @@ def frame(job, pd, np, target_required=True):
             emit(event="log", text=f"{int(inf.sum())} row(s) with an infinite target (a zero in '{target}'?) were left out")
             keep = ~inf
             df, y = df[keep].reset_index(drop=True), y[keep].reset_index(drop=True)
+            y_src = y_src[keep].reset_index(drop=True)
+            if VOLREF is not None:
+                VOLREF = VOLREF[keep].reset_index(drop=True)
+            if persist is not None:
+                persist = persist[keep].reset_index(drop=True)
+    PERSIST = persist
+    global TRADE
+    TRADE = None
+    if y_src is not None and len(y_src) and float((y_src > 0).mean()) > 0.99:
+        sma = y_src.rolling(20, min_periods=20).mean()
+        TRADE = pd.DataFrame({"price": y_src.to_numpy(dtype=float), "next": (y_src.shift(-1) / y_src - 1.0).to_numpy(dtype=float),
+                              "trend": np.where(sma.isna(), np.nan, (y_src > sma).astype(float))}, index=df.index)
+        TRADE = TRADE.replace([np.inf, -np.inf], np.nan)
 
     feats = [c for c in job.get("features", []) if c in df.columns and c != date_col]
     if target_required and h == 0 and target in feats:
@@ -125,9 +208,14 @@ def frame(job, pd, np, target_required=True):
 
 
 def prepare(job, pd, np):
+    global PERSIST
     X, y, dates, names, transform = frame(job, pd, np)
     # rows usable for training: every feature and the target known
     ok = X.notna().all(axis=1) & y.notna()
+    PERSIST = PERSIST[ok] if PERSIST is not None else None
+    global TRADE, VOLREF
+    TRADE = TRADE[ok] if TRADE is not None else None
+    VOLREF = VOLREF[ok] if VOLREF is not None else None
     # the most recent rows whose future is not known yet: what the model predicts "now"
     latest_mask = X.notna().all(axis=1) & y.isna()
     return X[ok], y[ok], dates[ok], X[latest_mask], dates[latest_mask], names, transform
@@ -237,6 +325,24 @@ def scores(task, y_true, y_pred, proba=None, transform="raw"):
     return out
 
 
+def reference_columns(out, task, transform, base, pers_te, np):
+    """The two references written next to each test row (ml_compare reads them; nothing has to be rebuilt):
+    no_skill = the baseline's constant (majority class or training mean), persistence = the target's last seen value
+    (empty where it is not known). Returns the persistence's scores on the rows where it is known."""
+    const = base.get("class") if task == "classification" else base.get("value")
+    out["no_skill"] = const
+    pers = np.asarray(pers_te, dtype=float)
+    if task == "classification":
+        pers = np.where(np.isnan(pers), np.nan, np.round(pers))
+    out["persistence"] = pers
+    ok = ~np.isnan(pers)
+    if ok.sum() < 10:
+        return None
+    y = out["actual"].to_numpy()[ok]
+    p = pers[ok].astype(int) if task == "classification" else pers[ok]
+    return {"rule": "persistence", "rows": int(ok.sum()), **scores(task, y.astype(int) if task == "classification" else y, p, transform=transform)}
+
+
 def supervised(job):
     import numpy as np
     import pandas as pd
@@ -268,48 +374,106 @@ def supervised(job):
     emit(event="log", text=f"{n} rows, {len(names)} features, train {len(X_tr)} / test {len(X_te)}, task {task}")
     progress("prepare", 12)
 
-    # time-series cross-validation on the training part
+    # walk-forward (job "validation": "walk_forward", 2026-11-20): the test part is cut into `wf_folds` blocks in time
+    # order; each block is predicted by a model trained afresh on every row before it, minus the h rows whose target
+    # reaches into the block (purge), as a model retrained regularly would have been used. The test rows are the same as
+    # with one cut: the two kinds of runs are compared on the same rows.
+    validation = job.get("validation", "split")
+    wf = None
     cv = {}
-    folds = int(job.get("cv_folds", 0))
-    if folds >= 2:
-        from sklearn.model_selection import TimeSeriesSplit
-        vals = []
-        for i, (a, b) in enumerate(TimeSeriesSplit(n_splits=folds, gap=h).split(X_tr)):
+    if validation == "walk_forward":
+        k = min(max(int(job.get("wf_folds", 5)), 2), 20)
+        n_te = n - cut
+        if n_te < k * 5:
+            raise ValueError(f"walk-forward: {n_te} test rows for {k} blocks, at least 5 rows a block are needed")
+        edges = [cut + (n_te * j) // k for j in range(k + 1)]
+        pred = np.empty(n_te, dtype=float)
+        proba = np.full(n_te, np.nan) if task == "classification" else None
+        nos = np.empty(n_te, dtype=object if task == "classification" else float)
+        blocks = []
+        metric = "balanced_accuracy" if task == "classification" else "mae"
+        for j in range(k):
+            s0, s1 = edges[j], edges[j + 1]
+            te_end = s0 - h
+            if te_end < 20:
+                raise ValueError(f"walk-forward: only {te_end} training rows before block {j + 1}: too few")
+            Xa, ya = X.iloc[:te_end], y.iloc[:te_end]
+            if cap and len(Xa) > cap:
+                Xa, ya = Xa.iloc[-cap:], ya.iloc[-cap:]
+            if task == "classification":
+                ya = ya.astype(int)
+                if ya.nunique() < 2:
+                    raise ValueError(f"walk-forward: the training rows before block {j + 1} hold a single class")
             m = make_model(job, task, len(names))
-            m.fit(X_tr.iloc[a], y_tr.iloc[a])
-            pr = m.predict(X_tr.iloc[b])
-            s = scores(task, y_tr.iloc[b], pr, transform=transform)
-            vals.append(s["balanced_accuracy"] if task == "classification" else s["mae"])
-            progress(f"cv {i + 1}/{folds}", 12 + 48 * (i + 1) / folds)
-        cv = {"metric": "balanced_accuracy" if task == "classification" else "mae", "folds": folds,
-              "mean": float(np.mean(vals)), "std": float(np.std(vals)), "values": vals}
+            m.fit(Xa, ya)
+            pb = m.predict(X.iloc[s0:s1])
+            pred[s0 - cut:s1 - cut] = pb
+            if proba is not None and hasattr(m, "predict_proba") and ya.nunique() == 2:
+                proba[s0 - cut:s1 - cut] = m.predict_proba(X.iloc[s0:s1])[:, 1]
+            # no skill as it would have been known then: the majority class or the mean of these training rows
+            nos[s0 - cut:s1 - cut] = int(ya.mode().iloc[0]) if task == "classification" else float(ya.mean())
+            yb = y.iloc[s0:s1].astype(int) if task == "classification" else y.iloc[s0:s1]
+            sc = scores(task, yb, pb, transform=transform)[metric]
+            blocks.append({"from": str(dates.iloc[s0]), "to": str(dates.iloc[s1 - 1]), "rows": int(s1 - s0),
+                           "train_rows": int(len(Xa)), metric: sc})
+            point("wf_" + metric, j + 1, block=sc)
+            progress(f"walk-forward {j + 1}/{k}", 12 + 70 * (j + 1) / k)
+            model, X_tr, y_tr = m, Xa, ya
+        if task == "classification":
+            pred = pred.astype(int)
+            if np.isnan(proba).all():
+                proba = None
+        wf = {"mode": "walk_forward", "folds": k, "gap_rows": h, "metric": metric, "blocks": blocks,
+              "anchored": True, "note": "each block predicted by a model trained on every row before it, the h rows "
+                                        "whose target reaches into the block left out"}
+        fit_s = 0.0
+        progress("evaluate", 85)
+    else:
+        # time-series cross-validation on the training part
+        folds = int(job.get("cv_folds", 0))
+        if folds >= 2:
+            from sklearn.model_selection import TimeSeriesSplit
+            vals = []
+            for i, (a, b) in enumerate(TimeSeriesSplit(n_splits=folds, gap=h).split(X_tr)):
+                m = make_model(job, task, len(names))
+                m.fit(X_tr.iloc[a], y_tr.iloc[a])
+                pr = m.predict(X_tr.iloc[b])
+                s = scores(task, y_tr.iloc[b], pr, transform=transform)
+                vals.append(s["balanced_accuracy"] if task == "classification" else s["mae"])
+                point("cv_balanced_accuracy" if task == "classification" else "cv_mae", i + 1, fold=vals[-1])
+                progress(f"cv {i + 1}/{folds}", 12 + 48 * (i + 1) / folds)
+            cv = {"metric": "balanced_accuracy" if task == "classification" else "mae", "folds": folds,
+                  "mean": float(np.mean(vals)), "std": float(np.std(vals)), "values": vals}
 
-    progress("fit", 62)
-    model = make_model(job, task, len(names))
-    t = time.time()
-    model.fit(X_tr, y_tr)
-    fit_s = time.time() - t
-    progress("evaluate", 85)
-    pred = model.predict(X_te)
-    proba = None
-    if task == "classification" and hasattr(model, "predict_proba") and y_tr.nunique() == 2:
-        proba = model.predict_proba(X_te)[:, 1]
+        progress("fit", 62)
+        model = make_model(job, task, len(names))
+        t = time.time()
+        model.fit(X_tr, y_tr)
+        fit_s = time.time() - t
+        progress("evaluate", 85)
+        pred = model.predict(X_te)
+        proba = None
+        if task == "classification" and hasattr(model, "predict_proba") and y_tr.nunique() == 2:
+            proba = model.predict_proba(X_te)[:, 1]
+        nos = None
     test = scores(task, y_te, pred, proba, transform)
     train = scores(task, y_tr, model.predict(X_tr), transform=transform)
 
-    # baselines: what a model with no skill gets on the same test rows
+    # baselines: what a model with no skill gets on the same test rows (walk-forward: each block's own, known then)
     if task == "classification":
         majority = int(y_tr.mode().iloc[0])
         base = {"rule": "majority", "class": majority,
-                **scores(task, y_te, np.full(len(y_te), majority), transform=transform)}
+                **scores(task, y_te, np.full(len(y_te), majority) if nos is None else nos.astype(int), transform=transform)}
         from sklearn.metrics import confusion_matrix
         labels = sorted(set(y_tr.unique()) | set(y_te.unique()))
         cm = {"labels": [int(v) for v in labels], "matrix": confusion_matrix(y_te, pred, labels=labels).tolist()}
     else:
         mean = float(y_tr.mean())
-        base = {"rule": "mean_direction" if transform in ("change", "pct_change") else "mean",
-                **scores(task, y_te, np.full(len(y_te), mean), transform=transform)}
+        base = {"rule": "mean_direction" if transform in ("change", "pct_change") else "mean", "value": mean,
+                **scores(task, y_te, np.full(len(y_te), mean) if nos is None else nos.astype(float), transform=transform)}
         cm = None
+    if nos is not None:
+        base["per_block"] = True   # the rule's value is each block's own; "class" / "value" = the last block's
 
     imp = importances(model, X_te, y_te, names, task)
     progress("save", 95)
@@ -318,6 +482,10 @@ def supervised(job):
     out = pd.DataFrame({"date": dates.iloc[cut:].astype(str).values, "actual": y_te.values, "predicted": pred})
     if proba is not None:
         out["probability"] = proba
+    pers_te = PERSIST.iloc[cut:].to_numpy(dtype=float) if PERSIST is not None else np.full(len(y_te), np.nan)
+    persistence = reference_columns(out, task, transform, base, pers_te, np)
+    if nos is not None:
+        out["no_skill"] = nos
     out.to_csv(os.path.join(RUN, "predictions.csv"), index=False)
 
     latest = None
@@ -330,11 +498,161 @@ def supervised(job):
     result = {"family": "supervised", "task": task, "rows": n, "train_rows": len(X_tr), "test_rows": len(X_te),
               "features": names, "train_period": [str(dates.iloc[0]), str(dates.iloc[tr_end - 1])],
               "test_period": [str(dates.iloc[cut]), str(dates.iloc[-1])], "test": test, "train": train,
-              "baseline": base, "cv": cv, "gap_rows": h, "confusion": cm, "importances": imp, "latest": latest,
+              "baseline": base, "persistence": persistence, "cv": cv, "gap_rows": h, "confusion": cm, "importances": imp, "latest": latest,
               "fit_seconds": fit_s, "seconds": time.time() - T0, "versions": versions()}
+    if VOLREF is not None:   # volatility targets: the HAR and EWMA references, fitted on the same training rows as the model
+        segments = [(edges[j] - h, edges[j], edges[j + 1]) for j in range(len(edges) - 1)] if wf else [(tr_end, cut, n)]
+        rp = vol_refs(task, VOLREF, y, segments, np)
+        block = max(10, 2 * h)
+        refs = {}
+        for name, rule in (("har", "HAR: a regression on the realized volatility of the last h, 5h and 22h rows (Corsi)"),
+                           ("ewma", "EWMA: a regression on the exponentially weighted volatility of the row returns (λ 0.94)")):
+            pr = rp[name].astype(int) if task == "classification" else rp[name]
+            refs[name] = {"rule": rule, **scores(task, y_te, pr, transform=transform)}
+            refs["vs_" + name] = paired_p(task, y_te.to_numpy(dtype=float), pred, pr, block, np)
+            out[name] = pr
+        out.to_csv(os.path.join(RUN, "predictions.csv"), index=False)
+        result["references"] = refs
+    if "move_threshold_pct" in DATA_INFO:
+        result["move_threshold_pct"] = DATA_INFO["move_threshold_pct"]
+    trade_te = TRADE.iloc[cut:] if TRADE is not None else None
+    tr = trading_eval(job, task, transform, pred, trade_te, dates.iloc[cut:], np)
+    if tr:
+        result["trading"] = tr
+    if wf:
+        result["walk_forward"] = wf
+        result["train_period"] = [str(dates.iloc[0]), str(dates.iloc[edges[-2] - h - 1])]
     with open(os.path.join(RUN, "result.json"), "w", encoding="utf-8") as f:
         json.dump(clean(result), f, indent=1)
     progress("done", 100)
+
+
+def vol_ref_columns(lr, h, pd, np):
+    """The two references a volatility forecast must beat (arXiv 1802.04065: an EWMA beats most models on BTC): known at
+    each row, scaled to the next h rows. HAR (Corsi 2009): the realized volatility of the last h, 5h and 22h rows, each per
+    h rows; EWMA (RiskMetrics, λ 0.94): √(h × exponentially weighted variance of the row returns). Both are turned into
+    the target's own unit by a regression fitted on the training rows only (vol_refs)."""
+    sq = lr ** 2
+    cols = {}
+    for name, k in (("har_d", 1), ("har_w", 5), ("har_m", 22)):
+        n = h * k
+        cols[name] = np.sqrt(sq.rolling(n, min_periods=n).mean() * h) * 100.0
+    var = sq.ewm(alpha=0.06, adjust=False, min_periods=20).mean()
+    cols["ewma"] = np.sqrt(var * h) * 100.0
+    return pd.DataFrame(cols, index=lr.index).replace([np.inf, -np.inf], np.nan)
+
+
+def vol_refs(task, ref, y, segments, np):
+    """HAR and EWMA predictions of the test rows: for each segment (train_end, s0, s1) a linear (or, for big_move, a
+    logistic) regression fitted on the rows before train_end, predicting rows s0..s1. Rows without the inputs get the
+    training mean (or majority). Returns {"har": array, "ewma": array} over the test rows (positions segments[0][1]…)."""
+    from sklearn.linear_model import LinearRegression, LogisticRegression
+    out = {}
+    for name, cols in (("har", ["har_d", "har_w", "har_m"]), ("ewma", ["ewma"])):
+        parts = []
+        for tr_end, s0, s1 in segments:
+            Xa = ref[cols].iloc[:tr_end].to_numpy(dtype=float)
+            ya = y.iloc[:tr_end].to_numpy(dtype=float)
+            ok = np.isfinite(Xa).all(axis=1) & np.isfinite(ya)
+            Xb = ref[cols].iloc[s0:s1].to_numpy(dtype=float)
+            fill = (float(np.round(np.nanmean(ya)) if task == "classification" else np.nanmean(ya)))
+            pb = np.full(s1 - s0, fill)
+            okb = np.isfinite(Xb).all(axis=1)
+            if ok.sum() >= 30 and (task != "classification" or len(np.unique(ya[ok])) == 2):
+                # balanced classes: judged on balanced accuracy, a reference that always says "no big move" would be a straw man
+                m = LogisticRegression(max_iter=1000, class_weight="balanced") if task == "classification" else LinearRegression()
+                m.fit(Xa[ok], ya[ok].astype(int) if task == "classification" else ya[ok])
+                if okb.any():
+                    pb[okb] = m.predict(Xb[okb])
+            parts.append(pb)
+        out[name] = np.concatenate(parts)
+    return out
+
+
+def paired_p(task, actual, a, b, block, np):
+    """Is A better than B on the same rows? Per-row score (classification: right, weighted so the mean is the balanced
+    accuracy; values: minus the absolute error), moving-block bootstrap of the mean difference A − B: p = share of
+    resamples at or below 0 (small: A better), p_worse = share at or above 0 (small: A worse)."""
+    act = np.asarray(actual, dtype=float)
+    def rows(p):
+        p = np.asarray(p, dtype=float)
+        if task != "classification":
+            return -np.abs(p - act)
+        cls, cnt = np.unique(act, return_counts=True)
+        w = {c: len(act) / (len(cls) * n) for c, n in zip(cls, cnt)}
+        return np.where(np.round(p) == act, np.vectorize(w.get)(act), 0.0)
+    d = rows(a) - rows(b)
+    L = len(d)
+    rng = np.random.default_rng(11)
+    nb = int(np.ceil(L / block))
+    means = np.empty(2000)
+    for i in range(2000):
+        st = rng.integers(0, max(1, L - block + 1), nb)
+        means[i] = d[np.minimum((st[:, None] + np.arange(block)).ravel()[:L], L - 1)].mean()
+    return {"diff": float(d.mean()), "p": float(np.mean(means <= 0)), "p_worse": float(np.mean(means >= 0))}
+
+
+def trading_eval(job, task, transform, pred, trade_te, dates_te, np):
+    """Step 4 of the roadmap (2026-11-20): the test predictions as a position held from each row to the next (decided at
+    the row's close: long when the model says up, else flat — or short with trade_side long_short), paying cost_bp a
+    side (job, set by the app: Binance 0.10 % fee + 0.05 % slippage as the Strategy tester, less for forex), against
+    buy & hold, a trend rule (above its 20-row average) and a constant exposure equal to the model's average (timing
+    skill apart from simply being in the market). None when the target is not a price or the classes are not up / down."""
+    if trade_te is None or len(trade_te) < 20 or transform in VOL_TARGETS:   # a volatility forecast is not a direction to trade
+        return None
+    if task == "classification" and transform != "direction":
+        return None
+    r = trade_te["next"].to_numpy(dtype=float)
+    r = np.where(np.isfinite(r), r, 0.0)
+    price = trade_te["price"].to_numpy(dtype=float)
+    p = np.asarray(pred, dtype=float)
+    up = p >= 0.5 if task == "classification" else (p > price if transform == "raw" else p > 0)
+    side = job.get("trade_side", "long")
+    low = -1.0 if side == "long_short" else 0.0
+    pos = np.where(up, 1.0, low)
+    cost = max(0.0, float(job.get("cost_bp", 15.0))) / 1e4
+    try:   # rows per year from the test dates; 252 when the file has no dates
+        span = (pd_ts(dates_te.iloc[-1]) - pd_ts(dates_te.iloc[0])).total_seconds() / (365.25 * 86400) if hasattr(dates_te.iloc[0], "year") else 0
+    except Exception:
+        span = 0
+    ppy = (len(r) - 1) / span if span > 0.01 else 252.0
+
+    def sret_of(ps, c):
+        ch = np.abs(np.diff(np.concatenate([[0.0], ps])))
+        return ps * r - c * ch
+
+    model = {f"x{k}": perf(pos, r, 0, cost * k, ppy, np)[0] for k in (0, 1, 2, 3)}
+    trend = trade_te["trend"].to_numpy(dtype=float)
+    tpos = np.where(np.isnan(trend), 0.0, np.where(trend > 0, 1.0, low))
+    expo = float(np.mean(pos))
+    cpos = np.full(len(r), expo)
+    # does the timing earn more than the same average exposure held all along? paired, after costs, moving blocks
+    d = sret_of(pos, cost) - sret_of(cpos, cost)
+    block = max(10, 2 * int(job.get("horizon", 1)))
+    rng = np.random.default_rng(7)
+    L = len(d)
+    nb = int(np.ceil(L / block))
+    means = np.empty(2000)
+    for i in range(2000):
+        st = rng.integers(0, max(1, L - block + 1), nb)
+        idx = (st[:, None] + np.arange(block)).ravel()[:L]
+        means[i] = d[np.minimum(idx, L - 1)].mean()
+    return {"rule": ("long when the model says up, short otherwise" if side == "long_short" else "long when the model says up, flat otherwise")
+                    + "; the position is decided at each test row's close and held to the next row",
+            "side": side, "cost_bp": cost * 1e4, "rows": int(L), "rows_per_year": ppy,
+            "model": model, "buy_hold": perf(np.ones(L), r, 0, cost, ppy, np)[0],
+            "trend": {"rule": "long when the price is above its 20-row average" + (", short below" if side == "long_short" else ", flat below"),
+                      **perf(tpos, r, 0, cost, ppy, np)[0]},
+            "constant": {**perf(cpos, r, 0, cost, ppy, np)[0], "level": expo},
+            "vs_constant": {"mean_diff_bp": float(d.mean() * 1e4), "p": float(np.mean(means <= 0)), "p_worse": float(np.mean(means >= 0)),
+                            "block": block,
+                            "note": "p: share of 2000 moving-block resamples where the model's return per row, after costs, is not above "
+                                    "the constant exposure's; p_worse: not below it"}}
+
+
+def pd_ts(v):
+    import pandas as pd
+    return pd.Timestamp(v)
 
 
 # ---------------------------------------------------------------------------------------------------- unsupervised
@@ -535,15 +853,11 @@ def semi_base(name, seed):
     return make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000))
 
 
-def semi_supervised(job):
-    """Few labels, many unlabelled rows. The training part keeps the labels of `labelled_share` of its rows (the others
-    are hidden), plus any row whose target is blank in the file; the model learns from both. Compared on the same test
-    rows with the same model trained on the kept labels only, and with every label (the upper bound)."""
-    import numpy as np
-    import pandas as pd
-    from sklearn.preprocessing import StandardScaler
-    progress("load", 5)
+def semi_split(job, pd, np):
+    """semi_supervised()'s rows, split and kept labels, as a dict: shared with refs_only(), which must rebuild exactly the
+    same test rows and no-skill class as the run did."""
     X, y, dates, names, transform = frame(job, pd, np)
+    persist_all = PERSIST
     xok = X.notna().all(axis=1)
     lab_idx = np.where(xok & y.notna())[0]
     if len(lab_idx) < 40:
@@ -585,6 +899,25 @@ def semi_supervised(job):
     y_semi[keep] = yr.iloc[keep].astype(int).to_numpy()
     if len(set(y_semi[keep].tolist())) < 2:
         raise ValueError("the kept labels hold a single class: raise the labelled share")
+    return {"X": X, "y": y, "dates": dates, "names": names, "transform": transform, "persist": persist_all, "rows": rows,
+            "latest_rows": latest_rows, "Xr": Xr, "yr": yr, "dr": dr, "classes": classes, "back": back, "n": n, "cut": cut,
+            "h": h, "tr_end": tr_end, "tr_lab": tr_lab, "gap": gap, "natural": natural, "te": te, "p": p, "seed": seed,
+            "share": share, "keep": keep, "y_semi": y_semi}
+
+
+def semi_supervised(job):
+    """Few labels, many unlabelled rows. The training part keeps the labels of `labelled_share` of its rows (the others
+    are hidden), plus any row whose target is blank in the file; the model learns from both. Compared on the same test
+    rows with the same model trained on the kept labels only, and with every label (the upper bound)."""
+    import numpy as np
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    progress("load", 5)
+    S = semi_split(job, pd, np)
+    X, y, dates, names, transform, persist_all = S["X"], S["y"], S["dates"], S["names"], S["transform"], S["persist"]
+    rows, latest_rows, Xr, yr, dr, classes, back = S["rows"], S["latest_rows"], S["Xr"], S["yr"], S["dr"], S["classes"], S["back"]
+    n, cut, h, tr_end, tr_lab, gap, natural, te, p, seed, share, keep, y_semi = (S[k] for k in (
+        "n", "cut", "h", "tr_end", "tr_lab", "gap", "natural", "te", "p", "seed", "share", "keep", "y_semi"))
     emit(event="log", text=f"{n} rows: train {cut} ({len(keep)} labelled, {cut - len(keep)} unlabelled"
                            f"{f', {gap} labels hidden for the {h}-row horizon' if gap else ''}), test {len(te)}")
     progress("prepare", 12)
@@ -642,7 +975,12 @@ def semi_supervised(job):
     out = pd.DataFrame({"date": dr.iloc[te].astype(str).values, "actual": y_te.values, "predicted": pred})
     if proba is not None:
         out["probability"] = proba
+    pr_all = persist_all.iloc[rows].reset_index(drop=True) if persist_all is not None else None
+    persistence = reference_columns(out, "classification", transform, base,
+                                    pr_all.iloc[te].to_numpy(dtype=float) if pr_all is not None else np.full(len(te), np.nan), np)
     out.to_csv(os.path.join(RUN, "predictions.csv"), index=False)
+    # the test predictions traded after costs, as for supervised runs (2026-11-20): the test rows are rows[te] of the frame
+    trading = trading_eval(job, "classification", transform, pred, TRADE.iloc[rows[te]], dr.iloc[te], np) if TRADE is not None else None
     latest = None
     if len(latest_rows):
         xl = X.iloc[[latest_rows[-1]]]
@@ -653,11 +991,13 @@ def semi_supervised(job):
     result = {"family": "semi_supervised", "task": "classification", "rows": n, "train_rows": cut, "test_rows": len(te),
               "features": names, "train_period": [str(dr.iloc[0]), str(dr.iloc[cut - 1])],
               "test_period": [str(dr.iloc[cut]), str(dr.iloc[-1])], "test": test, "train": train, "baseline": base,
-              "cv": {}, "confusion": cm, "importances": {}, "latest": latest,
+              "persistence": persistence, "cv": {}, "confusion": cm, "importances": {}, "latest": latest,
               "semi": {"labelled": int(len(keep)), "hidden": int(len(tr_lab) - len(keep)), "blank": natural,
                        "horizon_gap": gap,
                        "share": share, **comp, **extra},
               "seconds": time.time() - T0, "versions": versions()}
+    if trading:
+        result["trading"] = trading
     with open(os.path.join(RUN, "result.json"), "w", encoding="utf-8") as f:
         json.dump(clean(result), f, indent=1)
     progress("done", 100)
@@ -683,6 +1023,8 @@ def self_supervised(job):
     first = int(np.argmax(ok))
     X, dates = X.iloc[first:].reset_index(drop=True), dates.iloc[first:].reset_index(drop=True)
     y = y.iloc[first:].reset_index(drop=True) if y is not None else None
+    persist_all = PERSIST.iloc[first:].reset_index(drop=True) if PERSIST is not None else None
+    trade_all = TRADE.iloc[first:].reset_index(drop=True) if TRADE is not None else None
     X = X.ffill().bfill()   # the odd gap inside the history
     p = job.get("params", {})
     seed = int(job.get("seed", 42))
@@ -777,6 +1119,7 @@ def self_supervised(job):
         with torch.no_grad():
             vl = float(np.mean([float(loss_on(Wt[va_idx[i:i + bs]], Nt[va_idx[i:i + bs]])) for i in range(0, len(va_idx), bs)])) if len(va_idx) > 1 else None
         history.append({"epoch": ep + 1, "train": tot / max(cnt, 1), "valid": vl})
+        point("loss", ep + 1, train=tot / max(cnt, 1), valid=vl)
         emit(event="progress", stage=f"epoch {ep + 1}/{epochs} · loss {tot / max(cnt, 1):.4f}", pct=round(10 + 70 * (ep + 1) / epochs, 1))
 
     progress("embed", 82)
@@ -820,12 +1163,15 @@ def self_supervised(job):
             from sklearn.pipeline import make_pipeline
             from sklearn.preprocessing import StandardScaler
             task = "classification" if cls else "regression"
-            def fit_eval(F_all, tr=tr, te=te, yw=yw):
+            probe_pred = {}
+            def fit_eval(F_all, tr=tr, te=te, yw=yw, keep=False):
                 m = make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000) if cls else Ridge(alpha=1.0))
                 yt = yw[tr].astype(int) if cls else yw[tr]
                 ye = yw[te].astype(int) if cls else yw[te]
                 m.fit(F_all[tr], yt)
                 pr = m.predict(F_all[te])
+                if keep:
+                    probe_pred["predicted"] = pr
                 proba = m.predict_proba(F_all[te])[:, 1] if cls and len(m.classes_) == 2 else None
                 return scores(task, ye, pr, proba, transform)
             raw_now = Z[ends]
@@ -845,9 +1191,21 @@ def self_supervised(job):
                 nos = scores(task, ye, np.full(len(ye), float(np.mean(yw[tr]))), transform=transform)
             res["probe"] = {"task": task, "target": job["target"], "transform": transform, "horizon": h,
                             "train_windows": int(tr.sum()), "test_windows": int(te.sum()),
-                            "embeddings": fit_eval(E), "raw_now": fit_eval(raw_now),
+                            "embeddings": fit_eval(E, keep=True), "raw_now": fit_eval(raw_now),
                             "raw_window": fit_eval(raw_win, tr[sel], te[sel], yw[sel]) if raw_ok else None,
                             "no_skill": nos}
+            # the probe's test windows, with both references next to them, for ml_compare
+            nos_base = {"class": maj} if cls else {"value": float(np.mean(yw[tr]))}
+            pout = pd.DataFrame({"date": wdates[te].astype(str).values, "actual": ye, "predicted": probe_pred["predicted"]})
+            pw = persist_all.iloc[ends].to_numpy(dtype=float)[te] if persist_all is not None else np.full(int(te.sum()), np.nan)
+            res["probe"]["persistence"] = reference_columns(pout, task, transform, nos_base, pw, np)
+            res["probe"]["no_skill"]["value" if not cls else "class"] = nos_base.get("value", nos_base.get("class"))
+            pout.to_csv(os.path.join(RUN, "probe_predictions.csv"), index=False)
+            # the probe's test predictions traded after costs: each test window decides at its last row (2026-11-20)
+            if trade_all is not None:
+                tr_eval = trading_eval(job, task, transform, probe_pred["predicted"], trade_all.iloc[ends[te]], wdates[te], np)
+                if tr_eval:
+                    res["probe"]["trading"] = tr_eval
     progress("save", 95)
     torch.save({"encoder": enc.state_dict(), "features": names, "window": W, "embedding": emb_dim,
                 "mean": mu.tolist(), "std": sd.tolist(), "method": method}, os.path.join(RUN, "encoder.pt"))
@@ -1066,6 +1424,7 @@ def reinforcement(job):
         history.append({"episode": ep + 1, "reward": tot / reward_scale,
                         "train_return": perf(ptr_, r[:cut - 1], 0, cost, ppy, np)[0]["total_return"],
                         "test_return": perf(pte, r[cut:n - 1], 0, cost, ppy, np)[0]["total_return"]})
+        point("return", ep + 1, train=history[-1]["train_return"], test=history[-1]["test_return"])
         emit(event="progress", stage=f"episode {ep + 1}/{episodes} · train {history[-1]['train_return'] * 100:+.1f}%", pct=round(8 + 82 * (ep + 1) / episodes, 1))
 
     progress("evaluate", 92)
@@ -1120,10 +1479,121 @@ def versions():
     return v
 
 
+def refs_only(job):
+    """--refs: a finished supervised or semi-supervised run made before the references were written gets them now —
+    no_skill and persistence next to each test row, the no-skill value, persistence's scores, the data fingerprint —
+    only if the data set still gives exactly the run's test rows: the same dates, the same actual values, and a
+    rebuilt no-skill that scores exactly what the run recorded. Otherwise nothing is touched and refs.json says why.
+    No model is trained; the run's own predictions stay as they are."""
+    import numpy as np
+    import pandas as pd
+    fam = job.get("family", "supervised")
+    res_path, pred_path = os.path.join(RUN, "result.json"), os.path.join(RUN, "predictions.csv")
+    with open(res_path, encoding="utf-8") as f:
+        res = json.load(f)
+    out = pd.read_csv(pred_path)
+
+    def verdict(ok, why=""):
+        with open(os.path.join(RUN, "refs.json"), "w", encoding="utf-8") as f:
+            json.dump({"ok": ok, "why": why, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}, f)
+        emit(event="log", text=("references added" if ok else "references not added: " + why))
+
+    task = res.get("task", "classification")
+    transform = job.get("target_transform", "raw")
+    if fam == "supervised":
+        X, y, dates, _, _, _, transform = prepare(job, pd, np)
+        n = len(X)
+        test_size = min(max(float(job.get("test_size", 0.2)), 0.05), 0.5)
+        cut = int(round(n * (1 - test_size)))
+        h = max(0, int(job.get("horizon", 0)))
+        tr_end = cut - h
+        y_tr, y_te = y.iloc[:tr_end], y.iloc[cut:]
+        cap = SUPERVISED_ROW_CAP.get(job.get("algorithm", ""))
+        if cap and len(y_tr) > cap:
+            y_tr = y_tr.iloc[-cap:]
+        if task == "classification":
+            y_tr, y_te = y_tr.astype(int), y_te.astype(int)
+        dates_te = dates.iloc[cut:].astype(str).values
+        pers_te = PERSIST.iloc[cut:].to_numpy(dtype=float) if PERSIST is not None else np.full(len(y_te), np.nan)
+        if task == "classification":
+            base = {"rule": "majority", "class": int(y_tr.mode().iloc[0])}
+            const = base["class"]
+        else:
+            mean = float(y_tr.mean())
+            base = {"rule": "mean_direction" if transform in ("change", "pct_change") else "mean", "value": mean}
+            const = mean
+    elif fam == "semi_supervised":
+        S = semi_split(job, pd, np)
+        te, back, yr, dr, keep, y_semi = S["te"], S["back"], S["yr"], S["dr"], S["keep"], S["y_semi"]
+        y_te = pd.Series(back(yr.iloc[te].astype(int)))
+        dates_te = dr.iloc[te].astype(str).values
+        pr_all = S["persist"].iloc[S["rows"]].reset_index(drop=True) if S["persist"] is not None else None
+        pers_te = pr_all.iloc[te].to_numpy(dtype=float) if pr_all is not None else np.full(len(te), np.nan)
+        const = int(back([pd.Series(y_semi[keep]).mode().iloc[0]])[0])
+        base = {"rule": "majority", "class": const}
+        task, transform = "classification", S["transform"]
+    else:
+        return verdict(False, f"references are added to supervised and semi-supervised runs only, not {fam}")
+
+    # the run's own test rows, rebuilt: they must match what it wrote, or the data set has changed since
+    if len(dates_te) != len(out):
+        return verdict(False, f"the data set now gives {len(dates_te)} test rows, the run had {len(out)}: it was rebuilt since")
+    if not (pd.Series(dates_te).values == out["date"].astype(str).values).all():
+        return verdict(False, "the test rows' dates differ from the run's: the data set was rebuilt since")
+    if not np.allclose(np.asarray(y_te, dtype=float), out["actual"].to_numpy(dtype=float), rtol=0, atol=1e-9):
+        return verdict(False, "the test rows' actual values differ from the run's: the data set was rebuilt since")
+    old = res.get("baseline", {})
+    if task == "classification" and old.get("class") is not None and int(old["class"]) != int(const):
+        return verdict(False, "the rebuilt no-skill class differs from the run's")
+    check = scores(task, np.asarray(y_te), np.full(len(out), const), transform=transform)
+    key = "accuracy" if task == "classification" else "mae"
+    if key in old and abs(float(old[key]) - float(check[key])) > 1e-9 * max(1.0, abs(float(old[key]))):
+        return verdict(False, f"the rebuilt no-skill {key} ({check[key]:.6g}) differs from the run's ({float(old[key]):.6g})")
+
+    # all checked: the references, next to the run's untouched predictions; the files before kept beside
+    import shutil
+    shutil.copyfile(pred_path, os.path.join(RUN, "predictions.before-refs.csv"))
+    shutil.copyfile(res_path, os.path.join(RUN, "result.before-refs.json"))
+    persistence = reference_columns(out, task, transform, {**old, **base}, pers_te, np)
+    out.to_csv(pred_path, index=False)
+    res["baseline"] = {**old, **{k: v for k, v in base.items() if k not in old}}
+    res["persistence"] = persistence
+    res["references_added"] = time.strftime("%Y-%m-%d")
+    res["data"] = data_fingerprint()
+    with open(res_path, "w", encoding="utf-8") as f:
+        json.dump(clean(res), f, indent=1)
+    verdict(True)
+
+
+def data_fingerprint():
+    """The data set as the run read it: SHA-256 of the file, its size, rows and first and last date (frame())."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(DATA, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return {"sha256": h.hexdigest(), "bytes": os.path.getsize(DATA), **DATA_INFO}
+
+
+def add_data_info():
+    """Written into result.json once the family is done: ml_compare ranks together only runs on the same data version,
+    and a re-run knows whether it can give the same result."""
+    path = os.path.join(RUN, "result.json")
+    with open(path, encoding="utf-8") as f:
+        res = json.load(f)
+    res["data"] = data_fingerprint()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(clean(res), f, indent=1)
+
+
 def main():
     try:
         job = load_job()
         fam = job.get("family", "supervised")
+        if "--refs" in FLAGS:
+            refs_only(job)
+            emit(event="done")
+            return
         if fam == "supervised":
             supervised(job)
         elif fam == "unsupervised":
@@ -1136,6 +1606,7 @@ def main():
             reinforcement(job)
         else:
             raise ValueError(f"the family '{fam}' is not available yet")
+        add_data_info()
         emit(event="done")
     except Exception as e:  # the app shows the message; the traceback goes to the run's log
         with open(os.path.join(RUN, "error.txt"), "w", encoding="utf-8") as f:

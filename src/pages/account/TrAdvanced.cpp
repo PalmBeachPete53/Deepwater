@@ -5,6 +5,7 @@
 #include "account/Contracts.h"
 #include "ui/Format.h"
 #include "core/I18n.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <algorithm>
@@ -22,12 +23,12 @@ AdvancedView::AdvancedView(QWidget* parent) : TrView(parent) {
   m_head->setFrame(false);
   m_head->setPaint([this](QPainter& p, const QRectF& r, const QPointF&, double) {
     p.setFont(mono(10, false, 2.3)); p.setPen(theme::map("#4a463c"));
-    p.drawText(QRectF(0, 0, r.width() - 140, r.height()), Qt::AlignVCenter | Qt::AlignLeft,
+    p.drawText(m_phone ? QRectF(0, 0, r.width(), 27) : QRectF(0, 0, r.width() - 140, r.height()), Qt::AlignVCenter | Qt::AlignLeft,
                (m_d.stats.n == 1 ? QCoreApplication::translate("account", "ADVANCED DETAILS · %1 CLOSED TRADE") : QCoreApplication::translate("account", "ADVANCED DETAILS · %1 CLOSED TRADES")).arg(m_d.stats.n));
-    const QRectF box(r.width() - 118, 1, 118, 25);
+    const QRectF box = toggleRect();
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(theme::map("#2a2618")); p.setBrush(Qt::NoBrush); p.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5));
-    const QRectF a(box.left() + 1, box.top() + 1, 26, box.height() - 2), b(a.right(), a.top(), box.right() - 1 - a.right(), a.height());
+    const QRectF a(box.left() + 1, box.top() + 1, m_phone ? 44 : 26, box.height() - 2), b(a.right(), a.top(), box.right() - 1 - a.right(), a.height());
     p.setPen(Qt::NoPen); p.setBrush(theme::map("#2e2808"));
     p.drawRect(m_pct ? b : a);
     p.setFont(mono(11, true, 2));
@@ -35,9 +36,10 @@ AdvancedView::AdvancedView(QWidget* parent) : TrView(parent) {
     p.setPen(m_pct ? theme::map("#eed882") : c().dim); p.drawText(b.translated(1, 0), Qt::AlignCenter, QCoreApplication::translate("account", "% BALANCE"));
   });
   connect(m_head, &PaintPanel::clicked, this, [this](const QPointF& pt) {
-    const qreal x0 = m_head->width() - 118;
-    if (pt.x() < x0) return;
-    const bool pct = pt.x() > x0 + 27;
+    const QRectF box = toggleRect();
+    const qreal x0 = box.left();
+    if (pt.x() < x0 || (m_phone && !box.contains(pt))) return;
+    const bool pct = pt.x() > x0 + (m_phone ? 45 : 27);
     if (pct == m_pct) return;
     if (pct && m_d.balance <= 0) { m_head->setToolTip(QCoreApplication::translate("account", "Set the account's starting balance (account box › Edit account) to see % of balance.")); return; }
     m_pct = pct; setData(m_d);
@@ -61,6 +63,12 @@ AdvancedView::AdvancedView(QWidget* parent) : TrView(parent) {
     m_charts << w;
   }
   rebuild();
+}
+
+// $ / % BALANCE switch: right of the header line; phones: on its own row under the title, 34 px tall (finger)
+QRectF AdvancedView::toggleRect() const {
+  const qreal w = m_head->width();
+  return m_phone ? QRectF(w - 170, 35, 170, 34) : QRectF(w - 118, 1, 118, 25);
 }
 
 void AdvancedView::rebuild() {
@@ -103,7 +111,7 @@ void AdvancedView::rebuild() {
     const QDate end = QDateTime::fromSecsSinceEpoch(t1).toLocalTime().date();
     const bool multiYear = QDateTime::fromSecsSinceEpoch(t0).date().year() != end.year();
     int months = 0; for (QDate d = m; d <= end; d = d.addMonths(1)) ++months;
-    const int every = std::max(1, int(std::ceil(months / 7.0)));
+    const int every = std::max(1, int(std::ceil(months / (m_phone ? 4.0 : 7.0))));   // phones: ~300 px of plot
     int k = 0;
     for (QDate d = m; d <= end; d = d.addMonths(1), ++k) {
       if (k % every) continue;
@@ -211,6 +219,7 @@ void AdvancedView::rebuild() {
       for (const auto& w : m_d.stats.byWeekday) { b.labels << w.label; b.values << (counts ? w.count : conv(w.pnl)); }
       if (counts) { b.countAxis = true; for (int i = 0; i < b.values.size(); ++i) b.colors << c().neutralBar; b.xfmt = [](double v) { return QString::number(int(v)); }; }
       else b.xfmt = axisFmt;
+      if (m_phone) b.nticks = 4;                    // phones: ~270 px of axis for 80 px labels
       const int h = drawHBars(p, b, anim, mouse);
       if (h >= 0) {
         const auto& w = m_d.stats.byWeekday[h];
@@ -233,7 +242,7 @@ void AdvancedView::rebuild() {
         b.sub << t.close.toLocalTime().toString("dd/MM/yyyy");
         b.values << conv(t.net());
       }
-      b.anchorRight = bottom; b.nticks = bottom ? 5 : 6; b.xfmt = axisFmt;
+      b.anchorRight = bottom; b.nticks = m_phone ? 4 : bottom ? 5 : 6; b.xfmt = axisFmt;
       if (pick.isEmpty()) {
         p.setFont(chart(12)); p.setPen(c().faint);
         p.drawText(r, Qt::AlignCenter, bottom ? QCoreApplication::translate("account", "No losing trade") : QCoreApplication::translate("account", "No winning trade"));
@@ -254,6 +263,7 @@ void AdvancedView::rebuild() {
       for (const auto& s : top) { b.labels << s.label; b.values << (counts ? s.count : conv(s.pnl)); }
       if (counts) { b.countAxis = true; for (int i = 0; i < b.values.size(); ++i) b.colors << c().neutralBar; b.xfmt = [](double v) { return QString::number(int(v)); }; }
       else b.xfmt = axisFmt;
+      if (m_phone) b.nticks = 4;
       const int h = drawHBars(p, b, anim, mouse);
       if (h >= 0) {
         const auto& s = top[h];
@@ -267,6 +277,14 @@ void AdvancedView::rebuild() {
 }
 
 int AdvancedView::relayout(int W, int H) {
+  m_phone = ui::compact(W);
+  if (m_phone) {
+    // phones: one column of charts; the header's $ / % switch gets its own row
+    m_head->setGeometry(10, 10, W - 20, 69);
+    int y = 10 + 69 + 10;
+    for (auto* ch : m_charts) { ch->setGeometry(10, y, W - 20, 280); ch->setProperty("padB", 39); y += 280 + 11; }
+    return y - 11 + 10;
+  }
   m_head->setGeometry(10, 10, W - 20, 27);
   // three columns down to 1200 px; below, two columns (the last chart spans both)
   const int cols = W >= 1200 ? 3 : 2;

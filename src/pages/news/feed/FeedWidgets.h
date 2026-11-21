@@ -106,6 +106,8 @@ public:
   // 300 at the reference; taller on wide windows (bigger image); short viewports (< 560 px, laptop windows)
   // cap the image at 30 % of the viewport height so the cards below stay in view
   static int preferredHeight(int width, int viewHeight = 0);
+  // phones (< 520 px wide): image on top, headline below (up to 3 lines reserved, so translations do not move it)
+  static int phoneHeight(int width, bool tag);   // tag: a topic filter is on (the topic is shown)
   LeadStory(FeedState* st, QWidget* parent = nullptr);
   void setStory(const news::Story& s, bool showTag);
   void clear() { m_has = false; update(); }
@@ -179,6 +181,9 @@ class HeadlinesPanel : public QWidget {
 public:
   HeadlinesPanel(FeedState* st, QWidget* parent = nullptr);
   void setStories(const QList<news::Story>& s);
+  // phones: the panel sits in the page's scrolling column and shows only its first rows, at their full height
+  void setMaxRows(int n) { if (n != m_maxRows) { m_maxRows = n; relayout(); update(); } }
+  int contentHeight() const { return m_rows.isEmpty() ? 120 : int(m_rows.last().y + m_rows.last().h) + 6; }
 protected:
   void paintEvent(QPaintEvent*) override;
   void wheelEvent(QWheelEvent*) override;
@@ -196,6 +201,7 @@ private:
   double m_scroll = 0, m_target = 0;
   QTimer m_anim;
   int m_hover = -1;
+  int m_maxRows = -1;                // -1: every row (desktop), else the phone's first rows
   bool m_dirty = false;              // texts changed while hidden
 };
 }  // namespace news::pages

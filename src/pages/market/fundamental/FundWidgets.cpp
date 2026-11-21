@@ -67,6 +67,10 @@ void CardStrip::setScores(const QVector<Score>& ranked, bool ready) {
 void CardStrip::setSelected(const QString& ccy, bool fresh) { m_sel = ccy; m_fresh = fresh; update(); }
 
 QRectF CardStrip::cardRect(int i) const {
+  if (width() < 760) {   // phone: 4 x 2
+    const double gap = 8, w = (width() - 28 - 3 * gap) / 4.0;
+    return QRectF(14 + (i % 4) * (w + gap), (i / 4) * (93 + 8), w, 93);
+  }
   const double gap = 8, w = (width() - 28 - 7 * gap) / 8.0;
   return QRectF(14 + i * (w + gap), 0, w, 93);
 }
@@ -90,19 +94,21 @@ void CardStrip::paintEvent(QPaintEvent*) {
     p.setBrush(Qt::NoBrush);
     p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
     // row 1
-    // narrow cards (< 150 px, windows under ~1300 px): no rank index, flag and code shift left, code 15 px
-    const bool compact = r.width() < 150;
+    // narrow cards (< 150 px, windows under ~1300 px): no rank index, flag and code shift left, code 15 px;
+    // phone cards (four per row): smaller flag, code and score so the score never runs into the code
+    const bool compact = r.width() < 150, tiny = width() < 760;
     if (!compact) {
       p.setFont(mono(9)); p.setPen(c.label);
       p.drawText(QRectF(r.left() + 11, r.top() + 13, 20, 16), Qt::AlignLeft | Qt::AlignVCenter, QString("%1").arg(i + 1, 2, 10, QChar('0')));
     }
-    p.drawPixmap(QPointF(r.left() + (compact ? 9 : 30), r.top() + 14), ui::flag(s.ccy, QSize(20, 14)));
-    p.setFont(sans(compact ? 15 : 16, QFont::Bold)); p.setPen(sel && m_fresh ? theme::map("#f0d070") : c.white);
-    p.drawText(QRectF(r.left() + (compact ? 34 : 57), r.top() + 11, 80, 20), Qt::AlignLeft | Qt::AlignVCenter, s.ccy);
+    if (tiny) p.drawPixmap(QPointF(r.left() + 6, r.top() + 15), ui::flag(s.ccy, QSize(16, 11)));
+    else p.drawPixmap(QPointF(r.left() + (compact ? 9 : 30), r.top() + 14), ui::flag(s.ccy, QSize(20, 14)));
+    p.setFont(sans(tiny ? 13 : compact ? 15 : 16, QFont::Bold)); p.setPen(sel && m_fresh ? theme::map("#f0d070") : c.white);
+    p.drawText(QRectF(r.left() + (tiny ? 25 : compact ? 34 : 57), r.top() + 11, 80, 20), Qt::AlignLeft | Qt::AlignVCenter, s.ccy);
     const bool has = m_ready && std::isfinite(s.score);
     const QColor sc = !has ? c.sub : s.bias == "BULLISH" ? c.cyanScore.lighter(130) : s.bias == "BEARISH" ? c.redScore : c.text;
-    p.setFont(mono(13, QFont::Bold)); p.setPen(sc);
-    p.drawText(QRectF(r.right() - 81, r.top() + 11, 70, 20), Qt::AlignRight | Qt::AlignVCenter,
+    p.setFont(mono(tiny ? 10 : 13, QFont::Bold)); p.setPen(sc);
+    p.drawText(QRectF(r.right() - (tiny ? 76 : 81), r.top() + 11, 70, 20), Qt::AlignRight | Qt::AlignVCenter,
                has ? QString("%1%2").arg(s.score > 0 ? "+" : "").arg(int(s.score)) : dash());
     // row 2: centred gauge
     const double y = r.top() + 43, x0 = r.left() + 11, x1 = r.right() - 11, cx = (x0 + x1) / 2;
@@ -121,7 +127,7 @@ void CardStrip::paintEvent(QPaintEvent*) {
       p.setRenderHint(QPainter::Antialiasing, false);
     }
     // row 3: bias pill
-    const QRectF pr(r.left() + 11, r.top() + 52, r.width() - 22, 32);
+    const QRectF pr = tiny ? QRectF(r.left() + 6, r.top() + 52, r.width() - 12, 32) : QRectF(r.left() + 11, r.top() + 52, r.width() - 22, 32);
     QColor bg = c.pillNeutral, fg = c.pillNeutralText, bd = theme::mix(c.pillNeutral, c.text, 0.08);
     if (has && s.bias == "BULLISH") { bg = c.pillBull; fg = c.cyanText; bd = c.pillBullBorder; }
     else if (has && s.bias == "BEARISH") { bg = c.pillBear; fg = c.pillBearText; bd = theme::mix(c.pillBear, c.pillBearText, 0.2); }
@@ -131,8 +137,15 @@ void CardStrip::paintEvent(QPaintEvent*) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(QPen(bd, 1)); p.setBrush(pg); p.drawRoundedRect(pr.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
     p.setRenderHint(QPainter::Antialiasing, false);
-    p.setFont(mono(12, QFont::Bold, 2)); p.setPen(fg);
-    p.drawText(pr.adjusted(2, 0, 0, 0), Qt::AlignCenter, has ? tw(s.bias) : (m_ready ? dash() : QCoreApplication::translate("seasonal", "LOADING")));
+    const QString word = has ? tw(s.bias) : (m_ready ? dash() : QCoreApplication::translate("seasonal", "LOADING"));
+    QFont wf = mono(12, QFont::Bold, 2);
+    if (tiny)   // phone: the bias word steps down until it fits the pill
+      for (const auto& [px, sp] : {std::pair{12, 0.8}, std::pair{11, 0.4}, std::pair{10, 0.2}, std::pair{9, 0.0}}) {
+        if (QFontMetricsF(wf).horizontalAdvance(word) <= pr.width() - 6) break;
+        wf = mono(px, QFont::Bold, sp);
+      }
+    p.setFont(wf); p.setPen(fg);
+    p.drawText(pr.adjusted(2, 0, 0, 0), Qt::AlignCenter, word);
   }
 }
 void CardStrip::mouseMoveEvent(QMouseEvent* e) {
@@ -352,12 +365,21 @@ PolicyCard::PolicyCard(QWidget* parent) : QWidget(parent) {
   m_infl = new HistoryChart(HistoryChart::Inflation, this);
 }
 void PolicyCard::resizeEvent(QResizeEvent*) {
+  if (width() < 760) {   // phone: the two charts one under the other
+    m_policy->setGeometry(11, kPhoneTop, width() - 22, kPhoneChartH);
+    m_infl->setGeometry(11, kPhoneTop + kPhoneChartH + 10, width() - 22, kPhoneChartH);
+    return;
+  }
   const int w = (width() - 22 - 12) / 2;
   m_policy->setGeometry(11, 186, w, height() - 186 - 9);
   m_infl->setGeometry(11 + w + 12, 186, width() - 22 - 12 - w, height() - 186 - 9);
 }
 QRectF PolicyCard::rangeRect(int i) const {
   static const int xs[] = {0, 32, 70, 106}, ws[] = {28, 34, 32, 36};
+  if (width() < 760) {   // phone: finger-sized range buttons under the gauge
+    static const int pxs[] = {0, 46, 96, 146}, pws[] = {42, 46, 46, 50};
+    return QRectF(width() - 12 - 196 + pxs[i], kPhoneTop - 38, pws[i], 30);
+  }
   return QRectF(width() - 15 - 142 + xs[i], 156, ws[i], 18);
 }
 void PolicyCard::setData(const Inputs* in, const QString& ccy, const QString& status, bool animate) {
@@ -385,7 +407,16 @@ void PolicyCard::paintEvent(QPaintEvent*) {
   drawMacroCard(p, rect(), c.card, c.panelBorder);
   const CurrencyMeta* cm = meta(m_ccy);
   const QString bankTitle = cm ? tw(cm->bankTitle) : m_ccy;
-  drawCardTitle(p, QPointF(14, 13), QCoreApplication::translate("seasonal", "MONETARY POLICY · %1").arg(bankTitle));
+  // phone (< 760 px): rate block, move pill, next meeting, inflation gauge and history row stacked (positions below)
+  const bool phone = width() < 760;
+  if (phone) {   // title: tighter letter spacing, then elided (long bank names)
+    const QString t = QCoreApplication::translate("seasonal", "MONETARY POLICY · %1").arg(bankTitle);
+    QFont tf = mono(10, QFont::Normal, 3);
+    for (qreal sp : {1.5, 0.5}) if (QFontMetricsF(tf).horizontalAdvance(t) > width() - 40) tf = mono(10, QFont::Normal, sp);
+    drawDiamond(p, QPointF(14, 13), 3.6, c.diamond);
+    p.setFont(tf); p.setPen(c.label2);
+    p.drawText(QRectF(23, 5, width() - 37, 16), Qt::AlignLeft | Qt::AlignVCenter, QFontMetricsF(tf).elidedText(t, Qt::ElideRight, width() - 37));
+  } else drawCardTitle(p, QPointF(14, 13), QCoreApplication::translate("seasonal", "MONETARY POLICY · %1").arg(bankTitle));
   // policy rate
   p.setFont(mono(9, QFont::Normal, 2.5)); p.setPen(c.label);
   p.drawText(QRectF(11, 52, 400, 14), Qt::AlignLeft | Qt::AlignVCenter,
@@ -401,7 +432,7 @@ void PolicyCard::paintEvent(QPaintEvent*) {
   p.drawText(QRectF(11, 117, 190, 14), Qt::AlignLeft | Qt::AlignVCenter, prior);
   // last move pill
   const Move mv = m_has ? lastMove(m_in) : Move::Unknown;
-  const QRectF mp(191, 73, 301, 28);
+  const QRectF mp = phone ? QRectF(11, 140, width() - 22, 30) : QRectF(191, 73, 301, 28);
   p.setRenderHint(QPainter::Antialiasing);
   if (mv == Move::Hike || mv == Move::Cut) {
     QLinearGradient g(mp.topLeft(), mp.topRight());
@@ -413,7 +444,7 @@ void PolicyCard::paintEvent(QPaintEvent*) {
   p.setPen(mv == Move::Hike ? c.hikeText : mv == Move::Cut ? c.cutText : mv == Move::Hold ? c.holdText : c.sub);
   p.drawText(mp, Qt::AlignCenter, QCoreApplication::translate("seasonal", "LAST MOVE · %1").arg(tw(moveWord(mv))));
   // next meeting
-  const QRectF nm(191, 107, 301, 23);
+  const QRectF nm = phone ? QRectF(11, 176, width() - 22, 26) : QRectF(191, 107, 301, 23);
   p.setRenderHint(QPainter::Antialiasing, false);
   p.setPen(c.meetBorder); p.setBrush(Qt::NoBrush); p.drawRect(nm.adjusted(0.5, 0.5, -0.5, -0.5));
   {
@@ -439,9 +470,10 @@ void PolicyCard::paintEvent(QPaintEvent*) {
   {
     const double target = cm ? cm->target : 2.0;
     const QString tl = cm ? cm->targetLabel : QString("2%");
-    const double gx0 = 506, gx1 = width() - 12, gy = 78;
+    const double dy = phone ? 182 : 0;   // phone: the gauge block sits under the meeting box
+    const double gx0 = phone ? 20 : 506, gx1 = width() - (phone ? 20 : 12), gy = 78 + dy;
     p.setFont(mono(9, QFont::Normal, 3)); p.setPen(c.label);
-    p.drawText(QRectF(gx0, 40, 500, 14), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "INFLATION VS THE %1 TARGET").arg(tl));
+    p.drawText(QRectF(phone ? 11 : gx0, 40 + dy, 500, 14), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "INFLATION VS THE %1 TARGET").arg(tl));
     double lo = 0, hi = 6;
     if (m_has) {
       for (double v : {m_in.cpi.value, m_in.coreCpi.value}) if (std::isfinite(v)) { lo = qMin(lo, std::floor(v)); hi = qMax(hi, std::ceil(v)); }
@@ -456,9 +488,9 @@ void PolicyCard::paintEvent(QPaintEvent*) {
       p.fillRect(QRectF(X(cm->targetLo), gy - 4, X(cm->targetHi) - X(cm->targetLo), 8), theme::alpha(theme::map("#d8d0a0"), 40));
     p.fillRect(QRectF(X(target) - 1, gy - 15, 2, 30), theme::map("#e8e6e0"));
     p.setFont(mono(9)); p.setPen(c.gaugeLabel);
-    p.drawText(QRectF(gx0, 97, 60, 14), Qt::AlignLeft | Qt::AlignVCenter, QString::number(lo, 'f', 0) + "%");
-    p.drawText(QRectF(gx1 - 60, 97, 60, 14), Qt::AlignRight | Qt::AlignVCenter, QString::number(hi, 'f', 0) + "%");
-    p.drawText(QRectF(X(target) - 60, 97, 120, 14), Qt::AlignCenter, QCoreApplication::translate("seasonal", "%1 target").arg(tl));
+    p.drawText(QRectF(gx0, 97 + dy, 60, 14), Qt::AlignLeft | Qt::AlignVCenter, QString::number(lo, 'f', 0) + "%");
+    p.drawText(QRectF(gx1 - 60, 97 + dy, 60, 14), Qt::AlignRight | Qt::AlignVCenter, QString::number(hi, 'f', 0) + "%");
+    p.drawText(QRectF(X(target) - 60, 97 + dy, 120, 14), Qt::AlignCenter, QCoreApplication::translate("seasonal", "%1 target").arg(tl));
     const bool hasH = m_has && m_in.cpi.ok(), hasC = m_has && m_in.coreCpi.ok();
     if (hasC) {
       p.setPen(QPen(theme::map(0, 0, 0, 160), 1)); p.setBrush(theme::map(255, 255, 255)); p.drawEllipse(QPointF(X(m_in.coreCpi.value), gy), 3.5, 3.5);
@@ -476,18 +508,18 @@ void PolicyCard::paintEvent(QPaintEvent*) {
     // legend
     double lx = gx0;
     p.setFont(mono(11));
-    drawDiamond(p, QPointF(lx + 4, 124), 4, c.headline);
+    drawDiamond(p, QPointF(lx + 4, 124 + dy), 4, c.headline);
      const QString hl = QCoreApplication::translate("seasonal", "headline %1").arg(hasH ? QString::number(m_in.cpi.value, 'f', 1) + "%" : dash());
-    p.setPen(c.legendGold); p.drawText(QRectF(lx + 14, 117, 200, 14), Qt::AlignLeft | Qt::AlignVCenter, hl);
+    p.setPen(c.legendGold); p.drawText(QRectF(lx + 14, 117 + dy, 200, 14), Qt::AlignLeft | Qt::AlignVCenter, hl);
     lx += 14 + QFontMetricsF(mono(11)).horizontalAdvance(hl) + 18;
-    p.setPen(Qt::NoPen); p.setBrush(theme::map(255, 255, 255)); p.drawEllipse(QPointF(lx + 3, 124), 3, 3);
+    p.setPen(Qt::NoPen); p.setBrush(theme::map(255, 255, 255)); p.drawEllipse(QPointF(lx + 3, 124 + dy), 3, 3);
     p.setPen(theme::map("#e8e6e0"));
-    p.drawText(QRectF(lx + 12, 117, 200, 14), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "core %1").arg(hasC ? QString::number(m_in.coreCpi.value, 'f', 1) + "%" : dash()));
+    p.drawText(QRectF(lx + 12, 117 + dy, 200, 14), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "core %1").arg(hasC ? QString::number(m_in.coreCpi.value, 'f', 1) + "%" : dash()));
     p.setRenderHint(QPainter::Antialiasing, false);
   }
   // history label + range buttons
   p.setFont(mono(9, QFont::Normal, 3)); p.setPen(c.label);
-  p.drawText(QRectF(11, 158, 200, 14), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "HISTORY"));
+  p.drawText(QRectF(11, phone ? rangeRect(0).center().y() - 7 : 158, 200, 14), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "HISTORY"));
   static const char* names[] = {QT_TRANSLATE_NOOP("seasonal", "5Y"), QT_TRANSLATE_NOOP("seasonal", "10Y"), QT_TRANSLATE_NOOP("seasonal", "20Y"), QT_TRANSLATE_NOOP("seasonal", "MAX")};
   for (int i = 0; i < 4; ++i) {
     const QRectF r = rangeRect(i);
@@ -738,6 +770,13 @@ QVector<QPair<double, double>> HeatmapCard::computeColumns() const {
   return out;
 }
 QRectF HeatmapCard::cell(int row, int c) const {
+  if (width() < 760) {   // phone: line 1 currency + bias, line 2 the six signals
+    const double y = 70 + row * kPhonePitch, biasW = 112, gap = 5;
+    if (c == 0) return QRectF(13, y, width() - 26 - biasW - gap, 30);
+    if (c == 7) return QRectF(width() - 13 - biasW, y, biasW, 30);
+    const double cw = (width() - 26 - 5 * gap) / 6.0;
+    return QRectF(13 + (c - 1) * (cw + gap), y + 34, cw, 42);
+  }
   const auto cols = columns();
   return QRectF(cols[c].first, 70 + row * 63.5, cols[c].second, 58);
 }
@@ -763,9 +802,17 @@ void HeatmapCard::paintEvent(QPaintEvent*) {
   const auto& k = col();
   drawMacroCard(p, rect(), k.card, k.panelBorder);
   drawCardTitle(p, QPointF(14, 14), QCoreApplication::translate("seasonal", "FUNDAMENTAL HEATMAP · %1 CURRENCIES").arg(m_scores.size()));
-  const auto cols = columns();
   const QStringList heads{QCoreApplication::translate("seasonal", "CURRENCY"), tw(columnName(0)), tw(columnName(1)), tw(columnName(2)), tw(columnName(3)), tw(columnName(4)), tw(columnName(5)), QCoreApplication::translate("seasonal", "BIAS")};
-  for (int c = 0; c < 8; ++c) {
+  const bool phone = width() < 760;
+  if (phone)   // phone: the six signal names over their cells (the currency and bias speak for themselves)
+    for (int c = 1; c <= 6; ++c) {
+      const QRectF r = cell(0, c);
+      const QFont f = fitFont(heads[c], 9, 1, r.width(), QFont::Normal);
+      p.setFont(f); p.setPen(k.dim);
+      p.drawText(QRectF(r.left(), 45, r.width(), 16), Qt::AlignHCenter | Qt::AlignVCenter, QFontMetricsF(f).elidedText(heads[c], Qt::ElideRight, r.width()));
+    }
+  const auto cols = phone ? QVector<QPair<double, double>>() : columns();
+  for (int c = 0; c < 8 && !phone; ++c) {
     p.setFont(mono(10, c == 7 ? QFont::Bold : QFont::Normal, c == 7 ? 2 : 3));
     p.setPen(c == 7 ? k.biasHeader : k.dim);
     p.drawText(QRectF(cols[c].first + (c == 0 ? 6 : 0), 45, cols[c].second, 16), (c == 0 ? Qt::AlignLeft : Qt::AlignHCenter) | Qt::AlignVCenter, heads[c]);
@@ -800,9 +847,10 @@ void HeatmapCard::paintEvent(QPaintEvent*) {
     }
     p.setPen(QPen(border, 1)); p.setBrush(fill); p.drawRoundedRect(rc.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
     if (c == 0) {
-      p.drawPixmap(QPointF(rc.left() + 18, rc.center().y() - 7), ui::flag(s.ccy, QSize(20, 14)));
+      const double fx = phone ? 10 : 18;
+      p.drawPixmap(QPointF(rc.left() + fx, rc.center().y() - 7), ui::flag(s.ccy, QSize(20, 14)));
       p.setFont(sans(15, QFont::Bold)); p.setPen(sel ? theme::map("#f0d070") : k.white);
-      p.drawText(QRectF(rc.left() + 46, rc.top(), 60, rc.height()), Qt::AlignLeft | Qt::AlignVCenter, s.ccy);
+      p.drawText(QRectF(rc.left() + fx + 28, rc.top(), 60, rc.height()), Qt::AlignLeft | Qt::AlignVCenter, s.ccy);
       p.setFont(mono(11)); p.setPen(k.scoreDim);
       const QString sc = m_ready && std::isfinite(s.score) ? QString("%1%2").arg(s.score > 0 ? "+" : "").arg(int(s.score)) : dash();
       p.drawText(QRectF(rc.right() - 60, rc.top(), 50, rc.height()), Qt::AlignRight | Qt::AlignVCenter, sc);
@@ -812,15 +860,16 @@ void HeatmapCard::paintEvent(QPaintEvent*) {
       p.setFont(f); p.setPen(word);
       p.drawText(rc.adjusted(2, 0, 0, 0), Qt::AlignCenter, QFontMetricsF(f).elidedText(w, Qt::ElideRight, rc.width() - 8));
     } else {
-      const QFont f = fitFont(w, 12, 1.5, rc.width() - 12);
-      const QString we = QFontMetricsF(f).elidedText(w, Qt::ElideRight, rc.width() - 8);
+      const QFont f = fitFont(w, 12, 1.5, rc.width() - (phone ? 6 : 12));
+      const QString we = QFontMetricsF(f).elidedText(w, Qt::ElideRight, rc.width() - (phone ? 4 : 8));
       p.setFont(f); p.setPen(word);
       if (sl.isEmpty()) p.drawText(rc, Qt::AlignCenter, we);
       else {
-        p.drawText(QRectF(rc.left(), rc.top() + 13, rc.width(), 16), Qt::AlignCenter, we);
-        const QFont sf = fitFont(sl, 10, 0, rc.width() - 12, QFont::Normal);
+        const double wy = phone ? 5 : 13, sy = phone ? 21 : 29;   // phone cells are 42 px high (58 on desktop)
+        p.drawText(QRectF(rc.left(), rc.top() + wy, rc.width(), 16), Qt::AlignCenter, we);
+        const QFont sf = fitFont(sl, 10, 0, rc.width() - (phone ? 6 : 12), QFont::Normal);
         p.setFont(sf); p.setPen(sub);
-        p.drawText(QRectF(rc.left(), rc.top() + 29, rc.width(), 15), Qt::AlignCenter, QFontMetricsF(sf).elidedText(sl, Qt::ElideRight, rc.width() - 8));
+        p.drawText(QRectF(rc.left(), rc.top() + sy, rc.width(), 15), Qt::AlignCenter, QFontMetricsF(sf).elidedText(sl, Qt::ElideRight, rc.width() - (phone ? 4 : 8)));
       }
     }
   };

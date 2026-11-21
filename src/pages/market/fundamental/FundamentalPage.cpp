@@ -6,6 +6,7 @@
 #include "core/Settings.h"
 #include "ui/Kit.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QCoreApplication>
 #include "core/I18n.h"
@@ -55,9 +56,13 @@ public:
   bool stacked() const { return cw() < 1240; }
   int rightW() const { return stacked() ? 0 : (cw() <= 1728 ? 429 : qMin(640, 429 + (cw() - 1728) / 4)); }
   int leftW() const { return stacked() ? cw() - 28 : cw() - 14 - rightW() - 12 - 14; }
+  // Phone held upright (< 760 px): cards 4 x 2, policy card stacked, read card then comparator, two-line heatmap,
+  // release detail rows on two lines. dy() = how much lower the macro file title sits under the taller card strip.
+  bool phone() const { return ui::compact(width()); }
+  int dy() const { return phone() ? CardStrip::heightFor(cw()) - 93 : 0; }
   QRectF detailButton() const {
     const double w = QFontMetricsF(mono(10, QFont::Normal, 3)).horizontalAdvance(QString::fromUtf8("\u25b8 ") + QCoreApplication::translate("seasonal", "%1 RELEASE DETAIL").arg(ccy)) + 24;
-    return QRectF(x0() + 14, heatmap->geometry().bottom() + 16, w, 22);
+    return QRectF(x0() + 14, heatmap->geometry().bottom() + 16, w, phone() ? 34 : 22);
   }
   static QString footerText() {
     return QCoreApplication::translate("seasonal", "LATEST PUBLISHED RELEASES (OFFICIAL AGENCIES, CENTRAL BANKS, BIS) · ▲▼ COLOUR = WHETHER THE "
@@ -74,7 +79,7 @@ public:
   int footerH() const { return wrappedH(m_footerH, mono(9, QFont::Normal, 1.5), cw() - 28, 400, footerText()); }
   int methodH() const { return wrappedH(m_methodH, prose(12), cw() - 28, 600, rules().replace('\n', "  ")); }
   // cursorX is in the centred content's coordinates (painted after translate(x0(), 0)): the repaint rect must be too
-  QRect cursorRect() const { return QRect(x0() + cursorX - 1, 118, 10, 16); }
+  QRect cursorRect() const { return QRect(x0() + cursorX - 1, 118 + dy(), 10, 16); }
   int cursorX = 0;
 
   struct DetailRow { QString name, latest, previous, period, released, source; };
@@ -103,6 +108,7 @@ public:
   }
 
   void place() {
+    if (phone()) { placePhone(); return; }
     const int X = x0(), lw = leftW();
     strip->setGeometry(X, 16, cw(), 93);
     // history charts: 281 px at the reference (548 px wide), taller on wide windows
@@ -129,6 +135,21 @@ public:
     if (minimumHeight() != h) { setMinimumHeight(h); setMaximumHeight(h); }
     update();
   }
+  int detailRowH() const { return phone() ? 40 : 24; }
+  void placePhone() {
+    const int w = width(), lw = w - 28, d = dy();
+    strip->setGeometry(0, 16, w, CardStrip::heightFor(w));
+    policy->setGeometry(14, 200 + d, lw, PolicyCard::phoneHeight());
+    int y = 200 + d + PolicyCard::phoneHeight() + 15;
+    const int rh = read->heightFor(lw);
+    read->setGeometry(14, y, lw, rh); y += rh + 12;
+    comparator->setGeometry(14, y, lw, 412); y += 412 + 15;
+    heatmap->setGeometry(14, y, lw, HeatmapCard::phoneHeightForRows(8));
+    const int detailH = detailOpen ? 34 + int(detailRows().size()) * detailRowH() + 8 : 0;
+    const int h = int(detailButton().bottom()) + 8 + detailH + 6 + footerH() + 6 + methodH() + 24;
+    if (minimumHeight() != h) { setMinimumHeight(h); setMaximumHeight(h); }
+    update();
+  }
 protected:
   void resizeEvent(QResizeEvent*) override { place(); }
   void mousePressEvent(QMouseEvent* e) override {
@@ -146,17 +167,18 @@ protected:
     // macro file title
     const QString lab = QCoreApplication::translate("seasonal", "MACRO FILE · %1").arg(cm ? tw(cm->country) : ccy);
     const QFont lf = mono(10, QFont::Normal, 3);
+    const int d = dy();
     p.setFont(lf); p.setPen(c.label);
-    p.drawText(QRectF(14, 118, 600, 16), Qt::AlignLeft | Qt::AlignVCenter, lab);
+    p.drawText(QRectF(14, 118 + d, 600, 16), Qt::AlignLeft | Qt::AlignVCenter, lab);
     cursorX = 14 + int(QFontMetricsF(lf).horizontalAdvance(lab)) + 2;
-    if (cursorOn) p.fillRect(QRectF(cursorX, 120, 7, 12), c.gold);
-    p.drawPixmap(QPointF(14, 150), ui::flag(ccy, QSize(20, 14)));
+    if (cursorOn) p.fillRect(QRectF(cursorX, 120 + d, 7, 12), c.gold);
+    p.drawPixmap(QPointF(14, 150 + d), ui::flag(ccy, QSize(20, 14)));
     p.setFont(sans(32, QFont::ExtraBold, 3)); p.setPen(theme::map("#f3f2ef"));
-    p.drawText(QRectF(44, 136, 300, 42), Qt::AlignLeft | Qt::AlignVCenter, ccy);
+    p.drawText(QRectF(44, 136 + d, 300, 42), Qt::AlignLeft | Qt::AlignVCenter, ccy);
     // gold rule fading right
     QLinearGradient g(14, 0, 14 + leftW(), 0);
     g.setColorAt(0, theme::map("#aca48f")); g.setColorAt(0.6, theme::alpha(theme::map("#aca48f"), 120)); g.setColorAt(1, theme::alpha(theme::map("#aca48f"), 0));
-    p.fillRect(QRectF(14, 186, leftW(), 1), g);
+    p.fillRect(QRectF(14, 186 + d, leftW(), 1), g);
     // release detail
     const QRectF b = detailButton().translated(-x0(), 0);
     p.setPen(theme::map("#2a2518")); p.setBrush(Qt::NoBrush); p.drawRect(b.adjusted(0.5, 0.5, -0.5, -0.5));
@@ -164,7 +186,34 @@ protected:
     p.drawText(b.adjusted(10, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter,
                QString::fromUtf8(detailOpen ? "▾ " : "▸ ") + QCoreApplication::translate("seasonal", "%1 RELEASE DETAIL").arg(ccy));
     double y = b.bottom() + 8;
-    if (detailOpen) {
+    if (detailOpen && phone()) {   // phone: name, latest and previous on the first line; period, release date, source under
+      const auto rows = detailRows();
+      const double lw = leftW(), xl = 14 + lw * 0.56, xp = 14 + lw * 0.78;
+      p.setFont(mono(9, QFont::Normal, 2)); p.setPen(c.dim);
+      p.drawText(QRectF(24, y, xl - 30, 20), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "INDICATOR"));
+      p.drawText(QRectF(xl, y, xp - xl - 4, 20), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "LATEST"));
+      p.drawText(QRectF(xp, y, 14 + lw - xp, 20), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("seasonal", "PREVIOUS"));
+      y += 26;
+      if (rows.isEmpty()) {
+        p.setFont(mono(11)); p.setPen(c.sub);
+        p.drawText(QRectF(24, y, lw, 20), Qt::AlignLeft | Qt::AlignVCenter, status);
+        y += 24;
+      }
+      for (const auto& r : rows) {
+        p.fillRect(QRectF(14, y - 2, lw, 1), theme::map("#1d180d"));
+        p.setFont(prose(14)); p.setPen(theme::map("#c9c6c1"));
+        p.drawText(QRectF(24, y, xl - 30, 20), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(p.font()).elidedText(r.name, Qt::ElideRight, int(xl - 30)));
+        p.setFont(mono(12)); p.setPen(c.text);
+        p.drawText(QRectF(xl, y, xp - xl - 4, 20), Qt::AlignLeft | Qt::AlignVCenter, r.latest);
+        p.setPen(c.sub);
+        p.drawText(QRectF(xp, y, 14 + lw - xp, 20), Qt::AlignLeft | Qt::AlignVCenter, r.previous);
+        p.setFont(mono(10)); p.setPen(c.dim);
+        const QString meta = QString::fromUtf8("%1 · %2 · %3").arg(r.period, r.released, r.source);
+        p.drawText(QRectF(24, y + 19, lw - 20, 16), Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(p.font()).elidedText(meta, Qt::ElideRight, int(lw - 20)));
+        y += detailRowH();
+      }
+      y += 8;
+    } else if (detailOpen) {
       const auto rows = detailRows();
       const double lw = leftW();
       const double xs[] = {14, 14 + lw * 0.30, 14 + lw * 0.43, 14 + lw * 0.56, 14 + lw * 0.70, 14 + lw * 0.84};
@@ -297,12 +346,19 @@ void FundamentalPage::paintEvent(QPaintEvent*) {
   p.setBrush(theme::alpha(c.goldDot, int(70 * a))); p.drawEllipse(QPointF(38, 17), 5, 5);
   p.setBrush(theme::mix(theme::alpha(c.goldDot, 255), theme::map("#6a6418"), 1 - a)); p.drawEllipse(QPointF(38, 17), 2.6, 2.6);
   p.setRenderHint(QPainter::Antialiasing, false);
-  const QString title = QCoreApplication::translate("seasonal", "FUNDAMENTALS — MACRO FILE BY CURRENCY");
-  const QFont tf = mono(10, QFont::Normal, 3);
+  QString title = QCoreApplication::translate("seasonal", "FUNDAMENTALS — MACRO FILE BY CURRENCY");
+  QFont tf = mono(10, QFont::Normal, 3);
+  // phone: no right badge (the cards say "8 economies"), the title tightens then elides before the cursor
+  const bool phone = ui::compact(width());
+  if (phone) {
+    if (QFontMetricsF(tf).horizontalAdvance(title) > width() - 70) tf = mono(10, QFont::Normal, 1);
+    title = QFontMetricsF(tf).elidedText(title, Qt::ElideRight, width() - 70);
+  }
   p.setFont(tf); p.setPen(c.stripText);
   p.drawText(QRectF(50, 0, 700, 34), Qt::AlignLeft | Qt::AlignVCenter, title);
   const int cx = 50 + int(QFontMetricsF(tf).horizontalAdvance(title)) + 2;
   if (m_cursorOn) p.fillRect(QRectF(cx, 10, 7, 12), c.gold);
+  if (phone) return;
   // right badge
   const QString badge = QCoreApplication::translate("seasonal", "• 8 ECONOMIES · LATEST PUBLISHED RELEASES");
   const QFont bf = mono(9, QFont::Bold, 1.5);
@@ -359,7 +415,8 @@ void FundamentalPage::applyHooks() {
   if (!other.isEmpty()) m_content->comparator->setOther(other.toUpper());
   if (qEnvironmentVariable("DW_FUND_DETAIL") == "1") { m_content->detailOpen = true; m_content->place(); }
   const QString scroll = qEnvironmentVariable("DW_FUND_SCROLL");
-  if (!scroll.isEmpty()) QTimer::singleShot(200, this, [this, scroll] { m_scroll->scrollTo(scroll.toInt(), false); });
+  if (!scroll.isEmpty())   // again once the releases have arrived (the content grows with the read card)
+    for (int ms : {200, 3000}) QTimer::singleShot(ms, this, [this, scroll] { m_scroll->scrollTo(scroll.toInt(), false); });
   const QString hover = qEnvironmentVariable("DW_FUND_HOVER");
   if (!hover.isEmpty()) {
     const QPoint pg(hover.section(',', 0, 0).toInt(), hover.section(',', 1, 1).toInt());

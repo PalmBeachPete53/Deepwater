@@ -10,6 +10,7 @@
 #include "market/QuoteHub.h"
 #include "core/Settings.h"
 #include "ui/Format.h"
+#include "ui/Touch.h"
 #include <QDialog>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -66,9 +67,26 @@ QPushButton[role="short"]:checked { background:#2f0a0a; color:#e0605a; border-co
 }
 
 namespace {
+// Phones (the app window under ui::kCompactWidth): one column of fields, the dialog as wide as the window,
+// 36 px fields and 38 px buttons (finger targets), 16 px margins.
+bool phoneFor(QWidget* parent) {
+  if (!parent) return false;
+  QWidget* w = parent->window();
+  // a dialog opened from a dialog (Import › new account): the app window decides, not the 640 px import dialog
+  while (qobject_cast<QDialog*>(w) && w->parentWidget()) w = w->parentWidget()->window();
+  return ui::compact(w->width());
+}
+QString phoneStyle() {
+  return "QLineEdit, QDateTimeEdit, QComboBox { min-height:22px; } QPushButton { min-height:22px; }";
+}
+void setupPhone(QDialog& d) {
+  d.setStyleSheet(dialogStyle() + phoneStyle());
+  d.setMinimumWidth(0);
+}
+
 // Dialog skeleton that fits small windows (1024x600): the form scrolls, the button row stays visible.
-struct Frame { QVBoxLayout* body; QVBoxLayout* footer; QScrollArea* scroll; };
-Frame frame(QDialog& d) {
+struct Frame { QVBoxLayout* body; QVBoxLayout* footer; QScrollArea* scroll; bool phone = false; };
+Frame frame(QDialog& d, bool phone = false) {
   auto* outer = new QVBoxLayout(&d); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(0);
   auto* sa = new QScrollArea(&d);
   sa->setWidgetResizable(true); sa->setFrameShape(QFrame::NoFrame);
@@ -78,9 +96,9 @@ Frame frame(QDialog& d) {
   sa->setStyleSheet(qss("QScrollArea, QScrollArea > QWidget > QWidget#dlgBody { background:#0c0601; }"));
   outer->addWidget(sa, 1);
   auto* body = new QVBoxLayout(inner);
-  auto* foot = new QVBoxLayout; foot->setContentsMargins(24, 8, 24, 16);
+  auto* foot = new QVBoxLayout; foot->setContentsMargins(phone ? 16 : 24, 8, phone ? 16 : 24, 16);
   outer->addLayout(foot);
-  return {body, foot, sa};
+  return {body, foot, sa, phone};
 }
 // Sizes the dialog to its content, capped by the main window and the screen (scrolls inside beyond that).
 void fit(QDialog& d, const Frame& f) {
@@ -90,6 +108,7 @@ void fit(QDialog& d, const Frame& f) {
   QSize cap(4000, 4000);
   if (QWidget* w = d.parentWidget() ? d.parentWidget()->window() : nullptr) cap = w->size() - QSize(24, 24);
   if (QScreen* sc = d.screen()) cap = cap.boundedTo(sc->availableGeometry().size() - QSize(40, 60));
+  if (f.phone) { d.resize(cap.width(), std::min(want.height(), cap.height())); return; }   // phones: the window's width
   d.resize(want.boundedTo(cap).expandedTo(QSize(std::min(cap.width(), d.minimumWidth()), 200)));
   if (d.minimumWidth() > cap.width()) d.setMinimumWidth(cap.width());
 }
@@ -124,11 +143,13 @@ bool tradeDialog(QWidget* parent, account::Trade& t, const QString& ccy, bool is
   d.setWindowTitle(isNew ? QCoreApplication::translate("account", "Log trade") : QCoreApplication::translate("account", "Edit trade"));
   d.setStyleSheet(dialogStyle());
   d.setMinimumWidth(560);
-  const Frame fr = frame(d);
-  auto* v = fr.body; v->setContentsMargins(24, 20, 24, 12); v->setSpacing(12);
+  const bool phone = phoneFor(parent);
+  if (phone) setupPhone(d);
+  const Frame fr = frame(d, phone);
+  auto* v = fr.body; v->setContentsMargins(phone ? 16 : 24, 20, phone ? 16 : 24, 12); v->setSpacing(12);
   auto* title = new QLabel(isNew ? QCoreApplication::translate("account", "LOG A CLOSED TRADE") : QCoreApplication::translate("account", "EDIT TRADE"), &d); title->setProperty("role", "title");
   v->addWidget(title);
-  auto* g = new QGridLayout; g->setHorizontalSpacing(14); g->setVerticalSpacing(4);
+  auto* g = new QGridLayout; g->setHorizontalSpacing(14); g->setVerticalSpacing(phone ? 6 : 4);
   v->addLayout(g);
 
   QStringList names;
@@ -159,21 +180,23 @@ bool tradeDialog(QWidget* parent, account::Trade& t, const QString& ccy, bool is
   strat->addItem(""); strat->addItems(sl2); strat->setCurrentText(t.strategy);
   auto* comment = new QLineEdit(t.comment, &d);
 
+  // two fields per row (label above its input); phones: one column
   int r = 0;
-  g->addWidget(field(QCoreApplication::translate("account", "Instrument"), &d), r, 0); g->addWidget(field(QCoreApplication::translate("account", "Side"), &d), r++, 1);
-  g->addWidget(sym, r, 0); g->addLayout(sides, r++, 1);
-  g->addWidget(field(QCoreApplication::translate("account", "Opened (local time)"), &d), r, 0); g->addWidget(field(QCoreApplication::translate("account", "Closed (local time)"), &d), r++, 1);
-  g->addWidget(open, r, 0); g->addWidget(close, r++, 1);
-  g->addWidget(field(QCoreApplication::translate("account", "Entry price"), &d), r, 0); g->addWidget(field(QCoreApplication::translate("account", "Exit price"), &d), r++, 1);
-  g->addWidget(entry, r, 0); g->addWidget(exit, r++, 1);
-  g->addWidget(field(QCoreApplication::translate("account", "Size (lots)"), &d), r, 0); g->addWidget(field(QCoreApplication::translate("account", "P&L (%1)").arg(ccy), &d), r++, 1);
-  g->addWidget(lots, r, 0); g->addWidget(pnl, r++, 1);
-  g->addWidget(field(QCoreApplication::translate("account", "Stop loss (optional)"), &d), r, 0); g->addWidget(field(QCoreApplication::translate("account", "Take profit (optional)"), &d), r++, 1);
-  g->addWidget(sl, r, 0); g->addWidget(tp, r++, 1);
-  g->addWidget(field(QCoreApplication::translate("account", "Commission"), &d), r, 0); g->addWidget(field(QCoreApplication::translate("account", "Swap"), &d), r++, 1);
-  g->addWidget(comm, r, 0); g->addWidget(swap, r++, 1);
-  g->addWidget(field(QCoreApplication::translate("account", "Strategy"), &d), r, 0); g->addWidget(field(QCoreApplication::translate("account", "Comment"), &d), r++, 1);
-  g->addWidget(strat, r, 0); g->addWidget(comment, r++, 1);
+  auto put = [&](QObject* o, int row, int col) {
+    if (auto* w = qobject_cast<QWidget*>(o)) g->addWidget(w, row, col); else g->addLayout(qobject_cast<QLayout*>(o), row, col);
+  };
+  auto pair = [&](const QString& l1, QObject* w1, const QString& l2, QObject* w2) {
+    if (phone) { put(field(l1, &d), r++, 0); put(w1, r++, 0); put(field(l2, &d), r++, 0); put(w2, r++, 0); return; }
+    put(field(l1, &d), r, 0); put(field(l2, &d), r++, 1);
+    put(w1, r, 0); put(w2, r++, 1);
+  };
+  pair(QCoreApplication::translate("account", "Instrument"), sym, QCoreApplication::translate("account", "Side"), sides);
+  pair(QCoreApplication::translate("account", "Opened (local time)"), open, QCoreApplication::translate("account", "Closed (local time)"), close);
+  pair(QCoreApplication::translate("account", "Entry price"), entry, QCoreApplication::translate("account", "Exit price"), exit);
+  pair(QCoreApplication::translate("account", "Size (lots)"), lots, QCoreApplication::translate("account", "P&L (%1)").arg(ccy), pnl);
+  pair(QCoreApplication::translate("account", "Stop loss (optional)"), sl, QCoreApplication::translate("account", "Take profit (optional)"), tp);
+  pair(QCoreApplication::translate("account", "Commission"), comm, QCoreApplication::translate("account", "Swap"), swap);
+  pair(QCoreApplication::translate("account", "Strategy"), strat, QCoreApplication::translate("account", "Comment"), comment);
 
   auto* hint = note("", &d);
   auto* err = note("", &d, "error");
@@ -239,8 +262,10 @@ bool accountDialog(QWidget* parent, account::Account& a, bool isNew) {
   d.setWindowTitle(isNew ? QCoreApplication::translate("account", "Add account") : QCoreApplication::translate("account", "Edit account"));
   d.setStyleSheet(dialogStyle());
   d.setMinimumWidth(440);
-  const Frame fr = frame(d);
-  auto* v = fr.body; v->setContentsMargins(24, 20, 24, 12); v->setSpacing(6);
+  const bool phone = phoneFor(parent);
+  if (phone) setupPhone(d);
+  const Frame fr = frame(d, phone);
+  auto* v = fr.body; v->setContentsMargins(phone ? 16 : 24, 20, phone ? 16 : 24, 12); v->setSpacing(6);
   auto* title = new QLabel(isNew ? QCoreApplication::translate("account", "ADD ACCOUNT") : QCoreApplication::translate("account", "EDIT ACCOUNT"), &d); title->setProperty("role", "title");
   v->addWidget(title); v->addSpacing(8);
   auto* name = new QLineEdit(a.name, &d);
@@ -285,9 +310,11 @@ void importDialog(QWidget* parent) {
   d.setWindowTitle(QCoreApplication::translate("account", "Import trades"));
   d.setStyleSheet(dialogStyle());
   d.setMinimumWidth(640);
+  const bool phone = phoneFor(parent);
+  if (phone) setupPhone(d);
   auto& j = account::Journal::instance();
-  const Frame fr = frame(d);
-  auto* v = fr.body; v->setContentsMargins(24, 20, 24, 12); v->setSpacing(8);
+  const Frame fr = frame(d, phone);
+  auto* v = fr.body; v->setContentsMargins(phone ? 16 : 24, 20, phone ? 16 : 24, 12); v->setSpacing(8);
   auto* title = new QLabel(QCoreApplication::translate("account", "IMPORT TRADES"), &d); title->setProperty("role", "title");
   v->addWidget(title);
   v->addWidget(note(QCoreApplication::translate("account", "No broker password is needed: export the history from your platform, or let the read-only "
@@ -314,6 +341,10 @@ void importDialog(QWidget* parent) {
   auto* preview = note("", &d, "ok");
   v->addWidget(preview);
   auto* target = new QComboBox(&d);
+  if (phone) {   // phones: long account names elide instead of widening the dialog past the screen
+    target->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    target->setMinimumContentsLength(8);
+  }
   auto* doImport = button(QCoreApplication::translate("account", "IMPORT"), &d, "primary"); doImport->setEnabled(false);
   auto* tRow = new QHBoxLayout; tRow->addWidget(field(QCoreApplication::translate("account", "Into"), &d)); tRow->addWidget(target, 1); tRow->addWidget(doImport);
   v->addLayout(tRow);
@@ -419,7 +450,11 @@ void importDialog(QWidget* parent) {
   folder->setPlaceholderText(QCoreApplication::translate("account", "No folder: live sync off"));
   auto* choose = button(QCoreApplication::translate("account", "CHOOSE FOLDER…"), &d);
   auto* stop = button(QCoreApplication::translate("account", "STOP", "stop the live sync"), &d); stop->setEnabled(!b.folder().isEmpty());
-  auto* fRow = new QHBoxLayout; fRow->addWidget(folder, 1); fRow->addWidget(choose); fRow->addWidget(stop);
+  auto* fRow = new QHBoxLayout;
+  if (phone) {   // phones: the folder on its own row, its buttons under it
+    v->addWidget(folder);
+    fRow->addWidget(choose, 1); fRow->addWidget(stop);
+  } else { fRow->addWidget(folder, 1); fRow->addWidget(choose); fRow->addWidget(stop); }
   v->addLayout(fRow);
   const QStringList cands = account::BridgeSync::candidateFolders();
   if (!cands.isEmpty()) v->addWidget(note(QCoreApplication::translate("account", "Found on this computer: %1").arg(QDir::toNativeSeparators(cands.join("   ·   "))), &d));

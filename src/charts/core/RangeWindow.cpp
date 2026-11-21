@@ -57,26 +57,21 @@ double ZoomMap::barsFor(double w) const {
   return std::clamp(minBars * std::pow(linearBars(*this) / minBars, t), lo, full);
 }
 
-double ZoomMap::shownWidth(double bars) const {
-  const double w = windowPx(bars);
-  return w > 0 ? std::min(full, std::clamp(bars, std::min(minBars, full), full) * px / w) : full;
+Win windowOf(const Span& view, const Span& full, const ZoomMap& m) {
+  const auto vc = clip(view, full);   // a view running into the empty slots past the data counts as what it covers
+  if (!vc || !(m.px > 0) || !(full.width() > 0)) return {0, m.px};
+  const double w = std::min(m.px, m.windowPx(vc->width()));
+  const double free = full.width() - vc->width();
+  const double f = free > 1e-9 ? std::clamp((vc->a - full.a) / free, 0.0, 1.0) : 0.0;
+  return {f * (m.px - w), w};
 }
 
-Span shownSpan(const std::optional<Span>& prev, const Span& full, const Span& view, const ZoomMap& m) {
-  constexpr double eps = 1e-9;
-  const auto vc = clip(view, full);   // a view running into the empty slots past the data counts as what it covers
-  if (!vc || !(full.width() > 0)) return full;
-  const double S = m.shownWidth(vc->width());
-  if (S >= full.width() - eps) return full;
-  if (prev && std::fabs(prev->width() - S) <= 1e-6 * std::max(1.0, S) && prev->a >= full.a - eps && prev->b <= full.b + eps) {
-    const Span& d = *prev;
-    const double margin = 0.05 * d.width();
-    const bool leftOk = d.a <= full.a + eps || vc->a >= d.a + margin;   // no more data to the left, or room before it
-    const bool rightOk = d.b >= full.b - eps || vc->b <= d.b - margin;
-    if (vc->a >= d.a - eps && vc->b <= d.b + eps && leftOk && rightOk) return d;
-  }
-  const double c = (vc->a + vc->b) / 2;
-  return clampPan({c - S / 2, c + S / 2}, full);
+Span viewOf(double x, double w, const Span& full, const ZoomMap& m, std::optional<double> bars) {
+  const double n = std::clamp(bars ? *bars : m.barsFor(w), std::min(m.minBars, full.width()), full.width());
+  const double room = m.px - w;
+  const double f = room > 1e-9 ? std::clamp(x / room, 0.0, 1.0) : 0.0;
+  const double a = full.a + f * (full.width() - n);
+  return {a, a + n};
 }
 
 double toPx(double u, const Span& dom, double px) {
@@ -88,9 +83,7 @@ double toUnits(double x, const Span& dom, double px) {
   return px > 0 ? dom.a + x / px * dom.width() : dom.a;
 }
 
-Part hit(const Span& win, const Span& dom, double px, double x, double grip) {
-  if (!(dom.width() > 0) || !(px > 0)) return Part::None;
-  const double xa = toPx(win.a, dom, px), xb = toPx(win.b, dom, px);
+Part hit(double xa, double xb, double x, double grip) {
   const double inner = std::min(grip, std::max(0.0, xb - xa) / 3);
   const bool onLeft = x >= xa - grip && x <= xa + inner;
   const bool onRight = x <= xb + grip && x >= xb - inner;
@@ -105,61 +98,37 @@ Part hit(const Span& win, const Span& dom, double px, double x, double grip) {
   return Part::Outside;
 }
 
-Gesture::Gesture(Part part, const Span& view, const Span& shown, const Span& full, const ZoomMap& m, double x)
-    : part_(part), view_(clampPan(view, full)), shown_(shown), full_(full), m_(m), x0_(x) {
+Gesture::Gesture(Part part, const Span& view, const Span& full, const ZoomMap& m, double x)
+    : part_(part), view_(clampPan(view, full)), full_(full), m_(m), x0_(x) {
+  win_ = windowOf(view_, full_, m_);
   switch (part_) {
-    case Part::Outside: {
-      const double c = toUnits(x, shown_, m_.px), w = view_.width();
-      view_ = clampPan({c - w / 2, c + w / 2}, full_);
+    case Part::Outside:
+      win_.x = std::clamp(x - win_.w / 2, 0.0, std::max(0.0, m_.px - win_.w));
+      view_ = viewOf(win_.x, win_.w, full_, m_, view_.width());
       part_ = Part::Inside;   // keep dragging without releasing
       break;
-    }
-    case Part::Left:   // the right edge stays put; the pointer holds the left one where it grabbed it
-      anchor_ = view_.b;
-      anchorPx_ = toPx(view_.b, shown_, m_.px);
-      grab_ = x - toPx(view_.a, shown_, m_.px);
-      break;
-    case Part::Right:
-      anchor_ = view_.a;
-      anchorPx_ = toPx(view_.a, shown_, m_.px);
-      grab_ = x - toPx(view_.b, shown_, m_.px);
-      break;
+    case Part::Left: grab_ = x - win_.x; break;
+    case Part::Right: grab_ = x - win_.right(); break;
     default: break;
   }
 }
 
-Gesture::Step Gesture::zoomTo(double windowPx) const {
-  // the grabbed edge stops at the widget's side (the pointer may go on past it), and the window at minPx
-  const double room = part_ == Part::Right ? m_.px - anchorPx_ : anchorPx_;
-  const double w = std::max(std::min(windowPx, room), m_.minPx);
-  // The span shown is placed so the anchored edge keeps its pixel, and may run past the data while the button is
-  // down (an empty end): kept inside, the anchored edge and the grabbed one would slide away from the pointer. The
-  // widget places it inside the data again at the release (shownSpan).
-  if (part_ == Part::Right) {
-    const double bars = std::min(m_.barsFor(w), full_.b - anchor_);
-    const double S = m_.shownWidth(bars);
-    const double a = anchor_ - anchorPx_ * S / m_.px;
-    return {{anchor_, anchor_ + bars}, {a, a + S}};
-  }
-  const double bars = std::min(m_.barsFor(w), anchor_ - full_.a);
-  const double S = m_.shownWidth(bars);
-  const double b = anchor_ + (m_.px - anchorPx_) * S / m_.px;
-  return {{anchor_ - bars, anchor_}, {b - S, b}};
-}
-
-Gesture::Step Gesture::move(double x) const {
+Span Gesture::move(double x) const {
+  const double stop = std::min(m_.stopPx(), m_.px);
   switch (part_) {
     case Part::Inside: {
-      const double d = m_.px > 0 ? (x - x0_) * shown_.width() / m_.px : 0;
-      const Span v = clampPan({view_.a + d, view_.b + d}, full_);
-      Span s = shown_;   // the span shown follows a view that reaches its edge
-      if (v.a < s.a) s = {v.a, v.a + s.width()};
-      if (v.b > s.b) s = {v.b - s.width(), v.b};
-      return {v, clampPan(s, full_)};
+      const double l = std::clamp(win_.x + (x - x0_), 0.0, std::max(0.0, m_.px - win_.w));
+      return viewOf(l, win_.w, full_, m_, view_.width());
     }
-    case Part::Right: return zoomTo(x - grab_ - anchorPx_);
-    case Part::Left: return zoomTo(anchorPx_ - (x - grab_));
-    default: return {view_, shown_};
+    case Part::Right: {   // the left edge stays on its pixel
+      const double r = std::clamp(x - grab_, std::min(m_.px, win_.x + stop), m_.px);
+      return viewOf(win_.x, r - win_.x, full_, m_);
+    }
+    case Part::Left: {
+      const double l = std::clamp(x - grab_, 0.0, std::max(0.0, win_.right() - stop));
+      return viewOf(l, win_.right() - l, full_, m_);
+    }
+    default: return view_;
   }
 }
 

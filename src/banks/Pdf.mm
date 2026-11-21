@@ -1,5 +1,6 @@
 #include "banks/Pdf.h"
 #import <Foundation/Foundation.h>
+#include <TargetConditionals.h>
 #import <PDFKit/PDFKit.h>
 #include <CoreGraphics/CoreGraphics.h>
 
@@ -84,6 +85,10 @@ QString text(const QString& file, int page) {
 }
 
 bool print(const QString& file) {
+#if TARGET_OS_IPHONE
+  Q_UNUSED(file);
+  return false;   // iOS: no print panel from a widgets app yet
+#else
   @autoreleasepool {
     PDFDocument* doc = [[PDFDocument alloc] initWithURL:[NSURL fileURLWithPath:file.toNSString()]];
     if (!doc) return false;
@@ -94,5 +99,6 @@ bool print(const QString& file) {
     op.showsProgressPanel = YES;
     return [op runOperation];
   }
+#endif
 }
 }

@@ -30,6 +30,7 @@
 #include "core/I18n.h"
 #include "ui/Theme.h"
 #include "app/Pages.h"
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QVBoxLayout>
@@ -64,7 +65,7 @@
 #include <QFile>
 #include <QDir>
 #include <QBuffer>
-#include <QProcess>
+#include "core/Process.h"
 #include <QPointer>
 #include <QJsonDocument>
 #include <QTextDocument>
@@ -1914,7 +1915,7 @@ void ChartsApp::beep() { QApplication::beep(); }
 void ChartsApp::systemNotify(const QString& text, const QString& title) {
 #ifdef Q_OS_MACOS
   if (qEnvironmentVariableIsEmpty("DW_PROFILE"))   // never from tests
-    QProcess::startDetached("/usr/bin/osascript",
+    dw::Process::startDetached("/usr/bin/osascript",
                             {"-e", "on run argv", "-e", "display notification (item 1 of argv) with title (item 2 of argv)",
                              "-e", "end run", text, title});
 #else
@@ -2113,6 +2114,14 @@ bool runUiStep(ChartsApp* app, const QString& step) {
       if (e.isAccepted() || w == app) break;
     }
     return true;
+  }
+  if (name == "click") {   // click:<text> clicks the visible button showing that text (e.g. click:Run on chart)
+    for (QWidget* w : QApplication::allWidgets())   // the panels may sit outside the page's own children
+      if (auto* b = qobject_cast<QAbstractButton*>(w); b && b->isVisible() && b->isEnabled() && b->text().remove('&').trimmed() == arg) {
+        b->click();
+        return true;
+      }
+    return false;
   }
   if (name == "key") {   // key:<text> types a key on the page (e.g. key:a opens the symbol search)
     QKeyEvent e(QEvent::KeyPress, 0, Qt::NoModifier, arg);

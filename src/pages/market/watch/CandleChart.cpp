@@ -228,10 +228,12 @@ void CandleChart::onQuotes(const QStringList& syms) {
 void CandleChart::resizeEvent(QResizeEvent*) { layout(); clampView(); m_dirty = true; }
 void CandleChart::layout() {
   const qreal w = width(), h = height();
-  m_top = QRectF(1, 1, w - 2, 45);
-  m_left = QRectF(1, 50, 57, h - 51);
+  // phones (chart under ~560 px): the toolbar takes two rows so compare and indicators stay reachable
+  const qreal tb = w < 560 ? 90 : 45, top = tb + 5;
+  m_top = QRectF(1, 1, w - 2, tb);
+  m_left = QRectF(1, top, 57, h - top - 1);
   m_bottom = QRectF(62, h - 46, w - 63, 45);
-  const QRectF area(62, 50, w - 62 - 4, h - 50 - 50);
+  const QRectF area(62, top, w - 62 - 4, h - top - 50);
   m_priceAxis = QRectF(area.right() - 68, area.top(), 68, area.height() - 30);
   m_timeAxis = QRectF(area.left(), area.bottom() - 30, area.width(), 30);
   m_plot = QRectF(area.left(), area.top(), area.width() - 68, area.height() - 30);
@@ -361,8 +363,8 @@ void CandleChart::rebuild() {
   const bool skeleton = m_bars.isEmpty() && m_loading;
   if (skeleton) { paintSkeleton(p); }
   else {
-    p.fillRect(QRectF(0, 46, width(), 4), kGap());
-    p.fillRect(QRectF(58, 50, 4, height() - 50), kGap());
+    p.fillRect(QRectF(0, m_top.bottom(), width(), 4), kGap());
+    p.fillRect(QRectF(58, m_left.top(), 4, height() - m_left.top()), kGap());
     p.fillRect(QRectF(62, m_bottom.top() - 4, width() - 62, 4), kGap());
     p.fillRect(m_plot.united(m_priceAxis).united(m_timeAxis), kBg());
     paintToolbar(p);
@@ -391,8 +393,9 @@ void CandleChart::paintSkeleton(QPainter& p) {
 }
 
 void CandleChart::paintToolbar(QPainter& p) {
-  const qreal cy = m_top.center().y();
-  qreal x = 10;
+  const bool twoRows = m_top.height() > 60;
+  const qreal cy0 = twoRows ? m_top.top() + 22.5 : m_top.center().y();
+  qreal cy = cy0, x = 10;
   const QFont f = tvFont(15, QFont::Medium);
   p.setFont(f);
   auto button = [&](const QString& id, qreal w, bool active) {
@@ -434,7 +437,8 @@ void CandleChart::paintToolbar(QPainter& p) {
     a.lineTo(c + QPointF(0, 1)); a.lineTo(c + QPointF(11, -8)); a.lineTo(c + QPointF(11, 8)); a.closeSubpath();
     p.setBrush(QBrush(kText(), Qt::BDiagPattern)); p.drawPath(a); p.setBrush(Qt::NoBrush);
   }
-  chevron("typemenu"); sep();
+  chevron("typemenu");
+  if (twoRows) { x = 10; cy += 45; } else sep();
   {
     const QRectF r = button("compare", 34, !m_cmpSym.isEmpty());
     p.setPen(QPen(kText(), 1.5)); p.setBrush(Qt::NoBrush); p.drawEllipse(r.center(), 10, 10);
@@ -451,7 +455,7 @@ void CandleChart::paintToolbar(QPainter& p) {
   }
   // snapshot (camera) at the right
   {
-    const QRectF r(m_top.right() - 44, cy - 16, 34, 32);
+    const QRectF r(m_top.right() - 44, cy0 - 16, 34, 32);
     m_hits.push_back({r, "snapshot"});
     const QPointF c = r.center();
     p.setPen(QPen(kText(), 1.5)); p.setBrush(Qt::NoBrush);
@@ -748,7 +752,10 @@ void CandleChart::paintOverlay(QPainter& p) {
     QString name = ins ? ins->name : m_symbol;
     if (ins && ins->category == market::Category::Forex) name = currencyName(ins->base) + " / " + currencyName(ins->quote);
     const QFont tf = tvFont(17, QFont::Medium);
-    const QString title = QString("%1 · %2 · YAHOO").arg(name, tfLabel(m_tf));
+    QString title = QString("%1 · %2 · YAHOO").arg(name, tfLabel(m_tf));
+    // phones (plot under 420 px): the title is elided before the legend pill instead of running under the price axis
+    const bool narrow = m_plot.width() < 420;
+    if (narrow) title = QFontMetricsF(tf).elidedText(title, Qt::ElideRight, m_plot.right() - 8 - 54 - x);
     p.setFont(tf); p.setPen(theme::map(QColor(0xec, 0xec, 0xee))); p.drawText(QPointF(x, y + 6), title);
     x += adv(tf, title) + 10;
     // "− ≈" pill: collapses the OHLC values (TradingView's legend toggle)
@@ -762,13 +769,21 @@ void CandleChart::paintOverlay(QPainter& p) {
 
     const auto& k = b[hi];
     const QColor c = k.c >= k.o ? theme::map(QColor(0x22, 0xc8, 0xd8)) : theme::map(QColor(0xf2, 0x5f, 0x6a));
-    const QFont vf = tvFont(14, QFont::Medium);
-    p.setFont(vf);
+    QFont vf = tvFont(14, QFont::Medium);
     const double prev = hi > 0 ? b[hi - 1].c : k.o;
-    const QString chg = QString("%1%2 (%3)").arg(k.c - prev >= 0 ? "+" : "-", priceText(std::abs(k.c - prev)), fmt::pct((k.c / prev - 1) * 100));
-    qreal ohlcW = adv(vf, chg);
-    for (const QString& v : {priceText(k.o), priceText(k.h), priceText(k.l), priceText(k.c)}) ohlcW += adv(vf, v) + adv(vf, "O") + 10;
+    QString chg = QString("%1%2 (%3)").arg(k.c - prev >= 0 ? "+" : "-", priceText(std::abs(k.c - prev)), fmt::pct((k.c / prev - 1) * 100));
+    auto ohlcWidth = [&] {
+      qreal w = adv(vf, chg);
+      for (const QString& v : {priceText(k.o), priceText(k.h), priceText(k.l), priceText(k.c)}) w += adv(vf, v) + adv(vf, "O") + 10;
+      return w;
+    };
+    qreal ohlcW = ohlcWidth();
     if (x + ohlcW > m_plot.right() - 8) { x = m_plot.left() + 14; y += 22; }   // narrow chart: values on a second line
+    if (narrow && x + ohlcW > m_plot.right() - 8) {   // phones: smaller values, then the change is left out (crosshair shows it)
+      vf = tvFont(12, QFont::Medium); ohlcW = ohlcWidth();
+      if (x + ohlcW > m_plot.right() - 8) chg.clear();
+    }
+    p.setFont(vf);
     if (!m_legendCollapsed) for (const auto& [l, v] : QList<QPair<QString, QString>>{{"O", priceText(k.o)}, {"H", priceText(k.h)}, {"L", priceText(k.l)}, {"C", priceText(k.c)}}) {
       p.setPen(kText()); p.drawText(QPointF(x, y + 6), l); x += adv(vf, l) + 1;
       p.setPen(c); p.drawText(QPointF(x, y + 6), v); x += adv(vf, v) + 9;

@@ -2,6 +2,7 @@
 // Port of server.js (see ApiServer.h). The routes are checked in the JS order, in one handler, so a method a route
 // doesn't take falls through to the next routes and finally to 404 "Unknown endpoint", as in the JS.
 #include "charts/data/ApiServer.h"
+#include "core/Startup.h"
 #include "charts/data/CustomFiles.h"
 #include "charts/data/Alerts.h"
 #include "charts/data/DepthStream.h"
@@ -1211,4 +1212,4 @@ static void dwChartsApiStartup() {
     if (QCoreApplication::applicationName() == QLatin1String("Deepwater")) charts::api::launch();
   });
 }
-Q_COREAPP_STARTUP_FUNCTION(dwChartsApiStartup)
+DW_STARTUP_FUNCTION(dwChartsApiStartup)

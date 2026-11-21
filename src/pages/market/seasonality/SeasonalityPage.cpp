@@ -6,6 +6,7 @@
 #include "core/Settings.h"
 #include "market/Instruments.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QTimer>
@@ -25,6 +26,7 @@ class Content : public QWidget {
 public:
   explicit Content(QWidget* parent) : QWidget(parent) { setMinimumHeight(kHeight); }
   QWidget *trend = nullptr, *win = nullptr, *weekday = nullptr, *month = nullptr, *years = nullptr, *risk = nullptr;
+  ToolBar* tool = nullptr;   // phones: the toolbar scrolls with the cards (set by the page, null on desktop)
   static constexpr int kHeight = 1235;
   int viewH = 896;   // visible height of the scroll viewport (set by the page)
   QSize sizeHint() const override { return QSize(1600, kHeight); }
@@ -33,6 +35,8 @@ public:
   //  < 2200   reference layout: trend stretches, win-rate 430 px, ADVANCED 2 x 2 (1600 = reference frames)
   //  ≥ 2200   wide: ADVANCED in one row of 4; the SUMMARY row grows to fill the window height
   void place() {
+    if (tool) { placePhone(); return; }
+    m_sumY = 34;
     const int w = width(), m = 10, gap = 11, advH = 315;
     int y = 51, sumBottom;
     if (w < 1200) {
@@ -65,16 +69,48 @@ public:
     if (minimumHeight() != m_height) setMinimumHeight(m_height);
     update();
   }
+  // Phones (upright, or any window under 420 px high): the wrapped toolbar first, then one column under 760 px
+  // (trend, win rate at its full 493 px, the four ADVANCED cards one under the other), or the narrow desktop
+  // arrangement on a phone held sideways; the trend chart fits the short viewport.
+  void placePhone() {
+    const int w = width(), m = 10, gap = 11, advH = 315;
+    const int th = tool->heightFor(w);
+    tool->setGeometry(0, 0, w, th);
+    m_sumY = th + 26;
+    int y = m_sumY + 17;
+    const int trendH = std::clamp(viewH - 24, 300, ui::compact(w) ? 440 : 493);
+    trend->setGeometry(m, y, w - 2 * m, trendH); y += trendH + gap;
+    const int winH = ui::compact(w) ? 493 : 320;
+    win->setGeometry(m, y, w - 2 * m, winH); y += winH;
+    m_advY = y + 24;
+    const int top = m_advY + 18;
+    if (ui::compact(w)) {
+      const int riskH = static_cast<RiskCard*>(risk)->heightFor(w - 2 * m);
+      int yy = top;
+      for (QWidget* c : {weekday, month, years}) { c->setGeometry(m, yy, w - 2 * m, advH); yy += advH + 10; }
+      risk->setGeometry(m, yy, w - 2 * m, riskH);
+      m_height = yy + riskH + 12;
+    } else {
+      const int half = (w - 2 * m - gap) / 2;
+      weekday->setGeometry(m, top, half + 1, advH);
+      month->setGeometry(m + half + 1 + gap, top, w - 2 * m - half - 1 - gap, advH);
+      years->setGeometry(m, top + advH + 10, half + 1, advH);
+      risk->setGeometry(m + half + 1 + gap, top + advH + 10, w - 2 * m - half - 1 - gap, advH);
+      m_height = top + 2 * advH + 10 + 9;
+    }
+    if (minimumHeight() != m_height) setMinimumHeight(m_height);
+    update();
+  }
 protected:
   void resizeEvent(QResizeEvent*) override { place(); }
   void paintEvent(QPaintEvent*) override {
     QPainter p(this);
     p.fillRect(rect(), col().page);
-    section(p, 34, QCoreApplication::translate("seasonal", "SUMMARY"));
+    section(p, m_sumY, QCoreApplication::translate("seasonal", "SUMMARY"));
     section(p, m_advY, QCoreApplication::translate("seasonal", "ADVANCED"));
   }
 private:
-  int m_advY = 568, m_height = kHeight;
+  int m_sumY = 34, m_advY = 568, m_height = kHeight;
   void section(QPainter& p, int y, const QString& text) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen); p.setBrush(col().gold); p.drawEllipse(QPointF(23, y), 2.2, 2.2);
@@ -137,6 +173,8 @@ SeasonalityPage::SeasonalityPage(QWidget* parent) : QWidget(parent) {
                      static_cast<QWidget*>(m_month), static_cast<QWidget*>(m_years), static_cast<QWidget*>(m_risk)})
     w->installEventFilter(this);
 
+  // phones: an open dropdown would stay put while its button scrolls away
+  connect(m_scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { if (m_phone && m_openItem >= 0) closeMenu(); });
   connect(m_trend, &TrendCard::periodDragged, this, [this](const Period& p) { setPeriod(p, true); });
   connect(m_trend, &TrendCard::cleared, this, [this] { setPeriod(Period::preset(Period::Full), false); });
 
@@ -193,14 +231,26 @@ void SeasonalityPage::paintEvent(QPaintEvent*) {
   const int x = 10 + QFontMetrics(t).horizontalAdvance(lab) + 7;
   QFont s = ui(10, QFont::Medium); s.setLetterSpacing(QFont::AbsoluteSpacing, 0.5);
   p.setFont(s); p.setPen(c.dim);
+  const QString sub = QCoreApplication::translate("seasonal", "DAILY HISTORY · MULTI-YEAR SEASONAL STATISTICS");
   p.drawText(QRectF(x, 1, 600, 31), Qt::AlignLeft | Qt::AlignVCenter,
-             QCoreApplication::translate("seasonal", "DAILY HISTORY · MULTI-YEAR SEASONAL STATISTICS"));
+             m_phone ? QFontMetricsF(s).elidedText(sub, Qt::ElideRight, width() - x - 10) : sub);
 }
 
 void SeasonalityPage::resizeEvent(QResizeEvent*) {
-  m_tool->setGeometry(0, 31, width(), 39);
-  m_scroll->setGeometry(0, 70, width(), height() - 70);
-  m_content->viewH = height() - 70;
+  // phone upright, or held sideways (short): the toolbar wraps and scrolls with the cards (same rule as the calendar)
+  const bool phone = ui::compact(width()) || height() < 420;
+  if (phone != m_phone) {
+    m_phone = phone;
+    closeMenu();
+    m_tool->setParent(phone ? static_cast<QWidget*>(m_content) : this);
+    m_tool->setWrap(phone);
+    m_tool->show();
+    m_content->tool = phone ? m_tool : nullptr;
+  }
+  const int top = phone ? 31 : 70;
+  if (!phone) m_tool->setGeometry(0, 31, width(), 39);
+  m_scroll->setGeometry(0, top, width(), height() - top);
+  m_content->viewH = height() - top;
   m_content->place();
 }
 
@@ -369,7 +419,13 @@ void SeasonalityPage::toolClicked(int item) {
 
 void SeasonalityPage::openMenu(int item) {
   closeMenu();
-  const QRect r = m_tool->itemRect(item).translated(m_tool->pos());
+  QRect r = m_tool->itemRect(item).translated(m_tool->pos());
+  int menuY = 70;
+  if (m_phone) {   // toolbar inside the scrolling content: the menu opens under the button, kept inside the page
+    r = QRect(m_tool->mapTo(this, m_tool->itemRect(item).topLeft()), m_tool->itemRect(item).size());
+    menuY = r.bottom() + 3;
+    r.moveLeft(qBound(4, r.left(), qMax(4, width() - 206)));
+  }
   if (item == ToolBar::Asset || item == ToolBar::Compare) {
     QList<Menu::Row> rows; int sel = -1;
     const QString cur = item == ToolBar::Asset ? m_symbol : m_compareSymbol;
@@ -380,19 +436,20 @@ void SeasonalityPage::openMenu(int item) {
     }
     Menu* m = item == ToolBar::Asset ? m_assetMenu : m_compareMenu;
     m->setRows(rows, sel);
-    m->popup(QPoint(r.left(), 70), 202);
+    m->popup(QPoint(r.left(), menuY), 202);
   } else if (item == ToolBar::Years) {
     QList<Menu::Row> rows; int sel = 0;
     for (int y : {10, 15, 20}) { if (y == m_nYears) sel = rows.size(); rows << Menu::Row{QCoreApplication::translate("seasonal", "%1 years").arg(y), "", QString::number(y), ""}; }
     m_yearsMenu->setRows(rows, sel);
-    m_yearsMenu->popup(QPoint(r.left() + 1, 70), 202);
+    m_yearsMenu->popup(QPoint(r.left() + 1, menuY), 202);
   } else if (item == ToolBar::Filter) {
     m_filterMenu->setRows({{QCoreApplication::translate("seasonal", "All years"), "", "all", ""}, {QCoreApplication::translate("seasonal", "Exclude outlier years (>1.5σ)"), "", "outliers", ""}},
                           m_outliers ? 1 : 0);
     {   // as wide as its longest row (French rows are longer than the reference's 202 px)
       const QFontMetrics fm(ui(12));
       const int w = qMax(202, fm.horizontalAdvance(QCoreApplication::translate("seasonal", "Exclude outlier years (>1.5σ)")) + 64);   // row text has 8 + 40 px of padding
-      m_filterMenu->popup(QPoint(r.left() + 1, 70), qMin(w, width() - r.left() - 12));
+      const int fx = m_phone ? qMax(4, qMin(r.left() + 1, width() - w - 4)) : r.left() + 1;
+      m_filterMenu->popup(QPoint(fx, menuY), qMin(w, width() - fx - (m_phone ? 4 : 12)));
     }
   }
   m_openItem = item;

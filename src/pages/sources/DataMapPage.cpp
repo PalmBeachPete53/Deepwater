@@ -11,12 +11,16 @@
 // Enter goes to the next match.
 // Test hooks: DW_DATAMAP_HOVER=<source id | tab/sub | tab> (lit as if hovered), DW_DATAMAP_DUMP=<file> (links as text),
 // DW_DATAMAP_SEARCH=<text> (typed in the search field).
+// Phones (page narrower than ui::kCompactWidth): the diagram keeps its two columns, fitted to the width (narrower
+// boxes, short curves between them) and scrolls vertically only; a tap lights a node's links and shows its tooltip
+// (no hover with a finger). The header stacks: title, search at full width, counts, legend on one line.
 #include "app/Pages.h"
 #include "net/Sources.h"
 #include "positioning/Retail.h"
 #include "pages/ai/Fit.h"
 #include "ui/Kit.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QCoreApplication>
 #include <QFile>
 #include <QHBoxLayout>
@@ -256,10 +260,17 @@ protected:
     setMinimumHeight(m_height);
   }
 
+  bool phone() const { return ui::compact(width()); }
+  // phone: sub-tab boxes barely indented under their tab, so their labels keep room
+  qreal subIndent() const { return phone() ? 6 : 14; }
+
   void layout() {
     const qreal W = width();
-    const qreal leftW = qBound<qreal>(250, W * 0.30, 400), rightW = qBound<qreal>(200, W * 0.24, 320);
-    m_leftX = 8; m_rightX = W - rightW - 8;
+    qreal leftW = qBound<qreal>(250, W * 0.30, 400), rightW = qBound<qreal>(200, W * 0.24, 320);
+    m_leftX = 8;
+    // phone: the desktop's minimum widths (450 px) overlap on 400 px; the columns share the width, ~10 % left for curves
+    if (phone()) { leftW = W * 0.5; rightW = W * 0.4; m_leftX = 0; }
+    m_rightX = W - rightW - (phone() ? 0 : 8);
     qreal y = 20; QString g;
     for (auto& s : m_src) {
       if (s.group != g) { g = s.group; y += (g == m_src.first().group ? 0 : kGap) + kHead; }
@@ -274,7 +285,7 @@ protected:
     for (auto& t : m_tabs) {
       t.r = QRectF(m_rightX, y, rightW, step - 3);
       y += step;
-      for (auto& s : m_subs) if (s.tab == t.id) { s.r = QRectF(m_rightX + 14, y, rightW - 14, step - 5); y += step; }
+      for (auto& s : m_subs) if (s.tab == t.id) { s.r = QRectF(m_rightX + subIndent(), y, rightW - subIndent(), step - 5); y += step; }
       y += kGap;
     }
     m_laidW = W;
@@ -364,8 +375,11 @@ protected:
         if (label.isEmpty()) for (const auto& t : m_tabs) if (t.id == g) label = QCoreApplication::translate("sources", "MAINLY FOR %1").arg(t.label);
         int n = 0; for (const auto& x : m_src) if (x.group == g) ++n;
         p.setFont(theme::mono(9, QFont::Bold, 1.6)); p.setPen(gc);
+        const QString count = "  ·  " + QString::number(n);
+        // phone: the narrow column elides the label, never the count
+        if (phone()) label = QFontMetrics(p.font()).elidedText(label, Qt::ElideRight, int(s.r.width() - QFontMetrics(p.font()).horizontalAdvance(count)));
         p.drawText(QRectF(m_leftX, s.r.top() - kHead + 4, s.r.width(), kHead - 6), Qt::AlignLeft | Qt::AlignVCenter,
-                   label + "  ·  " + QString::number(n));
+                   label + count);
       }
       const bool on = lit(s);
       const St st = nodeStatus(s);
@@ -406,8 +420,9 @@ protected:
       p.drawRoundedRect(s.r.adjusted(.5, .5, -.5, -.5), 3, 3);
       p.setPen(Qt::NoPen); p.setBrush(tabColour(s.tab)); p.drawEllipse(QPointF(s.r.left() + 9, s.r.center().y()), 2.6, 2.6);
       p.setFont(theme::sans(11)); p.setPen(on ? c.text : c.textDim);
-      p.drawText(s.r.adjusted(18, 0, -30, 0), Qt::AlignLeft | Qt::AlignVCenter,
-                 QFontMetrics(p.font()).elidedText(s.label, Qt::ElideRight, int(s.r.width() - 50)));
+      const int pad = phone() ? 20 : 30;   // phone: the count needs ~20 px, the label gets the rest
+      p.drawText(s.r.adjusted(18, 0, -pad, 0), Qt::AlignLeft | Qt::AlignVCenter,
+                 QFontMetrics(p.font()).elidedText(s.label, Qt::ElideRight, int(s.r.width() - 20 - pad)));
       p.setFont(theme::mono(9)); p.setPen(n == 0 ? c.warn : c.textMute);
       p.drawText(s.r.adjusted(0, 0, -8, 0), Qt::AlignRight | Qt::AlignVCenter, QString::number(n));
       p.setOpacity(1.0);
@@ -426,12 +441,31 @@ protected:
     if (h != m_hover) { m_hover = h; setCursor(h.isEmpty() ? Qt::ArrowCursor : Qt::PointingHandCursor); update(); }
   }
   void leaveEvent(QEvent*) override { if (!qEnvironmentVariableIsSet("DW_DATAMAP_HOVER")) { m_hover.clear(); update(); } }
+  // A finger does not hover: on a phone (or with touch) a tap lights the node's links (a second tap, or a tap on the
+  // background, clears them) and shows its tooltip. A drag (the scroller) is not a tap.
+  bool tapMode() const { return phone() || ui::touch::enabled(); }
+  void mousePressEvent(QMouseEvent* e) override { m_press = e->position(); QWidget::mousePressEvent(e); }
+  void mouseReleaseEvent(QMouseEvent* e) override {
+    if (!tapMode() || (e->position() - m_press).manhattanLength() > 12) { QWidget::mouseReleaseEvent(e); return; }
+    const QString h = hitTest(e->position());
+    m_hover = h == m_hover ? QString() : h;
+    update();
+    const QString html = tipHtml(m_hover);
+    if (html.isEmpty()) QToolTip::hideText();
+    else QToolTip::showText(e->globalPosition().toPoint(), "<div style='max-width:" + QString::number(qMin(420, width() - 40)) + "px'>" + html + "</div>", this);
+  }
   void resizeEvent(QResizeEvent*) override { m_laidW = -1; }
 
   bool event(QEvent* e) override {
     if (e->type() != QEvent::ToolTip) return QWidget::event(e);
     auto* he = static_cast<QHelpEvent*>(e);
-    const QString h = hitTest(he->pos());
+    const QString html = tipHtml(hitTest(he->pos()));
+    if (html.isEmpty()) QToolTip::hideText(); else QToolTip::showText(he->globalPos(), "<div style='max-width:420px'>" + html + "</div>", this);
+    return true;
+  }
+
+  // the tooltip of a source or a sub-tab (empty for anything else)
+  QString tipHtml(const QString& h) const {
     QString html;
     for (const auto& s : m_src) {
       if (s.id != h) continue;
@@ -461,8 +495,7 @@ protected:
       html = "<b>" + sub.label.toHtmlEscaped() + "</b><br>" +
              (names.isEmpty() ? QCoreApplication::translate("sources", "No outside source.") : QCoreApplication::translate("sources", "%n source(s): ", nullptr, int(names.size())) + names.join(", ")).toHtmlEscaped();
     }
-    if (html.isEmpty()) QToolTip::hideText(); else QToolTip::showText(he->globalPos(), "<div style='max-width:420px'>" + html + "</div>", this);
-    return true;
+    return html;
   }
 
 private:
@@ -475,6 +508,7 @@ private:
   QSet<QString> m_matchIds, m_matchPages;   // sources matching m_query and the pages they feed (setQuery)
   QVector<int> m_shownStatus;   // node statuses when the canvas was last told to repaint
   qreal m_leftX = 0, m_rightX = 0, m_laidW = -1;
+  QPointF m_press;
   int m_height = 600;
 };
 
@@ -483,9 +517,9 @@ class DataMapPage : public QWidget {
 public:
   explicit DataMapPage(QWidget* parent) : QWidget(parent) {
     const auto& c = theme::pal();
-    auto* root = new QVBoxLayout(this);
+    auto* root = m_root = new QVBoxLayout(this);
     root->setContentsMargins(16, 12, 16, 10); root->setSpacing(8);
-    auto* head = new QHBoxLayout; head->setSpacing(12);
+    auto* head = m_head = new QHBoxLayout; head->setSpacing(12);
     head->addWidget(ui::label(QCoreApplication::translate("sources", "SOURCES GRAPH"), theme::title(), c.accentText, this));
     // elides ("…", tooltip) rather than run under the search field on a narrow window
     head->addWidget(fit::label(QCoreApplication::translate("sources", "where Deepwater's data comes from, and which tabs use it"), theme::mono(11), c.textDim, this, 60), 1);
@@ -500,12 +534,13 @@ public:
     m_found = ui::label(QString(), theme::mono(10), c.textDim, this);
     head->addWidget(m_found);
     head->addWidget(m_search);
-    head->addWidget(ui::label(QCoreApplication::translate("sources", "%1 sources  ·  %2 sub-tabs  ·  %3 links").arg(m_canvas->sourceCount()).arg(m_canvas->subCount()).arg(m_canvas->linkCount()),
-                              theme::mono(10), c.textDim, this));
+    m_counts = ui::label(QCoreApplication::translate("sources", "%1 sources  ·  %2 sub-tabs  ·  %3 links").arg(m_canvas->sourceCount()).arg(m_canvas->subCount()).arg(m_canvas->linkCount()),
+                         theme::mono(10), c.textDim, this);
+    head->addWidget(m_counts);
     root->addLayout(head);
 
     // legend: status dots and tab colours
-    auto* legend = new QHBoxLayout; legend->setSpacing(16);
+    auto* legend = m_legend = new QHBoxLayout; legend->setSpacing(16);
     auto dot = [&](const QColor& col, const QString& text, bool hollow = false) {
       auto* l = ui::label(QString("<span style='color:%1;'>%2</span>&nbsp;%3").arg(col.name(), hollow ? "○" : "●", text.toHtmlEscaped()),
                           theme::mono(10), c.textDim, this);
@@ -518,6 +553,7 @@ public:
     auto* hint = fit::label(QCoreApplication::translate("sources", "Hover a source or a tab to follow its links"), theme::sans(11), c.textMute, this, 60);
     hint->setOwnToolTip(QCoreApplication::translate("sources", "The number on a source is how many sub-tabs it feeds; on a sub-tab, how many sources it reads."));
     legend->addWidget(hint);
+    m_hint = hint;
     root->addLayout(legend);
 
     auto* scroll = new QScrollArea(this);
@@ -557,7 +593,37 @@ public:
   }
 protected:
   void paintEvent(QPaintEvent*) override { QPainter p(this); p.fillRect(rect(), theme::pal().bg); }
+  void resizeEvent(QResizeEvent* e) override { QWidget::resizeEvent(e); setPhone(ui::compact(width())); }
 private:
+  // Phone header: title line, the search at full width (finger height), then the match count and the totals; the
+  // legend's five dots fit one line once the hover hint (no hover with a finger) is dropped.
+  void setPhone(bool phone) {
+    if (phone == m_phone) return;
+    m_phone = phone;
+    for (auto* w : {static_cast<QWidget*>(m_found), static_cast<QWidget*>(m_search), static_cast<QWidget*>(m_counts)}) {
+      m_head->removeWidget(w); m_root->removeWidget(w);
+      if (m_row2) m_row2->removeWidget(w);
+    }
+    if (phone) {
+      m_root->insertWidget(1, m_search);
+      if (!m_row2) { m_row2 = new QHBoxLayout; m_row2->setSpacing(12); }
+      m_row2->addWidget(m_found); m_row2->addStretch(1); m_row2->addWidget(m_counts);
+      m_root->insertLayout(2, m_row2);
+      m_search->setMinimumWidth(0); m_search->setMaximumWidth(QWIDGETSIZE_MAX); m_search->setFixedHeight(36);
+    } else {
+      m_root->removeItem(m_row2);
+      while (auto* it = m_row2->takeAt(0)) delete it;   // the stretch (the widgets were taken out above)
+      delete m_row2; m_row2 = nullptr;
+      // desktop order: title, subtitle, match count, search, totals
+      m_head->insertWidget(2, m_found); m_head->insertWidget(3, m_search); m_head->insertWidget(4, m_counts);
+      m_search->setFixedWidth(240); m_search->setMinimumHeight(0); m_search->setMaximumHeight(QWIDGETSIZE_MAX);
+    }
+    m_legend->setSpacing(phone ? 8 : 16);
+    // the right column reaches the edge on a phone: no scroll bar over it (the finger scrolls)
+    m_scroll->setVerticalScrollBarPolicy(phone ? Qt::ScrollBarAlwaysOff : Qt::ScrollBarAsNeeded);
+    m_hint->setVisible(!phone);
+  }
+
   void showMatch() {
     if (m_matches.isEmpty()) return;
     // keep the match a third down the view, so the links leaving it stay visible
@@ -568,6 +634,11 @@ private:
   QLineEdit* m_search;
   QLabel* m_found;
   QScrollArea* m_scroll = nullptr;
+  QVBoxLayout* m_root = nullptr;
+  QHBoxLayout *m_head = nullptr, *m_legend = nullptr, *m_row2 = nullptr;
+  QLabel* m_counts = nullptr;
+  QWidget* m_hint = nullptr;
+  bool m_phone = false;
   QList<int> m_matches;
   int m_at = 0;
 };

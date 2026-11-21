@@ -89,6 +89,21 @@ void CalendarTable::setEvents(const QList<news::Event>& ev) {
   setTarget(m_target);
   m_scroll = std::clamp(m_scroll, 0.0, maxScroll());
   update();
+  emit contentChanged();
+}
+
+void CalendarTable::setFullHeight(bool on) {
+  if (on == m_full) return;
+  m_full = on;
+  m_scroll = m_target = 0; m_anim.stop();
+  m_viewTop = 0; m_viewH = 0;
+  update();
+}
+void CalendarTable::setVisibleBand(double top, double h) {
+  top = std::max(0.0, top);
+  if (top == m_viewTop && h == m_viewH) return;
+  m_viewTop = top; m_viewH = h;
+  update();   // the pinned headers move with the band: a blit of the scrolled content would carry them along
 }
 
 // Numeric columns are laid out from the right edge with the reference gaps (Max 0, Min 116, Surprise 116,
@@ -96,6 +111,8 @@ void CalendarTable::setEvents(const QList<news::Event>& ev) {
 // low-priority columns first (MAX/MIN, then SURPRISE); their values move to the row tooltip.
 bool CalendarTable::shown(int col) const {
   if (col < Actual) return true;
+  if (phone()) return col == Actual || col == Forecast || col == Previous;
+  if (m_full && (col == Min || col == Max)) return false;   // phone sideways: the names get the room (ranges are rare)
   const double W = width();
   const double room = W - 228 - 250;              // keep ≥ 250 px for the event name, tag and chevron
   const double f = scale();
@@ -112,6 +129,10 @@ double CalendarTable::scale() const {
   return std::max(0.65, std::min(f, (W - 228 - 10 - 380) / 592.0));
 }
 double CalendarTable::rightOf(int col) const {
+  if (phone()) {   // second line of the two-line rows: three columns from the right edge
+    const double x = width() - 10;
+    return col == Previous ? x : col == Forecast ? x - 86 : col == Actual ? x - 172 : -1000;
+  }
   const double W = width(), f = scale();
   static const int order[] = {Max, Min, Surprise, Previous, Forecast, Actual};
   static const double gap[] = {0, 116, 116, 111, 124, 126};   // distance to the next column on the right
@@ -139,8 +160,8 @@ void CalendarTable::relayout() {
       Item g{Item::Group, y, m_items.isEmpty() ? double(kStickyH) : 31.0, -1, d, m_items.isEmpty()};
       m_items << g; y += g.h; cur = d;
     }
-    m_items << Item{Item::Row, y, double(kRowH), i, d};
-    y += kRowH;
+    m_items << Item{Item::Row, y, rowH(), i, d};
+    y += rowH();
     if (m_events[i].key == m_expanded) {
       double h = 13;
       for (const auto& para : descParas(m_events[i])) h += wrapLines(para, df, proseWidth()).size() * 20 + 27;
@@ -156,7 +177,7 @@ const CalendarTable::Item* CalendarTable::expandItem() const {
   return nullptr;
 }
 
-double CalendarTable::maxScroll() const { return std::max(0.0, contentHeight() - (height() - kHeaderH) + 8); }
+double CalendarTable::maxScroll() const { if (m_full) return 0; return std::max(0.0, contentHeight() - (height() - kHeaderH) + 8); }
 void CalendarTable::setTarget(double y) {
   m_target = std::clamp(y, 0.0, maxScroll());
   if (std::abs(m_target - m_scroll) > 0.5 && !m_anim.isActive()) m_anim.start();
@@ -177,6 +198,7 @@ void CalendarTable::toggleExpand(const QString& key) {
   }
   setTarget(m_target);
   update();
+  emit contentChanged();
 }
 
 void CalendarTable::scrollToKey(const QString& key) {
@@ -191,6 +213,11 @@ void CalendarTable::scrollToKey(const QString& key) {
 }
 
 QRectF CalendarTable::cellRect(const Item& it, int col) const {
+  if (phone()) {   // values on the second line; the rest of the row opens the release history
+    if (col >= Actual) return shown(col) ? QRectF(rightOf(col) - 82, it.y + 29, 86, 28) : QRectF();
+    if (col == EventCol) return QRectF(0, it.y, width(), it.h);
+    return {};
+  }
   if (col >= Actual) return shown(col) ? QRectF(rightOf(col) - 111 * std::min(1.0, scale()), it.y + 5.5, 113 * std::min(1.0, scale()), 25) : QRectF();
   if (col == EventCol) return QRectF(222, it.y, rightOf(Actual) - 125 * std::min(1.0, scale()) - 222, it.h);
   return {};
@@ -328,6 +355,97 @@ void CalendarTable::paintRow(QPainter& p, const Item& it, double y, bool pinned)
   }
 }
 
+// Phone rows (two lines, 60 px): time · flag · currency · impact dots · name (+ chevron) on the first line; the
+// period tag on the left of the second, then ACTUAL / FORECAST / PREVIOUS under their header labels. SURPRISE and
+// the economists' range stay in the range panel (tap a value).
+void CalendarTable::paintRowPhone(QPainter& p, const Item& it, double y) const {
+  const news::Event& e = m_events[it.ev];
+  const double W = width(), h = it.h, cy1 = y + 16, cy2 = y + 43;
+  const int idx = int(&it - m_items.constData());
+  int groupIndex = 0;
+  for (int k = 0; k <= idx && k < m_items.size(); ++k) if (m_items[k].kind == Item::Group && k > 0) ++groupIndex;
+  p.fillRect(QRectF(0, y, W, h - 1), idx == m_hoverItem || e.key == m_expanded ? kRowHover : groupIndex % 2 == 1 ? kRowToday : kRowBg);
+  p.fillRect(QRectF(0, y + h - 1, W, 1), kRowSep);
+
+  p.setFont(theme::mono(13)); p.setPen(kTime);
+  p.drawText(QRectF(10, cy1 - 10, 46, 20), Qt::AlignLeft | Qt::AlignVCenter, e.allDay ? QStringLiteral("—") : e.time.toLocalTime().toString("HH:mm"));
+  if (e.currency != "ALL") p.drawPixmap(QPointF(56, cy1 - 6.5), ui::flag(e.currency, QSize(20, 13)));
+  else { p.setPen(theme::map("#3a372f")); p.drawRect(QRectF(56.5, cy1 - 6, 19, 12)); }
+  p.setFont(theme::mono(13, QFont::Medium)); p.setPen(kCcy);
+  p.drawText(QRectF(82, cy1 - 10, 50, 20), Qt::AlignLeft | Qt::AlignVCenter, e.currency);
+  const double dotX = 82 + QFontMetricsF(p.font()).horizontalAdvance(e.currency) + 10;
+  p.setRenderHint(QPainter::Antialiasing, true);
+  const int dots = e.impact == news::Impact::High ? 3 : e.impact == news::Impact::Medium ? 2 : 1;
+  p.setPen(Qt::NoPen); p.setBrush(e.impact >= news::Impact::Medium ? kDotHi : kDotLow);
+  for (int i = 0; i < dots; ++i) p.drawEllipse(QPointF(dotX + i * 9, cy1), 3, 3);
+  p.setBrush(Qt::NoBrush);
+  p.setRenderHint(QPainter::Antialiasing, false);
+  const double nx = dotX + dots * 9 + 3;
+  const QFont nf = theme::condensed(15, QFont::Medium);
+  const QFontMetricsF nfm(nf);
+  const QString name = nfm.elidedText(e.name, Qt::ElideRight, W - 10 - 18 - nx);
+  p.setFont(nf); p.setPen(kName);
+  p.drawText(QRectF(nx, cy1 - 11, W - nx, 22), Qt::AlignLeft | Qt::AlignVCenter, name);
+  {  // chevron
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(kChevron.c(), 1.2));
+    const bool up = e.key == m_expanded;
+    const QPointF c(nx + nfm.horizontalAdvance(name) + 12, cy1 + (up ? -1 : 1));
+    if (up) { p.drawLine(c + QPointF(-3.5, 2), c + QPointF(0, -1.5)); p.drawLine(c + QPointF(0, -1.5), c + QPointF(3.5, 2)); }
+    else { p.drawLine(c + QPointF(-3.5, -2), c + QPointF(0, 1.5)); p.drawLine(c + QPointF(0, 1.5), c + QPointF(3.5, -2)); }
+    p.setRenderHint(QPainter::Antialiasing, false);
+  }
+
+  // second line, left: "All Day" for a holiday, else the period tag (without its raw "y/y" when short of room)
+  const double leftRoom = rightOf(Actual) - 82 - 6 - 56;
+  if (e.allDay) {
+    p.setFont(theme::mono(11)); p.setPen(kTime);
+    p.drawText(QRectF(56, cy2 - 10, leftRoom, 20), Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetricsF(p.font()).elidedText(QCoreApplication::translate("news", "All Day"), Qt::ElideRight, leftRoom));
+  } else if (!e.period.isEmpty()) {
+    const QFont tf = theme::mono(9, QFont::Bold, 0.8), tf2 = theme::condensed(12, QFont::Medium);
+    const QFontMetricsF tfm(tf), tfm2(tf2);
+    const QString period = periodLabel(e.period);
+    double tagW = tfm.horizontalAdvance(period) + tfm2.horizontalAdvance(e.periodRaw) + 18;
+    const bool raw = tagW <= leftRoom;
+    if (!raw) tagW = tfm.horizontalAdvance(period) + 13;
+    if (tagW <= leftRoom) {
+      const QRectF tr(56, cy2 - 9, tagW, 18);
+      p.setPen(kTagBorder); p.drawRect(tr.adjusted(0.5, 0.5, -0.5, -0.5));
+      p.setFont(tf); p.setPen(kTagText);
+      p.drawText(QRectF(tr.x() + 6, tr.y(), tagW, 18), Qt::AlignLeft | Qt::AlignVCenter, period);
+      if (raw) {
+        p.setFont(tf2); p.setPen(kTagDim);
+        p.drawText(QRectF(tr.x() + 9 + tfm.horizontalAdvance(period), tr.y(), tagW, 18), Qt::AlignLeft | Qt::AlignVCenter, e.periodRaw);
+      }
+    }
+  }
+
+  // values
+  const QFont vf = theme::mono(14), vb = theme::mono(14, QFont::Bold);
+  auto put = [&](int col, const QString& t, const QColor& c, bool bold, double rightPad = 0) {
+    p.setFont(bold ? vb : vf); p.setPen(c);
+    p.drawText(QRectF(rightOf(col) - 200 - rightPad, cy2 - 12, 200, 24), Qt::AlignRight | Qt::AlignVCenter, t);
+  };
+  if (e.actual.has()) {
+    put(Actual, e.actual.text, kActual, true, 12);
+    if (const int dir = e.direction()) {
+      p.setRenderHint(QPainter::Antialiasing, true);
+      p.setPen(QPen((dir > 0 ? kUp : kDown).c(), 1.2));
+      const double ax = rightOf(Actual) - 4, cy = cy2;
+      if (dir > 0) { p.drawLine(QPointF(ax, cy + 4), QPointF(ax, cy - 3)); p.drawLine(QPointF(ax - 2.5, cy - 0.5), QPointF(ax, cy - 3)); p.drawLine(QPointF(ax + 2.5, cy - 0.5), QPointF(ax, cy - 3)); }
+      else { p.drawLine(QPointF(ax, cy - 3), QPointF(ax, cy + 4)); p.drawLine(QPointF(ax - 2.5, cy + 1.5), QPointF(ax, cy + 4)); p.drawLine(QPointF(ax + 2.5, cy + 1.5), QPointF(ax, cy + 4)); }
+      p.setRenderHint(QPainter::Antialiasing, false);
+    }
+  } else put(Actual, "—", kActual, true, 12);
+  put(Forecast, e.forecast.has() ? e.forecast.text : "—", e.forecast.has() ? kFcst : kDash, false);
+  put(Previous, e.previous.has() ? e.previous.text : "—", e.previous.has() ? kPrev : kDash, false);
+  if (e.key == m_focusKey && m_focusCol >= Actual && shown(m_focusCol)) {
+    const QRectF fr = cellRect(it, m_focusCol).translated(0, y - it.y);
+    p.setPen(kFocus); p.drawRect(fr.adjusted(0.5, 2.5, -0.5, -2.5));
+  }
+}
+
 void CalendarTable::paintExpand(QPainter& p, const Item& it, double y) const {
   const news::Event& e = m_events[it.ev];
   p.fillRect(QRectF(0, y, width(), it.h), kExpBg);
@@ -349,15 +467,17 @@ void CalendarTable::paintEvent(QPaintEvent*) {
   QPainter p(this);
   const double W = width(), H = height();
   p.fillRect(rect(), kRowBg);
-  const double top = kHeaderH;
+  // full height (page scrolls): the headers are pinned at the top of the visible band, rows outside it are skipped
+  const double S = scrollPos(), hdr = headY(), bottom = m_full && m_viewH > 0 ? std::min(H, hdr + m_viewH) : H;
+  const double top = hdr + kHeaderH;
   p.save();
   p.setClipRect(QRectF(0, top, W, H - top));
-  const double off = top - m_scroll;
+  const double off = top - S;
   for (const auto& it : m_items) {
     const double y = it.y + off;
-    if (y + it.h < top || y > H) continue;
+    if (y + it.h < top || y > bottom) continue;
     if (it.kind == Item::Group) paintGroup(p, it.day, y + (it.first ? 0 : 0), it.first);
-    else if (it.kind == Item::Row) paintRow(p, it, y, false);
+    else if (it.kind == Item::Row) { if (phone()) paintRowPhone(p, it, y); else paintRow(p, it, y, false); }
     else paintExpand(p, it, y);
   }
   if (m_items.isEmpty()) {
@@ -366,17 +486,17 @@ void CalendarTable::paintEvent(QPaintEvent*) {
                m_note.isEmpty() ? QCoreApplication::translate("news", "Loading the calendar…") : m_note);
   }
   // sticky: day header (+ pinned expanded row)
-  if (!m_items.isEmpty() && m_scroll > 0.5) {
+  if (!m_items.isEmpty() && S > 0.5) {
     int g = -1, next = -1;
     for (int i = 0; i < m_items.size(); ++i) {
       if (m_items[i].kind != Item::Group) continue;
-      if (m_items[i].y <= m_scroll) g = i; else { next = i; break; }
+      if (m_items[i].y <= S) g = i; else { next = i; break; }
     }
     if (g >= 0) {
       double sy = top;
       if (next >= 0) sy = std::min(sy, m_items[next].y + off - kStickyH);
       bool pinned = false;
-      if (const Item* ex = expandItem(); ex && ex->day == m_items[g].day) {
+      if (const Item* ex = expandItem(); ex && ex->day == m_items[g].day && !phone()) {
         const Item& row = m_items[ex->ev >= 0 ? int(ex - m_items.constData()) - 1 : 0];
         const double rowY = row.y + off;
         const double pinY = top + 20;
@@ -393,6 +513,8 @@ void CalendarTable::paintEvent(QPaintEvent*) {
   p.restore();
 
   // column header
+  p.save();
+  p.translate(0, hdr);
   p.fillRect(QRectF(0, 0, W, kHeaderH), kHeadBg);
   p.fillRect(QRectF(0, 0, W, 1), kHeadLine);
   p.fillRect(QRectF(0, kHeaderH - 2, W, 1), kHeadBottom);
@@ -400,11 +522,12 @@ void CalendarTable::paintEvent(QPaintEvent*) {
   p.setFont(theme::mono(9, QFont::Normal, 0.8)); p.setPen(kHeadText);
   const QRectF hr(0, 1, W, kHeaderH - 3);
   p.drawText(hr.adjusted(10, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "TIME"));
-  p.drawText(hr.adjusted(103, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "CURRENCY"));
-  p.drawText(hr.adjusted(228, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "EVENT"));
+  if (!phone()) p.drawText(hr.adjusted(103, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "CURRENCY"));
+  p.drawText(hr.adjusted(phone() ? 56 : 228, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "EVENT"));
   const QList<QPair<int, QString>> cols{{Actual, QCoreApplication::translate("news", "ACTUAL")}, {Forecast, QCoreApplication::translate("news", "FORECAST")}, {Previous, QCoreApplication::translate("news", "PREVIOUS")},
                                         {Surprise, QCoreApplication::translate("news", "SURPRISE")}, {Min, QCoreApplication::translate("news", "MIN")}, {Max, QCoreApplication::translate("news", "MAX")}};
   for (const auto& [c, t] : cols) if (shown(c)) p.drawText(QRectF(rightOf(c) - 150, 1, 150, kHeaderH - 3), Qt::AlignRight | Qt::AlignVCenter, t);
+  p.restore();
 }
 
 // ------------------------------------------------------------------------------------------------ input
@@ -412,17 +535,18 @@ void CalendarTable::updateHover(const QPointF& pos) {
   int hi = -1, hc = -1;
   bool onCard = false;   // the mouse is over the expanded release-history card (hi is only set for rows)
   Qt::CursorShape cur = Qt::ArrowCursor;
-  if (pos.y() >= kHeaderH) {
-    double cy = pos.y() - kHeaderH + m_scroll;
+  const double S = scrollPos(), hdr = headY();
+  if (pos.y() >= hdr + kHeaderH) {
+    double cy = contentY(pos.y());
     // pinned expanded row
-    if (const Item* ex = expandItem()) {
+    if (const Item* ex = expandItem(); ex && !phone()) {
       const int ri = int(ex - m_items.constData()) - 1;
-      const double rowY = m_items[ri].y + kHeaderH - m_scroll, pinY = kHeaderH + 20;
-      if (rowY < pinY && ex->y + ex->h + kHeaderH - m_scroll > pinY + kRowH + 40 && pos.y() >= pinY + 9 && pos.y() < pinY + kRowH)
+      const double rowY = m_items[ri].y + hdr + kHeaderH - S, pinY = hdr + kHeaderH + 20;
+      if (rowY < pinY && ex->y + ex->h + hdr + kHeaderH - S > pinY + kRowH + 40 && pos.y() >= pinY + 9 && pos.y() < pinY + kRowH)
         cy = m_items[ri].y + (pos.y() - pinY);
     }
     // under the sticky day header nothing is clickable
-    if (m_scroll > 0.5 && pos.y() < kHeaderH + 29) cy = -1;
+    if (S > 0.5 && pos.y() < hdr + kHeaderH + 29) cy = -1;
     const int i = itemAt(cy);
     if (i >= 0 && m_items[i].kind == Item::Row) {
       hi = i;
@@ -468,7 +592,7 @@ void CalendarTable::mouseMoveEvent(QMouseEvent* e) {
   m_pin = false;
   if (m_cardPress) {
     if (const Item* ex = expandItem()) {
-      const QPointF c(e->position().x(), e->position().y() - kHeaderH + m_scroll);
+      const QPointF c(e->position().x(), contentY(e->position().y()));
       if (m_card.mouseMove(cardRect(*ex), c)) update();
     }
     return;
@@ -479,8 +603,8 @@ void CalendarTable::mouseMoveEvent(QMouseEvent* e) {
 void CalendarTable::mousePressEvent(QMouseEvent* e) {
   if (e->button() != Qt::LeftButton) return;
   if (const Item* ex = expandItem()) {
-    const QPointF c(e->position().x(), e->position().y() - kHeaderH + m_scroll);
-    if (e->position().y() > kHeaderH + 36 && cardRect(*ex).contains(c)) {
+    const QPointF c(e->position().x(), contentY(e->position().y()));
+    if (e->position().y() > headY() + kHeaderH + 36 && cardRect(*ex).contains(c)) {
       if (m_card.mousePress(cardRect(*ex), c)) { m_cardPress = m_card.dragging(); update(); }
       return;
     }
@@ -496,20 +620,21 @@ void CalendarTable::mouseReleaseEvent(QMouseEvent* e) {
   if (!m_cardPress) return;
   m_cardPress = false;
   if (const Item* ex = expandItem()) {
-    const QPointF c(e->position().x(), e->position().y() - kHeaderH + m_scroll);
+    const QPointF c(e->position().x(), contentY(e->position().y()));
     if (m_card.mouseRelease(cardRect(*ex), c)) update();
   }
 }
 
 void CalendarTable::mouseDoubleClickEvent(QMouseEvent* e) {
   if (const Item* ex = expandItem()) {
-    const QPointF c(e->position().x(), e->position().y() - kHeaderH + m_scroll);
+    const QPointF c(e->position().x(), contentY(e->position().y()));
     if (m_card.mouseDoubleClick(cardRect(*ex), c)) { update(); return; }
   }
   mousePressEvent(e);
 }
 
 void CalendarTable::wheelEvent(QWheelEvent* e) {
+  if (m_full) { e->ignore(); return; }   // the page scrolls
   if (!e->pixelDelta().isNull()) { setScroll(m_scroll - e->pixelDelta().y()); }
   else setTarget(m_target - e->angleDelta().y() / 120.0 * 113);
   updateHover(e->position());

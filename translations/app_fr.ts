@@ -486,4 +486,43 @@
         <translation>Clair : rose poudré aux accents rose vif.</translation>
     </message>
 </context>
+<context>
+    <name>help</name>
+    <message>
+        <source>Deepwater documentation</source>
+        <translation>Documentation de Deepwater</translation>
+    </message>
+    <message>
+        <source>Help</source>
+        <translation>Aide</translation>
+    </message>
+    <message>
+        <source>Search the documentation</source>
+        <translation>Rechercher dans la documentation</translation>
+    </message>
+    <message>
+        <source>NO MATCH</source>
+        <translation>AUCUN RÉSULTAT</translation>
+    </message>
+    <message>
+        <source>IN ALL</source>
+        <translation>AU TOTAL</translation>
+    </message>
+    <message>
+        <source>DOCUMENTATION</source>
+        <translation>DOCUMENTATION</translation>
+    </message>
+    <message>
+        <source>CHAPTERS</source>
+        <translation>CHAPITRES</translation>
+    </message>
+    <message>
+        <source>IN THIS CHAPTER</source>
+        <translation>DANS CE CHAPITRE</translation>
+    </message>
+    <message>
+        <source>F1 opens the page shown · Enter: next match · Esc closes</source>
+        <translation>F1 ouvre la page affichée · Entrée : résultat suivant · Échap ferme</translation>
+    </message>
+</context>
 </TS>

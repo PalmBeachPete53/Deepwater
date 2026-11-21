@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QStringList>
+#include <cmath>
 #include <optional>
 
 class QComboBox;
@@ -30,6 +31,13 @@ struct TestResult {
   QStringList indicatorOrder;   // keys of strat.indicators in the JS insertion order
   QString dataNote;             // where the bars came from when not the chart's (Data › Technical data), shown with the result
   int runId = 0;                // set by showRun, one per result: the quant checks box finds its run again after a rebuild
+  QString config, label;        // a Pine run's fingerprint and name (rules: from strat); recordTrial sets config for both
+  QString family;               // its family in the trial registry (empty: not written there)
+  // The trial registry (src/trials) after this run was written there: distinct strategies tried on this market and
+  // timeframe, by the user and by the agents, and the best one's deflated Sharpe (tried = 0: not written)
+  int tried = 0, triedUser = 0, triedAgents = 0;
+  double bestDsr = NAN;
+  bool bestIsThis = false;
 };
 
 class TesterTab : public QObject {
@@ -81,6 +89,7 @@ public:
 private:
   QPointer<QComboBox> barsSel_;
   void showRun(ChartPane* p, const TestResult& tr);   // keeps the result, marks the trades on the chart, shows it
+  void recordTrial(ChartPane* p, TestResult& tr);     // writes the run in the trial registry, sets tr.tried…
   QString pineFile_;   // the Pine strategy picked ("" = the rules)
   bool pineRunning_ = false;
 

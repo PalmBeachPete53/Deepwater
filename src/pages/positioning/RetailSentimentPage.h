@@ -2,6 +2,7 @@
 #include <QWidget>
 class QLineEdit;
 class QTimer;
+namespace global { class PageScroll; }
 
 namespace positioning {
 namespace pk { class TitleBar; class Ticker; class Scroll; class Segmented; class Footer; }
@@ -27,6 +28,12 @@ private:
   void openModal(const QString& symbol);
   void showLogin(bool on);
   void editCustom();
+  // Phones (upright, or sideways: page under 420 px tall): the cards, filters and the whole table scroll as one page
+  // (global::PageScroll, made only in that mode) above the fixed footer; upright, the title bar gives way to the
+  // Myfxbook badge at the top of the page.
+  void setPhoneMode(bool on);
+  int layoutPhone(int w, int viewportH);
+  void placeConn(bool inPage);
 
   pk::TitleBar* m_title;
   class RetailConnBadge* m_conn;
@@ -43,5 +50,8 @@ private:
   pk::Ticker* m_ticker;
   QTimer* m_clock;
   bool m_forceLogin = false;
+  global::PageScroll* m_pageScroll = nullptr;   // phone mode only
+  QWidget* m_phoneBox = nullptr;                // its content
+  bool m_connInPage = false;
 };
 }  // namespace positioning

@@ -43,6 +43,7 @@ void SmoothScroll::scrollBy(int dy) {
   m_anim->stop(); m_anim->setStartValue(verticalScrollBar()->value()); m_anim->setEndValue(m_target); m_anim->start();
 }
 void SmoothScroll::wheelEvent(QWheelEvent* e) {
+  if (m_passWheel && verticalScrollBar()->maximum() == 0) { e->ignore(); return; }
   if (!e->pixelDelta().isNull()) { m_anim->stop(); verticalScrollBar()->setValue(verticalScrollBar()->value() - e->pixelDelta().y()); }
   else scrollBy(-e->angleDelta().y() * 150 / 120);   // reference: ≈150 px per wheel step
   e->accept();

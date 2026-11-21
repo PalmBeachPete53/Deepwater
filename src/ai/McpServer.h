@@ -15,7 +15,8 @@ class QTcpSocket;
 // What it offers is the cube's permission and nothing else: tools/list = the tools of the skills the environment grants
 // now (ai::Tools::forSkills); tools/call checks the skill again, refuses when no question of that environment is being
 // answered by Claude Code, caps the calls per question, and hands each call to ai::Engine::recordTool (chat line +
-// tool journal). Requests with an Origin header (browsers) or a Host other than 127.0.0.1/localhost are refused.
+// tool journal). Requests with an Origin header (browsers) or a Host other than 127.0.0.1/localhost are refused; the
+// token is compared in constant time; third parties' text in a result is marked as data (ai::wrapExternal, 2026-11-20).
 namespace ai {
 
 class McpServer : public QObject {

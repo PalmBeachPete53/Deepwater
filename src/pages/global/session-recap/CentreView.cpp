@@ -33,6 +33,9 @@ inline QColor kMid() { return theme::map("#84837f"); }
 QFont titleFont() { QFont f = theme::condensed(37, QFont::Bold); f.setLetterSpacing(QFont::AbsoluteSpacing, 3.4); return f; }
 QFont leadFont() { return theme::condensed(17, QFont::Medium); }
 QFont secFont() { return theme::condensed(15, QFont::Medium); }
+// phone: a smaller title (SESSION DE NEW YORK fits 390 px) and a wrapped headline
+QFont phoneTitleFont() { QFont f = theme::condensed(28, QFont::Bold); f.setLetterSpacing(QFont::AbsoluteSpacing, 2); return f; }
+QFont phoneHeadFont() { return theme::condensed(22, QFont::DemiBold); }
 
 // word-wrapped paragraph: returns line count; draws when p != nullptr (first baseline at y)
 int paragraph(QPainter* p, const QString& text, const QFont& f, qreal x, qreal y, qreal width, qreal lineH) {
@@ -85,16 +88,22 @@ QList<int> CentreView::chipAssets() const {
 
 void CentreView::resizeEvent(QResizeEvent* e) { SmoothScroll::resizeEvent(e); relayout(); }
 
-void CentreView::relayout() {
+// Phone upright (view < 520 px wide, ui::compact pages): the meta line wraps under the date, the headline wraps
+// instead of being elided, each section stacks its assets above its text, the chips wrap on finger-sized rows above
+// the chart, the EN/FR toggle grows. Wider views keep the reference geometry (every phone change is behind g.phone).
+void CentreView::relayout(int width) {
   Geo g;
-  g.w = viewport()->width();
+  g.w = width >= 0 ? width : viewport()->width();
+  g.phone = g.w > 0 && g.w < 520;
   const int L = kMargin, R = g.w - kMargin;
-  g.card = QRect(L, 136, R - L, 0);
+  g.dy = g.phone ? 18 : 0;
+  g.card = QRect(L, 136 + g.dy, R - L, 0);
+  if (g.phone) g.headExtra = qMax(0, paragraph(nullptr, m_read.headline, phoneHeadFont(), 0, 0, g.card.width() - 36, 28) - 1) * 28;
   const int inner = g.card.left() + 18;
   const qreal leadW = qMin<qreal>(g.card.width() >= 1500 ? 900 : 660, g.card.width() - 36);
   const int leadLines = paragraph(nullptr, m_read.lead, leadFont(), 0, 0, leadW, 26);
   g.leadH = leadLines * 26;
-  const int y0 = g.card.top() + 107 + (leadLines - 1) * 26 + 39;
+  const int y0 = g.card.top() + 107 + g.headExtra + (leadLines - 1) * 26 + 39;
   // wide views (card ≥ 1500 px): the sections flow in two columns so prose lines stay ≤ 900 px
   const int ncol = g.card.width() >= 1500 ? 2 : 1;
   const int colW = (g.card.width() - 36 - (ncol - 1) * 40) / ncol;
@@ -108,10 +117,16 @@ void CentreView::relayout() {
   for (int k = 0; k < m_read.sections.size(); ++k) {
     const auto& s = m_read.sections[k];
     const int col = k / qMax(1, perCol);
-    const int textX = g.secX[k] + 186, textW = qMin(900, g.secRight[k] - 7 - textX);
+    int textX = g.secX[k] + 186, textW = qMin(900, g.secRight[k] - 7 - textX), textDY = 5, pctW = textX - 16 - g.secX[k];
+    if (g.phone) {   // assets under the label, the text under the assets, the full width of the card
+      const int n = int(s.assets.size());
+      textX = g.secX[k]; textW = g.secRight[k] - textX; textDY = (n > 0 ? 22 + (n - 1) * 19 : 0) + 26; pctW = qMin(220, textW);
+    }
     const int lines = paragraph(nullptr, s.text, secFont(), 0, 0, textW, 23);
-    const int h = qMax(22 + (int(s.assets.size()) - 1) * 19, (lines - 1) * 23 + 5) + 37;
+    const int h = g.phone ? textDY + (lines - 1) * 23 + 37
+                          : qMax(22 + (int(s.assets.size()) - 1) * 19, (lines - 1) * 23 + 5) + 37;
     g.secTop << colY[col]; g.secH << h;
+    g.secTextX << textX; g.secTextW << textW; g.secTextDY << textDY; g.secPctW << pctW;
     colY[col] += h;
   }
   int y = y0;
@@ -119,31 +134,64 @@ void CentreView::relayout() {
   g.card.setBottom(y - 3);
   Q_UNUSED(inner)
   g.extra = qBound(0, (g.w - 900) / 7, 150);   // the chart grows on wide views
-  g.timeline = QRect(L, g.card.bottom() + 14, R - L, kTimelineH + g.extra);
-  g.plot = QRect(g.timeline.left() + 15, g.timeline.top() + 69, g.timeline.width() - 84, 250 + g.extra);   // reference: grid/fill 69–319, values 85–298
-  // chips
   const QFont fc = theme::mono(11);
   const QFontMetricsF fm(fc);
-  qreal cx = g.timeline.left() + 13 + QFontMetricsF(theme::mono(10, QFont::Normal, 2.2)).horizontalAdvance(QCoreApplication::translate("wire", "WINDOW TIMELINE")) + 14;
-  for (int a : chipAssets()) {
-    const qreal w = fm.horizontalAdvance(assetName(a) + " " + pctText(m_st[a].chg)) + 12;
-    if (cx + w > g.timeline.right() - 10) break;
-    g.chips << QRectF(cx, g.timeline.top() + 16, w, 19);
-    cx += w + 6;
+  const int ttop = g.card.bottom() + 14;
+  if (g.phone) {   // chips: rows of 28 px targets under the title, the legend and the chart move down by the rows
+    qreal cx = L + 13, cy = ttop + 40;
+    for (int a : chipAssets()) {
+      const qreal w = fm.horizontalAdvance(assetName(a) + " " + pctText(m_st[a].chg)) + 16;
+      if (cx + w > R - 13 && cx > L + 13) { cx = L + 13; cy += 34; }
+      g.chips << QRectF(cx, cy, w, 28);
+      cx += w + 8;
+    }
+    if (!g.chips.isEmpty()) g.head = int(cy + 34 - (ttop + 40));
   }
-  // grid 4x3
-  const int gt = g.timeline.bottom() + 39;
-  const int cw = (R - L - 3 * 8) / 4;
+  g.timeline = QRect(L, ttop, R - L, kTimelineH + g.extra + g.head);
+  g.plot = QRect(g.timeline.left() + 15, g.timeline.top() + 69 + g.head, g.timeline.width() - 84, 250 + g.extra);   // reference: grid/fill 69–319, values 85–298
+  // chips
+  if (!g.phone) {
+    qreal cx = g.timeline.left() + 13 + QFontMetricsF(theme::mono(10, QFont::Normal, 2.2)).horizontalAdvance(QCoreApplication::translate("wire", "WINDOW TIMELINE")) + 14;
+    for (int a : chipAssets()) {
+      const qreal w = fm.horizontalAdvance(assetName(a) + " " + pctText(m_st[a].chg)) + 12;
+      if (cx + w > g.timeline.right() - 10) break;
+      g.chips << QRectF(cx, g.timeline.top() + 16, w, 19);
+      cx += w + 6;
+    }
+  }
+  // grid 4x3; narrow views (cards < 150 px: names ran into the changes) 2x6
+  {
+    const QFontMetricsF tf(theme::mono(10, QFont::Normal, 2.3)), sf(theme::mono(10));
+    const qreal tw = tf.horizontalAdvance(QCoreApplication::translate("wire", "MOVES OF THE WINDOW") + " ") + 2 + sf.horizontalAdvance(gridSubtitle());
+    g.gridTwoLines = L + tw > R;   // the subtitle goes under the title (wrapped when it is still too long: weeks)
+    if (g.gridTwoLines) g.gridSubLines = paragraph(nullptr, gridSubtitle(), theme::mono(10), 0, 0, R - L, 16);
+  }
+  const int gt = g.timeline.bottom() + 39 + (g.gridTwoLines ? 16 * g.gridSubLines : 0);
+  int cols = 4, cw = (R - L - 3 * 8) / 4;
+  if (cw < 150) { cols = 2; cw = (R - L - 8) / 2; }
+  const int rows = 12 / cols;
   const int ch = qBound(kCardH, int(cw * 0.42), 220);   // taller sparklines when the cards get wide
-  for (int r = 0; r < 3; ++r)
-    for (int c = 0; c < 4; ++c) g.cards << QRect(L + c * (cw + 8), gt + r * (ch + 9), cw, ch);
-  g.grid = QRect(L, gt, R - L, 3 * ch + 18);
+  for (int r = 0; r < rows; ++r)
+    for (int c = 0; c < cols; ++c) g.cards << QRect(L + c * (cw + 8), gt + r * (ch + 9), cw, ch);
+  g.grid = QRect(L, gt, R - L, rows * ch + (rows - 1) * 9);
   g.height = g.grid.bottom() + 26;
-  // EN / FR toggle
-  g.en = QRectF(g.card.right() - 79, g.card.top() + 19, 29, 20);
-  g.fr = QRectF(g.card.right() - 47, g.card.top() + 19, 27, 20);
+  // EN / FR toggle (phone: finger-sized)
+  if (g.phone) {
+    g.en = QRectF(g.card.right() - 103, g.card.top() + 12, 40, 30);
+    g.fr = QRectF(g.card.right() - 59, g.card.top() + 12, 40, 30);
+  } else {
+    g.en = QRectF(g.card.right() - 79, g.card.top() + 19, 29, 20);
+    g.fr = QRectF(g.card.right() - 47, g.card.top() + 19, 27, 20);
+  }
+  const bool grew = g.height != m_geo.height;
   m_geo = g;
   setContentHeight(g.height);
+  if (grew) emit heightChanged();
+}
+
+QString CentreView::gridSubtitle() const {
+  return m_w.week ? QCoreApplication::translate("wire", "15-min bars, Mon–Fri · open ⟶ close · click to trace")
+                  : QCoreApplication::translate("wire", "15-min bars · open ⟶ close · click to trace");
 }
 
 qreal CentreView::xOf(qint64 t) const {
@@ -197,25 +245,29 @@ void CentreView::paintTitle(QPainter& p) {
   p.drawText(QPointF(L, 32), QCoreApplication::translate("wire", "SESSION FILE · %1").arg(code));
   qreal tx = L;
   if (!m_w.week) { p.drawPixmap(QPointF(L, 54), ui::flag(m_w.flag(), QSize(22, 15), devicePixelRatioF())); tx = L + 31; }
-  p.setFont(titleFont()); p.setPen(theme::map("#fbfbf8"));
+  p.setFont(m_geo.phone ? phoneTitleFont() : titleFont()); p.setPen(theme::map("#fbfbf8"));
   QString title = m_w.title();
   if (m_w.week) title += "  ·  " + i18n::locale().toString(m_w.monday, QCoreApplication::translate("wire", "d MMM")).toUpper() + " – " +
                           i18n::locale().toString(m_w.monday.addDays(4), QCoreApplication::translate("wire", "d MMM")).toUpper();
+  // phone: a week's dates were elided mid-range; the meta line under the title carries them already
+  if (m_geo.phone && m_w.week && QFontMetricsF(p.font()).horizontalAdvance(title) > viewport()->width() - L - tx) title = m_w.title();
   p.drawText(QPointF(tx, 75), QFontMetricsF(p.font()).elidedText(title, Qt::ElideRight, viewport()->width() - L - tx));
   // meta line
   const QFont fm = theme::mono(12);
   QFontMetricsF m(fm);
-  qreal x = L;
-  auto put = [&](const QString& s, const QColor& c) { p.setFont(fm); p.setPen(c); p.drawText(QPointF(x, 100), s); x += m.horizontalAdvance(s); };
+  qreal x = L, ly = 100;
+  auto put = [&](const QString& s, const QColor& c) { p.setFont(fm); p.setPen(c); p.drawText(QPointF(x, ly), s); x += m.horizontalAdvance(s); };
   const QLocale en = i18n::locale();
   QString when;
   if (m_w.week) when = en.toString(m_w.start.toLocalTime(), QCoreApplication::translate("wire", "ddd d MMM HH:mm")) + " → " + en.toString(m_w.end.toLocalTime(), QCoreApplication::translate("wire", "ddd d MMM HH:mm"));
   else when = en.toString(m_w.session.date, QCoreApplication::translate("wire", "ddd d MMM")) + " · " + m_w.start.toLocalTime().toString("HH:mm") + "-" +
               m_w.end.toLocalTime().toString("HH:mm");
   put(when + " " + wire::utcLabel(m_w.start.toLocalTime()), kMid());
+  QString gap = "   ";
+  if (m_geo.phone) { x = L; ly = 118; gap.clear(); }   // phone: breadth, releases and headlines on a second line
   int up = 0, dn = 0;
   for (const auto& s : m_st) if (s.ok()) (s.chg >= 0 ? up : dn)++;
-  put("   " + QCoreApplication::translate("wire", "Breadth") + " ", kMid());
+  put(gap + QCoreApplication::translate("wire", "Breadth") + " ", kMid());
   put(QString("%1↑").arg(up), kPosText()); put(" ", kMid()); put(QString("%1↓").arg(dn), kNegText());
   put("   " + (m_connected ? (m_rel.size() == 1 ? QCoreApplication::translate("wire", "%1 release") : QCoreApplication::translate("wire", "%1 releases")).arg(m_rel.size()) : QCoreApplication::translate("wire", "— releases")), kMid());
   put("   " + (m_wire.size() == 1 ? QCoreApplication::translate("wire", "%1 headline") : QCoreApplication::translate("wire", "%1 headlines")).arg(m_wire.size()), kMid());
@@ -224,7 +276,7 @@ void CentreView::paintTitle(QPainter& p) {
   const QString st = live ? QCoreApplication::translate("wire", "LIVE") : QCoreApplication::translate("wire", "CLOSED");
   const QFont fp = theme::mono(9, QFont::Normal, 1.6);
   QRectF pill(x + 24, 86, QFontMetricsF(fp).horizontalAdvance(st) + 16, 18);
-  if (pill.right() > viewport()->width() - L) pill.moveTopRight(QPointF(viewport()->width() - L, 20));   // narrow: beside SESSION FILE
+  if (m_geo.phone || pill.right() > viewport()->width() - L) pill.moveTopRight(QPointF(viewport()->width() - L, 20));   // narrow: beside SESSION FILE
   p.setPen(QPen(live ? theme::map("#968612") : theme::map("#3d3d3a"), 1)); p.setBrush(live ? theme::map("#342a03") : theme::map("#181818"));
   p.drawRoundedRect(pill.adjusted(.5, .5, -.5, -.5), 2, 2);
   p.setFont(fp); p.setPen(live ? theme::map("#f8e169") : theme::map("#5f605b"));
@@ -232,7 +284,7 @@ void CentreView::paintTitle(QPainter& p) {
   // gold rule
   QLinearGradient g(L, 0, L + (viewport()->width() - 2 * L) * 0.82, 0);
   g.setColorAt(0, kGold()); g.setColorAt(0.55, theme::alpha(kGold(), 110)); g.setColorAt(1, theme::alpha(kGold(), 0));
-  p.fillRect(QRectF(L, 119, viewport()->width() - 2 * L, 2), g);
+  p.fillRect(QRectF(L, 119 + m_geo.dy, viewport()->width() - 2 * L, 2), g);
 }
 
 void CentreView::paintRead(QPainter& p) {
@@ -269,15 +321,16 @@ void CentreView::paintRead(QPainter& p) {
   p.setPen(!en ? (theme::isDefault() ? QColor("#1a1400") : theme::onAccent()) : theme::map("#79776b")); p.drawText(g.fr, Qt::AlignCenter, "FR");
   // headline + lead
   p.setFont(theme::condensed(26, QFont::DemiBold)); p.setPen(theme::map("#f8f6ee"));
-  p.drawText(QPointF(x0, c.top() + 73), QFontMetricsF(p.font()).elidedText(m_read.headline, Qt::ElideRight, c.width() - 40));
+  if (g.phone) paragraph(&p, m_read.headline, phoneHeadFont(), x0, c.top() + 73, c.width() - 36, 28);
+  else p.drawText(QPointF(x0, c.top() + 73), QFontMetricsF(p.font()).elidedText(m_read.headline, Qt::ElideRight, c.width() - 40));
   p.setPen(kBody());
-  paragraph(&p, m_read.lead, leadFont(), x0, c.top() + 107, qMin<qreal>(c.width() >= 1500 ? 900 : 660, c.width() - 36), 26);
+  paragraph(&p, m_read.lead, leadFont(), x0, c.top() + 107 + g.headExtra, qMin<qreal>(c.width() >= 1500 ? 900 : 660, c.width() - 36), 26);
   // sections
   for (int k = 0; k < m_read.sections.size(); ++k) {
     const auto& s = m_read.sections[k];
     const int top = g.secTop[k];
     const int x0 = g.secX[k];
-    const int textX = x0 + 186, textW = qMin(900, g.secRight[k] - 7 - textX);
+    const int textX = g.secTextX[k], textW = g.secTextW[k];
     if (top > g.secTop.value(0) || (k > 0 && g.secX[k] == g.secX[k - 1]))
       p.fillRect(QRect(x0, top - 22, g.secRight[k] - x0, 1), theme::map("#18170f"));
     p.setFont(theme::mono(11, QFont::Bold, 3)); p.setPen(theme::map("#d8b445"));
@@ -288,11 +341,11 @@ void CentreView::paintRead(QPainter& p) {
       p.drawText(QPointF(x0, ly), assetName(a));
       const double ch = m_st.value(a).chg;
       p.setPen(std::isfinite(ch) ? signText(ch) : theme::map("#5f5d57"));
-      p.drawText(QRectF(x0, ly - 13, textX - 16 - x0, 16), Qt::AlignRight | Qt::AlignVCenter, pctText(ch));
+      p.drawText(QRectF(x0, ly - 13, g.secPctW[k], 16), Qt::AlignRight | Qt::AlignVCenter, pctText(ch));
       ly += 19;
     }
     p.setPen(kSecText());
-    paragraph(&p, s.text, secFont(), textX, top + 5, textW, 23);
+    paragraph(&p, s.text, secFont(), textX, top + g.secTextDY[k], textW, 23);
   }
 }
 
@@ -306,7 +359,7 @@ void CentreView::paintTimeline(QPainter& p) {
   p.setFont(theme::mono(10, QFont::Normal, 2.2)); p.setPen(theme::map("#5b5750"));
   p.drawText(QPointF(T.left() + 13, T.top() + 29), QCoreApplication::translate("wire", "WINDOW TIMELINE"));
   // lane rules (reference: under the plot, between the lanes, under the wire lane)
-  for (int y : {325, 353, 383}) p.fillRect(QRect(T.left() + 1, T.top() + y + g.extra, T.width() - 2, 1), theme::map("#211c10"));
+  for (int y : {325, 353, 383}) p.fillRect(QRect(T.left() + 1, T.top() + y + g.extra + g.head, T.width() - 2, 1), theme::map("#211c10"));
   // chips
   const auto ch = chipAssets();
   for (int k = 0; k < g.chips.size(); ++k) {
@@ -328,7 +381,7 @@ void CentreView::paintTimeline(QPainter& p) {
     const QFontMetricsF fm(f);
     const QString tz = wire::utcLabel(m_w.start.toLocalTime());
     qreal x = T.right() - 15 - fm.horizontalAdvance(tz);
-    const qreal by = T.top() + 54;
+    const qreal by = T.top() + 54 + g.head;
     p.setFont(f); p.setPen(theme::map("#535048")); p.drawText(QPointF(x, by), tz);
     auto item = [&](const QString& t, int kind) {
       x -= fm.horizontalAdvance(t) + 14;
@@ -347,6 +400,7 @@ void CentreView::paintTimeline(QPainter& p) {
   const int stepH = m_w.week ? 24 : 1;
   if (m_w.week) t = QDateTime(ls.date(), QTime(0, 0), ls.timeZone());
   p.setFont(theme::mono(10));
+  qreal lastLabelR = -1e9;   // phone: hour labels that would touch the previous one are skipped
   // an invalid window (no data yet) gives invalid dates, which addSecs keeps invalid and which compare below every
   // valid one: the loop never ended. Capped too (a week is 168 hourly steps).
   int guard = 0;
@@ -356,8 +410,12 @@ void CentreView::paintTimeline(QPainter& p) {
     p.fillRect(QRectF(x, plot.top(), 1, plot.height()), theme::map("#1e1912"));
     const QString lab = m_w.week ? i18n::locale().toString(t, "ddd d").toUpper() : t.toString("HH:mm");
     const qreal tw = QFontMetricsF(p.font()).horizontalAdvance(lab);
+    // (the upper bound kept ≥ the lower one: on a view narrower than a label qBound asserted)
+    const qreal lx = qBound<qreal>(T.left() + 6, x - tw / 2, qMax<qreal>(T.left() + 6, plot.right() - tw));
+    if (g.phone && lx < lastLabelR + 6) continue;
+    lastLabelR = lx + tw;
     p.setPen(theme::map("#504c45"));
-    p.drawText(QPointF(qBound<qreal>(T.left() + 6, x - tw / 2, plot.right() - tw), T.top() + 398 + g.extra), lab);
+    p.drawText(QPointF(lx, T.top() + 398 + g.extra + g.head), lab);
   }
   // traced series
   if (m_traced >= 0 && m_st.value(m_traced).ok()) {
@@ -398,7 +456,7 @@ void CentreView::paintTimeline(QPainter& p) {
     const int hi_ = hoverIndex();
     if (hi_ >= 0 && hi_ < pts.size()) {
       const QPointF hp = pts[hi_];
-      p.setPen(QPen(theme::map(220, 218, 210, 150), 1)); p.drawLine(QPointF(m_hoverX, plot.top()), QPointF(m_hoverX, T.top() + 383 + m_geo.extra));
+      p.setPen(QPen(theme::map(220, 218, 210, 150), 1)); p.drawLine(QPointF(m_hoverX, plot.top()), QPointF(m_hoverX, T.top() + 383 + m_geo.extra + m_geo.head));
       p.setPen(Qt::NoPen); p.setBrush(line); p.drawEllipse(hp, 3.5, 3.5);
       const double v = hi_ == 0 ? s.open : s.c[hi_ - 1];
       const qint64 tt = hi_ == 0 ? s.t.first() : s.t[hi_ - 1] + 900;
@@ -422,7 +480,7 @@ void CentreView::paintTimeline(QPainter& p) {
                m_loading ? QCoreApplication::translate("wire", "Loading 15-minute bars…") : QCoreApplication::translate("wire", "No 15-minute bars for this window (market holiday, or older than Yahoo's 60 days)."));
   }
   // releases lane
-  const qreal ry = T.top() + 339 + g.extra;
+  const qreal ry = T.top() + 339 + g.extra + g.head;
   p.setFont(theme::mono(9, QFont::Normal, 2)); p.setPen(theme::map("#4e4a42"));
   p.drawText(QRectF(T.right() - 120, ry - 8, 107, 14), Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("wire", "RELEASES"));
   QMap<qint64, QPair<int, int>> byTime;   // time → (count, max impact)
@@ -441,7 +499,7 @@ void CentreView::paintTimeline(QPainter& p) {
     p.drawText(QPointF(plot.left() + 4, ry + 4), QCoreApplication::translate("wire", "calendar connecting…"));
   }
   // wire lane
-  const qreal wb = T.top() + 381 + g.extra;
+  const qreal wb = T.top() + 381 + g.extra + g.head;
   p.setFont(theme::mono(9, QFont::Normal, 2)); p.setPen(theme::map("#4e4a42"));
   p.drawText(QRectF(T.right() - 120, wb - 16, 107, 14), Qt::AlignRight | Qt::AlignVCenter, QCoreApplication::translate("wire", "WIRE"));
   QMap<qint64, int> buckets;
@@ -450,11 +508,16 @@ void CentreView::paintTimeline(QPainter& p) {
   int maxN = 1;
   for (int n : buckets) maxN = qMax(maxN, n);
   p.setFont(theme::mono(9));
+  qreal lastNumR = -1e9;   // phone: a count that would run into the previous one is left out ("20" "8" read "208")
   for (auto it = buckets.cbegin(); it != buckets.cend(); ++it) {
     const qreal x = xOf(it.key() * bs + bs / 2);
     const qreal h = 9 + 9 * std::sqrt(it.value() / double(maxN));
     p.setPen(Qt::NoPen); p.setBrush(theme::map("#a2a1a1"));
     p.drawRoundedRect(QRectF(x - 1.5, wb - h, 3, h), 1.5, 1.5);
+    if (g.phone && it.value() >= 2) {
+      if (x + 2 < lastNumR + 3) continue;
+      lastNumR = x + 2 + QFontMetricsF(p.font()).horizontalAdvance(QString::number(it.value()));
+    }
     if (it.value() >= 2) {   // single headlines carry no number in the reference
       p.setPen(theme::map("#726f68"));
       p.drawText(QPointF(x + 2, wb - h - 2), QString::number(it.value()));
@@ -474,8 +537,8 @@ void CentreView::paintGrid(QPainter& p) {
   p.drawText(QPointF(g.grid.left(), ty), movesT);
   const qreal tw = QFontMetricsF(p.font()).horizontalAdvance(movesT + " ");
   p.setFont(theme::mono(10)); p.setPen(theme::map("#51514e"));
-  p.drawText(QPointF(g.grid.left() + tw + 2, ty), m_w.week ? QCoreApplication::translate("wire", "15-min bars, Mon–Fri · open ⟶ close · click to trace")
-                                                        : QCoreApplication::translate("wire", "15-min bars · open ⟶ close · click to trace"));
+  if (g.gridTwoLines) paragraph(&p, gridSubtitle(), theme::mono(10), g.grid.left(), ty + 16, g.grid.width(), 16);
+  else p.drawText(QPointF(g.grid.left() + tw + 2, ty), gridSubtitle());
   for (int i = 0; i < g.cards.size() && i < assets().size(); ++i) {
     const QRect c = g.cards[i];
     const auto& a = assets()[i];

@@ -6,6 +6,7 @@
 #include "app/Pages.h"
 #include <QTimer>
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include "pages/news/ThemeColor.h"
 #include <QScrollArea>
 #include <QScrollBar>
@@ -48,7 +49,13 @@ FeedPage::FeedPage(QWidget* parent) : QWidget(parent) {
   m_coalesce.setSingleShot(true); m_coalesce.setInterval(120);
   connect(&m_coalesce, &QTimer::timeout, this, &FeedPage::refresh);
   connect(&news::Feed::instance(), &news::Feed::updated, this, [this] { m_feedDirty = true; if (!m_coalesce.isActive()) m_coalesce.start(); });
-  connect(m_st, &FeedState::changed, this, [this] { refresh(); m_scroll->verticalScrollBar()->setValue(0); });
+  connect(m_st, &FeedState::changed, this, [this] {
+    refresh();
+    // phones: the filters sit below the lead and the headlines; a chip or a search keystroke keeps them in view
+    // instead of jumping to the top of the column
+    if (ui::compact(m_feed->width())) m_scroll->verticalScrollBar()->setValue(std::min(m_scroll->verticalScrollBar()->value(), m_filters->y() - 8));
+    else m_scroll->verticalScrollBar()->setValue(0);
+  });
   connect(m_st, &FeedState::openStory, this, &FeedPage::openStory);
   // translations arriving (one textChanged per headline) ask for the missing ones again: once per burst, not per
   // headline, and not while the page is hidden
@@ -61,13 +68,18 @@ FeedPage::FeedPage(QWidget* parent) : QWidget(parent) {
 
 void FeedPage::layoutFeed() {
   const int W = m_feed->width(), H = m_feed->height();
+  if (ui::compact(W)) { layoutPhone(W, H); return; }
+  if (m_headlines->parentWidget() != m_feed) {   // back from the phone layout
+    m_headlines->setParent(m_feed); m_headlines->setMaxRows(-1); m_headlines->show();
+    m_header->setFixedHeight(41);
+  }
   m_header->setGeometry(0, 0, W, 41);
   m_ticker->setGeometry(0, 41, W, 37);
   // headlines column: 326 px at the reference, 280…440 px with the window
   const int hw = std::clamp(int(std::round(W * 0.204)), 280, 440);
   const int mainW = std::max(200, W - hw - 35);
   m_scroll->setGeometry(10, 86, mainW, H - 86 - 31);
-  const int leadH = LeadStory::preferredHeight(mainW, H - 86 - 31);
+  const int leadH = mainW < 520 ? LeadStory::phoneHeight(mainW, m_st->topic >= 0) : LeadStory::preferredHeight(mainW, H - 86 - 31);
   const int filterH = m_filters->preferredHeight(mainW);
   m_lead->setGeometry(0, 0, mainW, leadH);
   m_filters->setGeometry(0, leadH + 12, mainW, filterH);
@@ -77,6 +89,33 @@ void FeedPage::layoutFeed() {
   m_column->setFixedSize(mainW, cardsY + m_cards->height() + 24);
   m_headlines->setGeometry(W - hw - 7, 86, hw, H - 86);
   m_footer->setGeometry(0, H - 31, W - hw - 16, 31);
+}
+
+// Phones (compact width): the header takes two rows (source chips below the title), then the ticker, and one
+// scrolling column across the whole width: lead story, the first latest headlines (moved into the column, not
+// scrolled on their own), the filters, the cards. The footer stays at the bottom.
+void FeedPage::layoutPhone(int W, int H) {
+  const int headH = 85, footH = 31;
+  m_header->setFixedHeight(headH);
+  m_header->setGeometry(0, 0, W, headH);
+  m_ticker->setGeometry(0, headH, W, 37);
+  const int top = headH + 37 + 6;
+  m_scroll->setGeometry(0, top, W, std::max(0, H - top - footH));
+  const int x = 8, cw = W - 16;
+  int y = 0;
+  const int leadH = cw < 520 ? LeadStory::phoneHeight(cw, m_st->topic >= 0) : LeadStory::preferredHeight(cw, H - top - footH);
+  m_lead->setGeometry(x, y, cw, leadH); y += leadH + 10;
+  if (m_headlines->parentWidget() != m_column) { m_headlines->setParent(m_column); m_headlines->show(); }
+  m_headlines->setMaxRows(5);
+  m_headlines->resize(cw, m_headlines->height());   // rows wrap to this width before their height is read
+  const int hlH = m_headlines->contentHeight();
+  m_headlines->setGeometry(x, y, cw, hlH); y += hlH + 10;
+  const int filterH = m_filters->preferredHeight(cw);
+  m_filters->setGeometry(x, y, cw, filterH); y += filterH + 10;
+  m_cards->setGeometry(x, y, cw, m_cards->height());
+  m_cards->resize(cw, m_cards->height());
+  m_column->setFixedSize(W, y + m_cards->height() + 24);
+  m_footer->setGeometry(0, H - footH, W, footH);
 }
 
 void FeedPage::resizeEvent(QResizeEvent*) {

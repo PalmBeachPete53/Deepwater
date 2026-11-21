@@ -1,11 +1,15 @@
 #include "pages/ai/ChatView.h"
+#include <QTimeZone>
 #include "pages/ai/VoxelCube.h"
 #include "pages/ai/SkillBox.h"
 #include "pages/ai/Fit.h"
+#include "pages/ai/AgentActivity.h"
+#include "pages/ai/Constellation.h"
 #include "ai/Engine.h"
 #include "ai/Slots.h"
 #include "ui/Kit.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -18,9 +22,14 @@
 #include <QTextBrowser>
 #include <QTextBlock>
 #include <QTextDocument>
+#include <QVariantAnimation>
+#include <QWheelEvent>
 #include <QTextCursor>
 #include <QElapsedTimer>
 #include <QVBoxLayout>
+#include <QSplitter>
+#include <QMouseEvent>
+#include "core/Settings.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -140,6 +149,51 @@ QString markdownHtml(const QString& md) {
 }
 }  // namespace
 
+// The line between the conversation and the activity panel: 12 px to grab, a thin rule that lights up under the pointer.
+class SplitHandle : public QSplitterHandle {
+public:
+  SplitHandle(Qt::Orientation o, QSplitter* parent) : QSplitterHandle(o, parent) {
+    setAttribute(Qt::WA_Hover);
+    setToolTip(QCoreApplication::translate("ai", "Drag to widen or narrow the activity panel"));
+  }
+protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter p(this);
+    const auto& c = theme::pal();
+    const bool hot = underMouse() || isDown;
+    if (orientation() == Qt::Vertical) {   // phones: the activity panel under the conversation
+      const int y = height() / 2;
+      p.fillRect(QRect(width() / 2 - 20, y - (hot ? 1 : 0), 40, hot ? 3 : 1), hot ? c.accentText : c.border);
+      return;
+    }
+    const int x = width() / 2;
+    p.fillRect(QRect(x - (hot ? 1 : 0), height() / 2 - 20, hot ? 3 : 1, 40), hot ? c.accentText : c.border);
+  }
+  void mousePressEvent(QMouseEvent* e) override { isDown = true; update(); QSplitterHandle::mousePressEvent(e); }
+  void mouseReleaseEvent(QMouseEvent* e) override { isDown = false; update(); QSplitterHandle::mouseReleaseEvent(e); }
+  bool event(QEvent* e) override {
+    if (e->type() == QEvent::HoverEnter || e->type() == QEvent::HoverLeave) update();
+    return QSplitterHandle::event(e);
+  }
+private:
+  bool isDown = false;
+};
+class Splitter : public QSplitter {
+public:
+  explicit Splitter(QWidget* parent) : QSplitter(Qt::Horizontal, parent) {
+    setHandleWidth(12);
+    setChildrenCollapsible(false);
+    setOpaqueResize(true);
+  }
+  std::function<void()> onFirstSize;   // once the splitter has its real width (the page is built hidden)
+protected:
+  QSplitterHandle* createHandle() override { return new SplitHandle(orientation(), this); }
+  void resizeEvent(QResizeEvent* e) override {
+    QSplitter::resizeEvent(e);
+    if (onFirstSize && width() > 400 && orientation() == Qt::Horizontal) { auto f = std::move(onFirstSize); onFirstSize = nullptr; f(); }
+  }
+};
+
 // The environment's cube, small, lit like the big one: steady in standby, breathing when ready, quick when answering.
 class MiniCube : public QWidget {
 public:
@@ -191,15 +245,18 @@ ChatView::ChatView(QWidget* parent) : QWidget(parent) {
   const auto& c = theme::pal();
   auto* root = new QVBoxLayout(this);
   root->setContentsMargins(14, 10, 14, 12); root->setSpacing(10);
+  m_root = root;
 
   // header
   auto* head = new QHBoxLayout; head->setSpacing(12);
+  m_head = head;
   m_back = button(QCoreApplication::translate("ai", "← ENVIRONMENTS"), c.textDim, c.border, this);
   connect(m_back, &QPushButton::clicked, this, [this] { if (onBack) onBack(); });
   head->addWidget(m_back, 0, Qt::AlignVCenter);
   m_cube = new MiniCube(this);
   head->addWidget(m_cube);
   auto* titles = new QVBoxLayout; titles->setSpacing(2);
+  m_titles = titles;
   // eliding (full text in the tooltip): a long model name or repo must not hold AI › Agents wider than the window
   m_title = fit::label(QString(), theme::mono(11, QFont::Bold, 2.4), c.accentText, this);
   m_model = fit::label(QString(), theme::mono(12, QFont::Bold), c.text, this);
@@ -209,7 +266,12 @@ ChatView::ChatView(QWidget* parent) : QWidget(parent) {
   for (const auto& sk : ai::skills()) { m_skillBoxes << new SkillBox(0, sk, this); skillRow->addWidget(m_skillBoxes.last()); }
   skillRow->addStretch(1);
   titles->addLayout(skillRow);
+  m_skillRow = skillRow;
   head->addLayout(titles, 1);
+  m_constBox = new TickBox(QCoreApplication::translate("ai", "WEB"), this);
+  m_constBox->setToolTip(QCoreApplication::translate("ai", "The conversation in the middle, linked to what the agent does: the data it collects, its trainings, its comparisons"));
+  head->addWidget(m_constBox, 0, Qt::AlignVCenter);
+  head->addSpacing(6);
   m_state = ui::label(QString(), theme::mono(9, QFont::Bold, 1.4), c.up, this);
   head->addWidget(m_state, 0, Qt::AlignVCenter);
   for (int i = 0; i < ai::Slots::kCount; ++i) {
@@ -242,7 +304,13 @@ ChatView::ChatView(QWidget* parent) : QWidget(parent) {
   m_errorBox->hide();
   root->addWidget(m_errorBox);
 
-  // transcript
+  // transcript and input on the left, what the agent does on the right; the line between them drags (width saved)
+  auto* split = new Splitter(this);
+  m_split = split;
+  auto* leftHost = new QWidget(split);
+  m_chatHost = leftHost;
+  leftHost->setMinimumWidth(360);
+  auto* left = new QVBoxLayout(leftHost); left->setContentsMargins(0, 0, 0, 0); left->setSpacing(10);
   m_view = new QTextBrowser(this);
   m_view->setOpenLinks(false);          // a model's links are text, never opened from here
   connect(m_view, &QTextBrowser::anchorClicked, this, [this](const QUrl& u) {
@@ -258,7 +326,27 @@ ChatView::ChatView(QWidget* parent) : QWidget(parent) {
   m_view->setStyleSheet(QString("QTextBrowser { background:%1; color:%2; border:1px solid %3; border-radius:4px; padding:10px 14px; }")
                             .arg(c.panel.name(), c.text.name(), c.border.name()));
   m_view->document()->setDocumentMargin(6);
-  root->addWidget(m_view, 1);
+  m_view->document()->setUndoRedoEnabled(false);   // render() edits the document in place: no undo history to grow
+  left->addWidget(m_view, 1);
+  // Following the end: on while the view is at the bottom, off once the user scrolls up, on again at the bottom.
+  {
+    QScrollBar* sb = m_view->verticalScrollBar();
+    m_scrollAnim = new QVariantAnimation(this);
+    m_scrollAnim->setDuration(140);
+    m_scrollAnim->setEasingCurve(QEasingCurve::OutCubic);
+    connect(m_scrollAnim, &QVariantAnimation::valueChanged, this, [this, sb](const QVariant& v) {
+      m_ownScroll = true; sb->setValue(qMin(v.toInt(), sb->maximum())); m_ownScroll = false;
+    });
+    connect(sb, &QScrollBar::valueChanged, this, [this, sb](int v) {
+      if (!m_ownScroll && m_scrollAnim->state() != QAbstractAnimation::Running) m_follow = v >= sb->maximum() - 8;
+    });
+    // the layout may settle after render() (a table, a long block): the end moves, the view follows it
+    connect(sb, &QScrollBar::rangeChanged, this, [this] { if (m_follow && !m_ownScroll) followBottom(false); });
+    // the wheel or the scroll bar's handle: the user takes over at once
+    auto stop = [this] { m_scrollAnim->stop(); };
+    connect(sb, &QScrollBar::sliderPressed, this, stop);
+    m_view->viewport()->installEventFilter(this);
+  }
 
   // input
   auto* in = new QHBoxLayout; in->setSpacing(10);
@@ -280,7 +368,34 @@ ChatView::ChatView(QWidget* parent) : QWidget(parent) {
     if (e && (e->state() == ai::Engine::State::Busy || e->pending())) { e->cancel(); syncHeader(); } else send();
   });
   in->addWidget(m_send);
-  root->addLayout(in);
+  left->addLayout(in);
+  m_activity = new AgentActivity(split);
+  split->addWidget(leftHost);
+  split->addWidget(m_activity);
+  split->setStretchFactor(0, 1);
+  split->setStretchFactor(1, 0);
+  root->addWidget(split, 1);
+  // the saved width, once the splitter knows its own; kept as the user drags
+  split->onFirstSize = [split] {
+    const int w = qMax(AgentActivity::kMinWidth, settings::value("ai.activityWidth", 300).toInt());
+    split->setSizes({qMax(1, split->width() - w - split->handleWidth()), w});
+  };
+  connect(split, &QSplitter::splitterMoved, this, [this] { if (!m_phone) settings::setValue("ai.activityWidth", m_activity->width()); });
+  m_constellation = new Constellation(this);
+  m_constellation->hide();
+  root->addWidget(m_constellation, 1);
+  {
+    const bool on = qEnvironmentVariableIsSet("DW_AI_CONSTELLATION") ? qEnvironmentVariableIntValue("DW_AI_CONSTELLATION") != 0
+                                                                     : settings::value("ai.constellation", false).toBool();
+    m_constBox->setChecked(on);
+    if (on) setConstellation(true);
+    connect(m_constBox, &QAbstractButton::toggled, this, [this](bool v) { if (!qEnvironmentVariableIsSet("DW_AI_CONSTELLATION")) settings::setValue("ai.constellation", v); setConstellation(v); });
+    // test hook: DW_AI_CONSTELLATION_FLIP=<ms>: the box clicked after that long (the conversation goes back beside the panel)
+    if (qEnvironmentVariableIsSet("DW_AI_CONSTELLATION_FLIP"))
+      QTimer::singleShot(qEnvironmentVariableIntValue("DW_AI_CONSTELLATION_FLIP"), this, [this] { m_constBox->click(); });
+  }
+
+
 m_hint = ui::label(QString(), theme::sans(11), c.textMute, this);
   m_hint->setWordWrap(true);
   root->addWidget(m_hint);
@@ -297,6 +412,76 @@ m_hint = ui::label(QString(), theme::sans(11), c.textMute, this);
 
 void ChatView::paintEvent(QPaintEvent*) { QPainter p(this); p.fillRect(rect(), theme::pal().bg); }
 
+void ChatView::resizeEvent(QResizeEvent*) {
+  // built hidden at Qt's default 100 x 30: the arrangement waits for the real size (shown)
+  if (!isVisible()) return;
+  setPhone(ui::compact(width()));
+  syncPhoneSizes();
+}
+
+int ChatView::phoneExtra(int width) const {
+  if (!ui::compact(width)) return 0;
+  return m_constBox->isChecked() ? Constellation::phoneNodesHeight() : kPhoneActivityH + m_split->handleWidth();
+}
+
+// Phones: row 1 = back, cube, titles; row 2 = WEB, state, environments, clear; then the skill boxes one under the
+// other; the splitter turns vertical (the activity panel under the conversation). 34 px buttons.
+void ChatView::setPhone(bool on) {
+  if (on == m_phone) return;
+  m_phone = on;
+  QList<QWidget*> moving{m_constBox, m_state};
+  for (auto* b : m_envButtons) moving << b;
+  moving << m_clear;
+  if (on) {
+    m_head2 = new QHBoxLayout; m_head2->setSpacing(6);   // 6 px: the row just fits 370 px with the longest state ("ÉCHEC")
+    for (auto* w : moving) m_head->removeWidget(w);
+    m_head2->addWidget(m_constBox, 0, Qt::AlignVCenter);
+    m_head2->addWidget(m_state, 0, Qt::AlignVCenter);
+    m_head2->addStretch(1);
+    for (auto* b : m_envButtons) m_head2->addWidget(b, 0, Qt::AlignVCenter);
+    m_head2->addWidget(m_clear, 0, Qt::AlignVCenter);
+    m_root->insertLayout(1, m_head2);
+    m_titles->removeItem(m_skillRow);
+    m_skillRow->setParent(nullptr);   // a layout with a parent cannot be added to another
+    delete m_skillRow->takeAt(m_skillRow->count() - 1);   // its stretch (it would grow downwards)
+    m_skillRow->setDirection(QBoxLayout::TopToBottom);
+    m_skillRow->setSpacing(4);
+    m_root->insertLayout(2, m_skillRow);
+  } else {
+    for (auto* w : moving) m_head2->removeWidget(w);
+    m_root->removeItem(m_head2);
+    delete m_head2; m_head2 = nullptr;
+    // back where they were: after the titles, the WEB box, 6 px, the state, the environments, clear
+    const int at = m_head->indexOf(m_titles) + 1;
+    m_head->insertWidget(at, m_constBox, 0, Qt::AlignVCenter);
+    m_head->insertWidget(at + 2, m_state, 0, Qt::AlignVCenter);   // after the 6 px spacing still in place
+    int k = at + 3;
+    for (auto* b : m_envButtons) m_head->insertWidget(k++, b, 0, Qt::AlignVCenter);
+    m_head->insertWidget(k, m_clear, 0, Qt::AlignVCenter);
+    m_root->removeItem(m_skillRow);
+    m_skillRow->setParent(nullptr);
+    m_skillRow->setDirection(QBoxLayout::LeftToRight);
+    m_skillRow->setSpacing(14);
+    m_skillRow->addStretch(1);
+    m_titles->addLayout(m_skillRow);
+  }
+  QList<QPushButton*> buttons = m_envButtons;
+  buttons << m_back << m_clear;
+  for (auto* b : buttons) b->setMinimumHeight(on ? 34 : 0);
+  m_split->setOrientation(on ? Qt::Vertical : Qt::Horizontal);
+  m_chatHost->setMinimumWidth(on || m_constellation->isVisible() ? 0 : 360);
+  if (!on && m_split->width() > 400) {   // back to the saved width beside the conversation
+    const int w = qMax(AgentActivity::kMinWidth, settings::value("ai.activityWidth", 300).toInt());
+    m_split->setSizes({qMax(1, m_split->width() - w - m_split->handleWidth()), w});
+  }
+}
+
+void ChatView::syncPhoneSizes() {
+  if (!m_phone || !m_split->isVisible()) return;
+  const int total = m_split->height() - m_split->handleWidth();
+  m_split->setSizes({qMax(1, total - kPhoneActivityH), kPhoneActivityH});
+}
+
 void ChatView::setEnvironment(int index) {
   for (const auto& k : m_conns) disconnect(k);
   m_conns.clear();
@@ -304,6 +489,8 @@ void ChatView::setEnvironment(int index) {
   m_toBottom = true;
   m_index = index;
   for (auto* b : m_skillBoxes) b->setEnvironment(index);
+  m_activity->setEnvironment(index);
+  m_constellation->setEnvironment(index);
   ai::Engine* e = ai::Engines::instance().at(index);
   if (!e) return;
   m_conns << connect(e, &ai::Engine::stateChanged, this, [this] { syncHeader(); m_renderTimer.start(); });
@@ -320,6 +507,29 @@ void ChatView::setEnvironment(int index) {
 }
 
 void ChatView::focusInput() { m_input->setFocus(); }
+
+void ChatView::setConstellation(bool on) {
+  if (on == m_constellation->isVisible() && (on || m_split->isVisible())) return;
+  const bool focused = m_input->hasFocus();
+  if (on) {
+    m_split->hide();
+    m_constellation->setChat(m_chatHost);
+    m_constellation->show();
+  } else {
+    m_constellation->takeChat();
+    m_constellation->hide();
+    m_split->insertWidget(0, m_chatHost);
+    m_chatHost->show();
+    m_split->show();
+    const int w = qMax(AgentActivity::kMinWidth, settings::value("ai.activityWidth", 300).toInt());
+    if (m_split->width() > 400 && !m_phone) m_split->setSizes({qMax(1, m_split->width() - w - m_split->handleWidth()), w});
+  }
+  m_chatHost->setMinimumWidth(on || m_phone ? 0 : 360);
+  if (m_follow) QTimer::singleShot(0, this, [this] { followBottom(true); });   // the transcript's width changed: its end moved
+  if (focused) m_input->setFocus();
+  if (m_phone && onLayoutChanged) onLayoutChanged();   // what stands under the conversation changed height
+  syncPhoneSizes();
+}
 
 void ChatView::syncHeader() {
   if (m_index < 0) return;
@@ -381,6 +591,10 @@ void ChatView::syncHeader() {
 }
 
 bool ChatView::eventFilter(QObject* o, QEvent* ev) {
+  if (o == m_view->viewport() && ev->type() == QEvent::Wheel) {
+    auto* w = static_cast<QWheelEvent*>(ev);
+    if (w->angleDelta().y() > 0 || w->pixelDelta().y() > 0) { m_scrollAnim->stop(); m_follow = false; }   // up: stop following
+  }
   if (o == m_input && ev->type() == QEvent::KeyPress) {
     auto* k = static_cast<QKeyEvent*>(ev);
     if ((k->key() == Qt::Key_Return || k->key() == Qt::Key_Enter) && !(k->modifiers() & Qt::ShiftModifier)) { send(); return true; }
@@ -428,6 +642,7 @@ QString ChatView::fragment(int i) {
 
 void ChatView::showEvent(QShowEvent* e) {
   QWidget::showEvent(e);
+  resizeEvent(nullptr);
   if (m_stale) render();
 }
 
@@ -442,16 +657,17 @@ void ChatView::render() {
   const auto& c = theme::pal();
   ai::Engine* e = ai::Engines::instance().at(m_index);
   const auto& msgs = e->messages();
-  QString html = QString("<html><body style='color:%1;'>").arg(c.text.name());
+  // One HTML part per message (and per notice): only the parts that changed go into the document, see below.
+  QStringList parts;
   if (msgs.isEmpty()) {
     const bool reads = ai::Slots::instance().hasSkill(m_index, "read_data");
     if (e->isClaude())
-      html += QString("<p style='color:%1;margin-top:18px;'>%2</p>")
+      parts << QString("<p style='color:%1;margin-top:18px;'>%2</p>")
                   .arg(c.textMute.name(), (reads ? QCoreApplication::translate("ai", "Ask Claude Code in environment %1 a question. It runs on "
                                                      "Anthropic's servers and reads Deepwater's data through its tools only.")
                                                  : QCoreApplication::translate("ai", "Ask Claude Code in environment %1 a question. It runs on "
                                                      "Anthropic's servers, without access to Deepwater's data: tick its box to let it read.")).arg(m_index + 1).toHtmlEscaped());
-    else html += QString("<p style='color:%1;margin-top:18px;'>%2</p>")
+    else parts << QString("<p style='color:%1;margin-top:18px;'>%2</p>")
                 .arg(c.textMute.name(), (reads
                      ? QCoreApplication::translate("ai", "Ask the model of environment %1 a question. It runs on this computer, offline, and "
                                                          "reads Deepwater's data through its tools.")
@@ -469,11 +685,28 @@ void ChatView::render() {
         line += m.ok ? QCoreApplication::translate("ai", "%1 characters read").arg(QLocale(QLocale::English).toString(m.text.size()))
                      : m.text.left(200);
       }
-      html += QString("<p style='margin:3px 0 3px 0;'><span style='color:%1;font-family:\"%2\";font-size:10px;font-weight:700;'>%3</span>"
+      parts << QString("<p style='margin:3px 0 3px 0;'><span style='color:%1;font-family:\"%2\";font-size:10px;font-weight:700;'>%3</span>"
                       "<span style='color:%4;font-family:\"%2\";font-size:10px;'>&nbsp;&nbsp;%5</span></p>")
                   .arg((m.ok ? c.accentText : c.down).name(), theme::mono(10).family(),
                        (m.ok ? QCoreApplication::translate("ai", "TOOL") : QCoreApplication::translate("ai", "TOOL ✕")).toHtmlEscaped(),
                        (m.ok ? c.textDim : c.down).name(), line.toHtmlEscaped());
+      continue;
+    }
+    if (m.role == "report") {   // the app's own report (ai::Evaluation): figures computed by Deepwater
+      parts << QString("<p style='margin:16px 0 4px 0;color:%1;font-family:\"%2\";font-size:11px;font-weight:700;'>%3</p>")
+                   .arg(c.warn.name(), theme::mono(10).family(), QCoreApplication::translate("ai", "DEEPWATER · EVALUATION").toHtmlEscaped()) +
+               markdownHtml(m.text);
+      continue;
+    }
+    if (m.role == "clock") {   // the evaluation clock changed here: the model starts afresh after this line
+      const qint64 asOf = qint64(m.stats.value("as_of").toDouble());
+      const bool blindOn = m.stats.value("blind").toDouble() != 0;
+      const QString line = (blindOn ? QCoreApplication::translate("ai", "Blind (dates, name and price level masked for the model) · ") : QString()) + (asOf > 0
+          ? QCoreApplication::translate("ai", "Evaluation mode at %1 UTC from here: the tools answer as of that moment, and the model starts afresh (it no longer sees the messages above).")
+                .arg(QDateTime::fromSecsSinceEpoch(asOf, QTimeZone::UTC).toString("yyyy-MM-dd HH:mm"))
+          : QCoreApplication::translate("ai", "Evaluation mode off from here: the tools answer in the present again, and the model starts afresh (it no longer sees the messages above)."));
+      parts << QString("<p style='margin:14px 0 6px 0;color:%1;font-family:\"%2\";font-size:10px;font-weight:700;'>— %3 —</p>")
+                  .arg(c.warn.name(), theme::mono(10).family(), line.toHtmlEscaped());
       continue;
     }
     const bool me = m.role == "user";
@@ -483,6 +716,7 @@ void ChatView::render() {
       const bool streamingNow = i == msgs.size() - 1 && e->state() == ai::Engine::State::Busy;
       if (th.isEmpty() && withoutCalls(an).isEmpty() && !streamingNow && (m.text.contains("<tool_call>") || m.text.trimmed().isEmpty())) continue;
     }
+    QString part;
     QString who = me ? QCoreApplication::translate("ai", "YOU") : QFileInfo(m.model).completeBaseName().toUpper();
     QString meta = m.at.toString("HH:mm");
     if (!me && !m.stats.isEmpty() && !m.stats.value("partial").toBool()) {
@@ -500,13 +734,13 @@ void ChatView::render() {
       if (m.stats.value("dropped_messages").toInt() > 0)
         meta += "  ·  " + QCoreApplication::translate("ai", "%1 oldest messages left out (context)").arg(m.stats.value("dropped_messages").toInt());
     }
-    html += QString("<p style='margin-top:%1px;margin-bottom:2px;'><span style='color:%2;font-family:\"%3\";font-size:11px;font-weight:700;'>%4</span>"
+    part += QString("<p style='margin-top:%1px;margin-bottom:2px;'><span style='color:%2;font-family:\"%3\";font-size:11px;font-weight:700;'>%4</span>"
                     "<span style='color:%5;font-family:\"%3\";font-size:10px;'>&nbsp;&nbsp;%6</span></p>")
                 .arg(i == 0 ? 4 : 18).arg((me ? c.accentText : c.up).name(), theme::mono(10).family(), who.toHtmlEscaped(),
                      c.textMute.name(), meta.toHtmlEscaped());
     const bool streaming = !me && i == msgs.size() - 1 && e->state() == ai::Engine::State::Busy;
-    if (!me && m.text.isEmpty() && streaming) html += QString("<p style='color:%1;'>…</p>").arg(c.textMute.name());
-    else html += fragment(i);
+    if (!me && m.text.isEmpty() && streaming) part += QString("<p style='color:%1;'>…</p>").arg(c.textMute.name());
+    else part += fragment(i);
     // figures check, for a finished answer written after tool results of the same question
     if (!me && !streaming && !m.stats.isEmpty() && !m.text.contains("<tool_call>")) {
       QString pool; bool usedTools = false;
@@ -517,7 +751,7 @@ void ChatView::render() {
       // the check of a finished answer depends on its text and the tool data only: computed once, not 20 times a
       // second while a later answer streams
       const size_t fh = qHash(m.text) ^ (qHash(pool) * 31);
-      if (const auto fit = m_figCache.constFind(i); usedTools && fit != m_figCache.cend() && fit->first == fh) html += fit->second;
+      if (const auto fit = m_figCache.constFind(i); usedTools && fit != m_figCache.cend() && fit->first == fh) part += fit->second;
       else if (usedTools) {
         QString figHtml;
         QString th, an; splitThinking(m.text, &th, &an);
@@ -534,25 +768,84 @@ void ChatView::render() {
                         .arg((clean ? c.textMute : c.warn).name(), theme::mono(10).family(), msg.toHtmlEscaped());
         }
         m_figCache.insert(i, {fh, figHtml});
-        html += figHtml;
+        part += figHtml;
       }
     }
+    parts << part;
   }
   if (!msgs.isEmpty() && msgs.last().role == "user" && e->state() == ai::Engine::State::Starting)
-    html += QString("<p style='color:%1;margin-top:14px;'>%2</p>").arg(c.textMute.name(), QCoreApplication::translate("ai", "Loading the model in memory…"));
-  html += "</body></html>";
+    parts << QString("<p style='color:%1;margin-top:14px;'>%2</p>").arg(c.textMute.name(), QCoreApplication::translate("ai", "Loading the model in memory…"));
 
+  // Only the parts from the first one that changed are replaced: while an answer streams, that is the answer alone, and the
+  // rest of the conversation keeps its layout. (setHtml of the whole transcript at each refresh took 30-50 ms for four
+  // long answers, more as the conversation grew, and its first height estimate was corrected ~15 ms later: the
+  // scroll bar and the text jumped four times a second.) Parts are separated by a block break; m_partPos holds where
+  // each part's break starts.
   QScrollBar* sb = m_view->verticalScrollBar();
-  const bool atBottom = m_toBottom || sb->value() >= sb->maximum() - 8;
-  if (m_toBottom) QTimer::singleShot(0, this, [this] { m_view->verticalScrollBar()->setValue(m_view->verticalScrollBar()->maximum()); });
+  const bool jump = m_toBottom;
+  if (m_toBottom) m_follow = true;
   m_toBottom = false;
   const int keep = sb->value();
-  m_view->setHtml(html);
-  sb->setValue(atBottom ? sb->maximum() : keep);
-  // Each render lays the whole conversation out again (10.8 ms for 60 messages, more as it grows): while an answer
-  // streams, refreshes stay 20 a second as long as one costs under 10 ms, then come 8 × its cost apart (≤ 200 ms), so
-  // a long conversation's refreshes take at most ~1/8 of the time.
+  qsizetype k = 0;
+  while (k < parts.size() && k < m_parts.size() && parts[k] == m_parts[k]) ++k;
+  if (k < parts.size() || k < m_parts.size()) {
+    QTextDocument* doc = m_view->document();
+    m_ownScroll = true;
+    QTextCursor cur(doc);
+    if (k == 0) { doc->clear(); m_partPos.clear(); }
+    else if (k < m_partPos.size()) {   // k == size: parts were only added after the others
+      cur.setPosition(m_partPos[k]);
+      cur.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+      cur.removeSelectedText();
+      m_partPos.resize(k);
+    }
+    cur.movePosition(QTextCursor::End);
+    cur.beginEditBlock();
+    for (qsizetype j = k; j < parts.size(); ++j) {
+      m_partPos << cur.position();
+      if (j == 0) { cur.insertHtml(parts[j]); continue; }
+      cur.insertBlock(QTextBlockFormat(), QTextCharFormat());
+      const int start = cur.position();
+      cur.insertHtml(parts[j]);
+      // inserted after a block break, the part's first paragraph loses its own format (the space above a message):
+      // it is read from that paragraph alone and set again
+      const qsizetype end = parts[j].indexOf(QLatin1String("</p>"));
+      if (parts[j].startsWith(QLatin1String("<p")) && end > 0) {
+        QTextDocument first;
+        first.setHtml(parts[j].left(end + 4));
+        QTextCursor fix(doc);
+        fix.setPosition(start);
+        fix.setBlockFormat(first.begin().blockFormat());
+      }
+    }
+    cur.endEditBlock();
+    m_parts = parts;
+    // where the view was: taking the old parts out shortened the document for a moment and pulled the view up with it
+    // (and a full rebuild, k == 0, starts again from the top)
+    sb->setValue(keep);
+    m_ownScroll = false;
+  }
+  if (m_follow) followBottom(jump);
+  // Each render lays out the answer being written again (the parts before it keep theirs): while it streams, refreshes
+  // stay 20 a second as long as one costs under 10 ms, then come 8 × its cost apart (≤ 200 ms).
   const int ms = int(cost.elapsed());
   m_renderTimer.setInterval(ms < 10 ? 50 : qMin(200, ms * 8));
+}
+
+// Following the end of the conversation: new lines slide in over 140 ms instead of jumping, and a later refresh retargets the
+// slide. A jump of more than a screen (opening a long conversation) is made at once.
+void ChatView::followBottom(bool now) {
+  QScrollBar* sb = m_view->verticalScrollBar();
+  const int to = sb->maximum();
+  if (now || to - sb->value() > m_view->viewport()->height()) {
+    m_scrollAnim->stop();
+    m_ownScroll = true; sb->setValue(to); m_ownScroll = false;
+    return;
+  }
+  if (to == sb->value()) return;
+  if (m_scrollAnim->state() == QAbstractAnimation::Running) { m_scrollAnim->setEndValue(to); return; }
+  m_scrollAnim->setStartValue(sb->value());
+  m_scrollAnim->setEndValue(to);
+  m_scrollAnim->start();
 }
 }  // namespace aipage

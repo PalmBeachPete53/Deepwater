@@ -71,7 +71,8 @@ void TimeScale::applyOptions(const TimeScaleOptions& o) {
 // ---------- geometry ----------
 
 void TimeScale::clampOffsets() {
-  const double maxSp = o_.maxBarSpacing > 0 ? o_.maxBarSpacing : (width_ > 0 ? 0.5 * width_ : 1e9);
+  const double maxSp = o_.minVisibleBars > 0 && width_ > 0 ? width_ / o_.minVisibleBars
+                      : o_.maxBarSpacing > 0 ? o_.maxBarSpacing : (width_ > 0 ? 0.5 * width_ : 1e9);
   const double minSp = (o_.fixLeftEdge && o_.fixRightEdge && !times_.isEmpty() && width_ > 0) ? width_ / times_.size()
                                                                                                 : o_.minBarSpacing;
   spacing_ = qBound(minSp, spacing_, qMax(minSp, maxSp));

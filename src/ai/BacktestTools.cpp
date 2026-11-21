@@ -6,11 +6,11 @@
 //                     otherwise; stats, yearly returns, last trades
 //   bt_quant_checks   the gold box: walk-forward, overfitting (PBO), deflated Sharpe, cost stress, nearby settings,
 //                     Monte Carlo of the trades
-//   bt_trials         the strategies this environment has backtested on each market and timeframe, and the best one's
-//                     Sharpe deflated by how many were tried (the more tries, the higher a lucky best)
+//   bt_trials         the strategies backtested on each market and timeframe, by the user and every environment (the
+//                     shared trial registry, src/trials), and the best one's Sharpe deflated by how many were tried
 // Every figure comes from the engines (charts::bt, charts::quant, PineTS), never from the model. One backtest at a time.
-// Nothing is written on the user's side: no strategy saved, no order; only the environment's own trial ledger
-// (<env>/backtest-trials.jsonl). A Pine script runs in PineTS's sandbox (no network, no files, time and memory capped).
+// Nothing is written on the user's side: no strategy saved, no order; only the try, in the trial registry
+// (<data>/trials/trials.sqlite; the environments' own ledgers before 2026-11-20 are imported there once). A Pine script runs in PineTS's sandbox (no network, no files, time and memory capped).
 #include "ai/Tools.h"
 #include "ai/Slots.h"
 #include "charts/core/Backtest.h"
@@ -18,11 +18,15 @@
 #include "charts/core/PineQuant.h"
 #include "charts/core/PineStrategy.h"
 #include "charts/core/Quant.h"
+#include "charts/core/Series.h"
 #include "charts/data/Providers.h"
 #include "core/Paths.h"
 #include "technicaldata/TechnicalDataBars.h"
 #include "technicaldata/Collector.h"
 #include "technicaldata/TechnicalDataStore.h"
+#include "trials/Registry.h"
+#include "trials/Stats.h"
+#include <QFileInfo>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -32,7 +36,6 @@
 #include <QJsonDocument>
 #include <QMap>
 #include <QRegularExpression>
-#include <QSaveFile>
 #include <QThread>
 #include <QTimeZone>
 #include <cmath>
@@ -72,28 +75,16 @@ struct Spec {
   QJsonObject strategy;      // rules
   QString market, tf;
   int bars = 3000;
+  qint64 asOf = 0;           // evaluation mode: the bars closed by then, from Data › Technical data only
   QString key() const { return market + "|" + tf; }
-  QString hash() const {     // the same strategy tried twice counts once
-    const QByteArray what = pine ? source.toUtf8() : QJsonDocument(strategy).toJson(QJsonDocument::Compact);
-    return QString::fromLatin1(QCryptographicHash::hash(what, QCryptographicHash::Sha1).toHex().left(12));
-  }
+  QString hash() const { return pine ? trials::pineConfig(source) : trials::strategyConfig(strategy); }   // the same strategy tried twice counts once
   QString label() const {
     if (pine) {
       static const QRegularExpression title(R"(strategy\s*\(\s*["']([^"']*)["'])");
       const auto m = title.match(source);
       return "Pine: " + (m.hasMatch() ? m.captured(1) : QStringLiteral("untitled"));
     }
-    QStringList r;
-    for (const char* k : {"entryLong", "exitLong", "entryShort", "exitShort"})
-      for (const QJsonValue& x : strategy.value(k).toArray()) {
-        const QJsonObject o = x.toObject();
-        r << QString("%1: %2 %3 %4").arg(k, charts::bt::jsString(o.value("left")), charts::bt::jsString(o.value("op")),
-                                         charts::bt::jsString(o.value("right")));
-      }
-    QStringList risk;   // what changes the trades besides the rules (a stop the model set must show it was taken)
-    for (const char* k : {"stopLossPct", "takeProfitPct", "trailingStopPct", "maxBarsInTrade", "positionPct", "feePct", "slippagePct", "spreadPct", "exitMatch"})
-      if (strategy.contains(k)) risk << QString(k) + " " + charts::bt::jsString(strategy.value(k));
-    return "rules: " + r.join("; ").left(220) + (risk.isEmpty() ? QString() : " | " + risk.join(", "));
+    return trials::ruleLabel(strategy);
   }
 };
 
@@ -155,6 +146,14 @@ void loadBars(const Spec& s, std::function<void(const Data&)> then) {
   auto& st = technicaldata::Store::instance();
   int tfSec = 0;
   for (const auto& t : technicaldata::timeframes()) if (t.name == s.tf) tfSec = t.seconds;
+  if (s.asOf > 0 && !(tfSec && st.pairs().contains(stored) && st.state(stored, tfSec).count > 0)) {   // Charts' sources give the present
+    Data d;
+    d.tf = s.tf;
+    d.error = "refused: this environment is in evaluation mode at " + asOfStamp(s.asOf) + ": a backtest reads only Data › Technical data's "
+              "stored bars, and " + s.market + " " + s.tf + " is not stored there";
+    QMetaObject::invokeMethod(qApp, [d, then] { then(d); }, Qt::QueuedConnection);
+    return;
+  }
   if (tfSec && st.pairs().contains(stored) && st.state(stored, tfSec).count > 0) {
     // up to 200,000 bars from SQLite: read on a worker (the store's reads work from any thread), answered on the GUI
     // thread as the providers' bars are
@@ -164,8 +163,10 @@ void loadBars(const Spec& s, std::function<void(const Data&)> then) {
       d.market = stored;
       d.tf = s.tf;
       const auto state = st.state(stored, tfSec);
-      for (const auto& k : st.before(stored, tfSec, state.last + 1, s.bars)) d.bars << charts::Bar{k.t, k.o, k.h, k.l, k.c, k.v};
-      d.source = "Data › Technical data (" + technicaldata::sourceOf(stored) + ", closed bars)";
+      const qint64 lastOpen = s.asOf > 0 ? std::min(state.last, s.asOf - tfSec) : state.last;   // closed by the evaluation moment
+      for (const auto& k : st.before(stored, tfSec, lastOpen + 1, s.bars)) d.bars << charts::Bar{k.t, k.o, k.h, k.l, k.c, k.v};
+      d.source = "Data › Technical data (" + technicaldata::sourceOf(stored) + ", closed bars" +
+                 (s.asOf > 0 ? ", as of " + asOfStamp(s.asOf) + " (evaluation mode)" : QString()) + ")";
       d.tfSec = tfSec;
       d.stored = true;
       QMetaObject::invokeMethod(qApp, [d, then] { then(d); }, Qt::QueuedConnection);
@@ -187,108 +188,97 @@ void loadBars(const Spec& s, std::function<void(const Data&)> then) {
   });
 }
 
-// ------------------------------------------------------------------------------------------------ trial ledger
-// A link sitting there is removed first: the ledger is read back into tool results and appended to (both follow links).
-QString ledgerPath(int env) {
-  const QString p = (env >= 0 ? Slots::instance().folder(env) : paths::data("ai/tool-tests")) + "/backtest-trials.jsonl";
-  paths::dropLink(p);
-  return p;
+// ------------------------------------------------------------------------------------------------ trial registry
+// Every backtest an environment runs is a try in the registry shared with the user's Strategy tester and the ML
+// trainings (src/trials/Registry.h): the deflated Sharpe counts the tries on that data whoever made them. The tool tests
+// of AI › Agents (env < 0) check the tools, they are not tries: not written.
+QString familyOf(const Data& d) {
+  int sec = d.tfSec;
+  if (!sec) try { sec = int(charts::series::parseTf(d.tf).seconds); } catch (const std::exception&) {}
+  return trials::backtestFamily(d.market, sec);
 }
-double ppyOf(const charts::Bars& b) {
-  return b.size() > 1 ? (365.0 * 86400 * (b.size() - 1)) / double(b.last().time - b.first().time) : 252;
-}
-QVector<double> perBar(const QVector<charts::bt::EquityPoint>& e) {
-  QVector<double> r;
-  for (int i = 1; i < e.size(); ++i) r << e[i].value / e[i - 1].value - 1;
-  return r;
-}
-// Probabilistic Sharpe of a per-bar Sharpe `sr` over `n` returns with that skew and kurtosis, against a benchmark
-double psrOf(double sr, double n, double skew, double kurt, double benchmark) {
-  if (!std::isfinite(sr) || n < 10) return NAN;
-  const double denom = std::sqrt(std::max(1e-12, 1 - skew * sr + ((kurt - 1) / 4) * sr * sr));
-  return charts::quant::normCdf(((sr - benchmark) * std::sqrt(n - 1)) / denom);
-}
-struct Trial { QString hash, label; double sr = NAN, n = 0, skew = 0, kurt = 3, sharpeAnn = NAN, netPct = NAN; qint64 at = 0; };
-QHash<QString, Trial> trialsFor(int env, const QString& key) {   // hash → its latest run on that data
-  QHash<QString, Trial> out;
-  QFile f(ledgerPath(env));
-  if (!f.open(QIODevice::ReadOnly)) return out;
-  while (!f.atEnd()) {
-    const QJsonObject o = QJsonDocument::fromJson(f.readLine()).object();
-    if (o.value("key").toString() != key) continue;
-    Trial t;
-    t.hash = o.value("hash").toString(); t.label = o.value("label").toString();
-    t.sr = o.value("sr").toDouble(NAN); t.n = o.value("n").toDouble(); t.skew = o.value("skew").toDouble();
-    t.kurt = o.value("kurt").toDouble(3); t.sharpeAnn = o.value("sharpe").toDouble(NAN); t.netPct = o.value("net").toDouble(NAN);
-    t.at = qint64(o.value("at").toDouble());
-    out.insert(t.hash, t);
+QString whoPrefix(int env) { return env >= 0 ? QString("environment %1 · ").arg(env + 1) : QString(); }
+
+// The ledgers each environment kept before the registry (<env>/backtest-trials.jsonl, 2026-11-18 → 11-20): their tries go
+// into the registry once, so they keep counting. The files are left where they are.
+void importLedgers() {
+  auto& reg = trials::Registry::instance();
+  for (int env = 0; env < Slots::kCount; ++env) {
+    const QString path = paths::data() + QString("/ai/env-%1/backtest-trials.jsonl").arg(env + 1);
+    const QString mark = "imported:" + QString("env-%1/backtest-trials.jsonl").arg(env + 1);
+    if (!QFileInfo::exists(path) || QFileInfo(path).isSymLink() || !reg.meta(mark).isEmpty()) continue;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) continue;
+    int added = 0;
+    while (!f.atEnd()) {
+      const QJsonObject o = QJsonDocument::fromJson(f.readLine()).object();
+      const QString key = o.value("key").toString();
+      if (key.isEmpty() || o.value("hash").toString().isEmpty()) continue;
+      trials::Trial t;
+      t.at = qint64(o.value("at").toDouble());
+      t.kind = "backtest";
+      t.origin = "agent";
+      t.who = whoPrefix(env) + "(before the registry)";
+      t.place = "bt_run / bt_quant_checks (ledger before the registry)";
+      t.market = key.section('|', 0, 0);
+      t.timeframe = key.section('|', 1);
+      int sec = 0;
+      try { sec = int(charts::series::parseTf(t.timeframe).seconds); } catch (const std::exception&) {}
+      t.family = trials::backtestFamily(t.market, sec);
+      t.config = o.value("hash").toString();
+      t.label = o.value("label").toString();
+      t.n = int(o.value("n").toDouble());
+      t.sr = o.value("sr").toDouble(NAN);
+      t.skew = o.value("skew").toDouble();
+      t.kurt = o.value("kurt").toDouble(3);
+      t.sharpe = o.value("sharpe").toDouble(NAN);
+      t.netPct = o.value("net").toDouble(NAN);
+      if (reg.add(t)) ++added;
+    }
+    reg.setMeta(mark, QString::number(added));
   }
-  return out;
 }
-// The ledger is appended to at every backtest and read whole at each bt_trials and after each record: past
-// LEDGER_MAX_BYTES it keeps only the latest line of each strategy on each data (all trialsFor() reads: nothing it counts
-// is lost), then, if that is still over half of it, drops the strategies tried longest ago (those tries stop counting).
-// Worker thread (record()).
-constexpr qint64 LEDGER_MAX_BYTES = 2 << 20;
-void compactLedger(const QString& path) {
-  QFile f(path);
-  if (f.size() <= LEDGER_MAX_BYTES || !f.open(QIODevice::ReadOnly)) return;
-  QList<QByteArray> lines;
-  QHash<QString, int> at;   // key|hash → its latest line in `lines`
-  while (!f.atEnd()) {
-    const QByteArray line = f.readLine().trimmed();
-    const QJsonObject o = QJsonDocument::fromJson(line).object();
-    if (o.isEmpty()) continue;
-    const QString k = o.value("key").toString() + "|" + o.value("hash").toString();
-    if (const auto it = at.constFind(k); it != at.cend()) lines[*it].clear();
-    at.insert(k, int(lines.size()));
-    lines << line;
+
+// Records one tried strategy; returns the rows of its family (every try on that data). Worker thread.
+QList<trials::Trial> record(const ToolCaller& who, const QString& place, const Spec& s, const Data& d, const charts::bt::Result& r) {
+  auto& reg = trials::Registry::instance();
+  const QString family = familyOf(d);
+  if (who.env >= 0) {
+    trials::Trial t;
+    t.at = QDateTime::currentSecsSinceEpoch();
+    t.kind = "backtest";
+    t.origin = "agent";
+    t.who = whoPrefix(who.env) + who.model;
+    t.place = place;
+    t.family = family;
+    t.config = s.hash();
+    t.label = s.label();
+    t.market = d.market;
+    t.timeframe = d.tf;
+    t.detail = s.pine ? QJsonObject{{"pine", s.source.left(20000)}} : QJsonObject{{"strategy", s.strategy}};
+    t.detail["source"] = d.source;
+    t.detail["bars"] = int(d.bars.size());
+    if (who.asOf > 0) t.detail["as_of"] = double(who.asOf);   // tried in evaluation mode
+    trials::setReturns(t, r.equity);
+    t.netPct = std::isfinite(r.stats.netProfitPct) ? r.stats.netProfitPct : 0.0;
+    reg.add(t);
   }
-  f.close();
-  lines.removeAll(QByteArray());
-  qint64 total = 0;
-  for (const auto& l : lines) total += l.size() + 1;
-  int from = 0;
-  while (from < lines.size() && total > LEDGER_MAX_BYTES / 2) total -= lines[from++].size() + 1;
-  QSaveFile out(path);
-  if (!out.open(QIODevice::WriteOnly)) return;
-  for (int i = from; i < lines.size(); ++i) out.write(lines[i] + "\n");
-  out.commit();
+  return trials::visibleAt(reg.family(family), who.asOf);   // evaluation mode: only the tries over data ended by then
 }
-// Records one tried strategy; returns how many distinct strategies this environment has tried on that data
-int record(int env, const Spec& s, const Data& d, const charts::bt::Result& r) {
-  const QVector<double> rets = perBar(r.equity);
-  const auto m = charts::quant::moments(rets);
-  const double sr = charts::quant::sharpe(rets);
-  const QJsonObject o{{"at", double(QDateTime::currentSecsSinceEpoch())}, {"key", d.market + "|" + d.tf}, {"hash", s.hash()},
-                      {"label", s.label()}, {"bars", int(d.bars.size())}, {"sr", std::isfinite(sr) ? sr : 0.0}, {"n", double(rets.size())},
-                      {"skew", std::isfinite(m.skew) ? m.skew : 0.0}, {"kurt", std::isfinite(m.kurt) ? m.kurt : 3.0},
-                      {"sharpe", std::isfinite(sr) ? sr * std::sqrt(ppyOf(d.bars)) : 0.0},
-                      {"net", std::isfinite(r.stats.netProfitPct) ? r.stats.netProfitPct : 0.0}};
-  {
-    QFile f(ledgerPath(env));   // closed (flushed) before it is read again below
-    if (f.open(QIODevice::Append)) f.write(QJsonDocument(o).toJson(QJsonDocument::Compact) + "\n");
-  }
-  compactLedger(ledgerPath(env));
-  return int(trialsFor(env, d.market + "|" + d.tf).size());
-}
-// The deflated Sharpe of the best of these trials (Bailey & López de Prado): its probability of beating the best Sharpe
-// pure noise would show after that many tries
-QString deflatedText(const QHash<QString, Trial>& t) {
-  if (t.isEmpty()) return "no strategy tried yet on this data";
-  QVector<double> srs;
-  const Trial* best = nullptr;
-  for (const auto& x : t) {
-    if (std::isfinite(x.sr)) srs << x.sr;
-    if (!best || x.sr > best->sr) best = &x;
-  }
-  double var = 0;
-  if (srs.size() > 1) { const auto m = charts::quant::moments(srs); var = m.sd * m.sd * (double(srs.size()) / (srs.size() - 1)); }
-  const double sr0 = charts::quant::expectedMaxSharpe(std::max<double>(srs.size(), 1), var);
-  const double dsr = psrOf(best->sr, best->n, best->skew, best->kurt, sr0);
-  return QString("%1 distinct strategies tried on this data. Best: %2 (Sharpe %3, net %4%). Its deflated Sharpe after %1 tries: %5 "
+
+// The best of the tries on that data and its deflated Sharpe, with who tried them.
+QString deflatedText(const QList<trials::Trial>& rows, int env) {
+  const auto latest = trials::latestPerConfig(rows);
+  const auto d = trials::deflate(latest);
+  if (!d.ok) return "no strategy tried yet on this data";
+  const auto w = trials::tried(rows, whoPrefix(env));
+  QStringList by;
+  if (w.user) by << QString("%1 by the user in Charts › Tester").arg(w.user);
+  if (env >= 0 && w.me) by << QString("%1 by this environment").arg(w.me);
+  if (w.others) by << QString("%1 by %2").arg(w.others).arg(env >= 0 ? "other environments" : "the environments");
+  return QString("%1 distinct strategies tried on this data (%2). Best: %3 (Sharpe %4, net %5%). Its deflated Sharpe after %1 tries: %6 "
                  "(the probability its edge is real; needs above 0.95)")
-      .arg(t.size()).arg(best->label, num(best->sharpeAnn), num(best->netPct), num(dsr, 3));
+      .arg(d.tries).arg(by.join(", "), d.best.label, num(d.best.sharpe), num(d.best.netPct), num(d.dsr, 3));
 }
 
 // ------------------------------------------------------------------------------------------------ texts
@@ -373,14 +363,15 @@ void indicators(const QJsonObject& a, ToolDone done) {
 }
 
 void run(const QJsonObject& a, ToolDone done) {
-  const Spec s = specOf(a, false);
+  Spec s = specOf(a, false);
+  s.asOf = asOfFor("bt_run");
   if (!s.error.isEmpty()) { done(fail(s.error)); return; }
   if (g_busy) { done(fail("refused: a backtest is already running; ask again when it has answered")); return; }
   g_busy = true;
-  const int env = currentCaller().env;
-  loadBars(s, [s, env, done](const Data& d) {
+  const ToolCaller who = currentCaller();
+  loadBars(s, [s, who, done](const Data& d) {
     if (!d.error.isEmpty() || d.bars.size() < 50) { g_busy = false; done(fail(d.error.isEmpty() ? "error: too few bars (" + QString::number(d.bars.size()) + ")" : d.error)); return; }
-    onWorker([s, d, env]() -> ToolResult {
+    onWorker([s, d, who]() -> ToolResult {
       charts::bt::Result r;
       if (s.pine) {
         charts::pine::Options o;
@@ -396,24 +387,26 @@ void run(const QJsonObject& a, ToolDone done) {
         const QJsonObject st = withMagnifier(s.strategy, d, &sub, &note);
         r = charts::bt::backtest(d.bars, st, sub);   // throws on an unknown operand or operator: the message is the answer
       }
-      const int tried = record(env, s, d, r);
+      const int tried = int(trials::latestPerConfig(record(who, "bt_run", s, d, r)).size());
       QString out = headText(s, d) + note + statsText(r.stats) + "\n" + yearsText(r) + "\n" + tradesText(r.trades, 8);
-      out += QString("This is strategy %1 tried by this environment on %2 %3: bt_trials deflates the best by the number of tries; "
-                     "bt_quant_checks tests this one for overfitting.").arg(tried).arg(d.market, d.tf);
+      out += QString("%1 distinct strategies have now been tried on %2 %3 (by the user and every environment, in the shared trial "
+                     "registry): bt_trials deflates the best by the number of tries; bt_quant_checks tests this one for overfitting.")
+                 .arg(tried).arg(d.market, d.tf);
       return okText(out);
     }, done);
   });
 }
 
 void quantChecks(const QJsonObject& a, ToolDone done) {
-  const Spec s = specOf(a, true);
+  Spec s = specOf(a, true);
+  s.asOf = asOfFor("bt_quant_checks");
   if (!s.error.isEmpty()) { done(fail(s.error)); return; }
   if (g_busy) { done(fail("refused: a backtest is already running; ask again when it has answered")); return; }
   g_busy = true;
-  const int env = currentCaller().env;
-  loadBars(s, [s, env, done](const Data& d) {
+  const ToolCaller who = currentCaller();
+  loadBars(s, [s, who, done](const Data& d) {
     if (!d.error.isEmpty() || d.bars.size() < 200) { g_busy = false; done(fail(d.error.isEmpty() ? "error: the checks need at least 200 bars" : d.error)); return; }
-    onWorker([s, d, env]() -> ToolResult {
+    onWorker([s, d, who]() -> ToolResult {
       QElapsedTimer clock;
       clock.start();
       charts::quant::Checks c;
@@ -435,7 +428,8 @@ void quantChecks(const QJsonObject& a, ToolDone done) {
         c = charts::quant::quantChecks(d.bars, st, qo);
         base = charts::bt::backtest(d.bars, st, qo.subBars);
       }
-      record(env, s, d, base);
+      const QList<trials::Trial> rows = record(who, "bt_quant_checks", s, d, base);
+      trials::withRegistry(c, base.equity, familyOf(d), s.hash(), trials::Registry::instance(), who.asOf);   // the other strategies tried on this data count too
       QString out = headText(s, d) + note;
       out += QString("Quant checks: passed %1 of %2 (%3 s). Base: Sharpe %4, net %5%, %6 trades.\n")
                  .arg(c.passed).arg(c.gates.size()).arg(num(clock.elapsed() / 1000.0, 1), num(c.base.sharpe), num(c.base.netPct)).arg(c.base.trades);
@@ -466,7 +460,7 @@ void quantChecks(const QJsonObject& a, ToolDone done) {
                        "chance of a loss %7%\n").arg(c.monteCarlo->runs)
                    .arg(num(c.monteCarlo->p5, 1), num(c.monteCarlo->p50, 1), num(c.monteCarlo->p95, 1), num(c.monteCarlo->ddP50, 1),
                         num(c.monteCarlo->ddP95, 1), num(c.monteCarlo->lossProb, 1));
-      out += "Across this environment's tries on this data: " + deflatedText(trialsFor(env, d.market + "|" + d.tf)) + "\n";
+      out += "Across every try on this data (the shared trial registry): " + deflatedText(rows, who.env) + "\n";
       return okText(out);
     }, done);
   });
@@ -474,19 +468,21 @@ void quantChecks(const QJsonObject& a, ToolDone done) {
 
 void trials(const QJsonObject& a, ToolDone done) {
   const int env = currentCaller().env;
-  QFile f(ledgerPath(env));
-  QMap<QString, int> keys;
-  if (f.open(QIODevice::ReadOnly))
-    while (!f.atEnd()) keys[QJsonDocument::fromJson(f.readLine()).object().value("key").toString()]++;
-  const QString m = strArg(a, "market"), tf = strArg(a, "timeframe");
-  QString out = "Strategies this environment backtested (bt_run and bt_quant_checks), by market and timeframe:\n";
+  const qint64 asOf = asOfFor("bt_trials");   // evaluation mode: the tries over data ended by then
+  const QString m = strArg(a, "market").toUpper().remove('/'), tf = strArg(a, "timeframe");
+  auto& reg = trials::Registry::instance();
+  QString out = "Strategies backtested by the user (Charts › Tester) and by every environment (bt_run, bt_quant_checks), by market and "
+                "timeframe, from the shared trial registry (append-only: a try is never forgotten):\n";
   int shown = 0;
-  for (auto it = keys.cbegin(); it != keys.cend(); ++it) {
-    if (!m.isEmpty() && !it.key().contains(m.toUpper().remove('/'))) continue;
-    if (!tf.isEmpty() && it.key().section('|', 1) != tf) continue;
-    out += "- " + it.key().section('|', 0, 0) + " " + it.key().section('|', 1) + ": " + deflatedText(trialsFor(env, it.key())) + "\n";
-    ++shown;
+  for (const auto& f : reg.families("backtest")) {
+    if (!m.isEmpty() && !f.market.toUpper().contains(m)) continue;
+    if (!tf.isEmpty() && f.timeframe != tf) continue;
+    const QList<trials::Trial> rows = trials::visibleAt(reg.family(f.family), asOf);
+    if (rows.isEmpty()) continue;
+    if (++shown > 40) { out += "(more: filter by market or timeframe)\n"; break; }
+    out += "- " + f.market + " " + f.timeframe + ": " + deflatedText(rows, env) + "\n";
   }
+  if (asOf > 0) out = "EVALUATION MODE: as of " + asOfStamp(asOf) + " (only the tries over data that had ended by then).\n" + out;
   if (!shown) out += "(none yet)\n";
   out += "Trying many strategies on the same data and keeping the best is how a lucky backtest looks real: the deflated Sharpe "
          "accounts for every try.";
@@ -517,6 +513,7 @@ QJsonObject strategyArgs(bool quant) {
 }  // namespace
 
 void registerBacktestTools(Tools& t) {
+  importLedgers();
   const QString S = "backtest";
   // a Pine run on 50000 bars or the quant checks (walk-forward, PBO, Monte Carlo) take far more than a data read's 30 s
   constexpr int kBacktestTimeoutMs = 10 * 60 * 1000;
@@ -528,10 +525,10 @@ void registerBacktestTools(Tools& t) {
          strategyArgs(false), run, kBacktestTimeoutMs});
   t.add({"bt_quant_checks", S, "The Strategy tester's quant checks on a strategy: walk-forward, overfitting (PBO), deflated Sharpe, cost stress, "
                                "nearby settings (its first two whole-number settings varied), Monte Carlo of the trades; and the deflated "
-                               "Sharpe across all strategies this environment tried on the same data.",
+                               "Sharpe across all strategies tried on the same data, by the user and every environment.",
          strategyArgs(true), quantChecks, kBacktestTimeoutMs});
-  t.add({"bt_trials", S, "The strategies this environment has backtested on each market and timeframe, with the best one's Sharpe deflated "
-                         "by the number of tries.",
+  t.add({"bt_trials", S, "The strategies backtested on each market and timeframe by the user and every environment (the shared trial "
+                         "registry), with the best one's Sharpe deflated by the number of tries.",
          schema({{"market", str("optional filter, e.g. BTCUSDT")}, {"timeframe", str("optional filter, e.g. 1h")}}), trials});
 }
 }  // namespace ai

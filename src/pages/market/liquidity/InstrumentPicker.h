@@ -1,6 +1,7 @@
 #pragma once
 #include <QWidget>
 #include <QStringList>
+#include <algorithm>
 
 namespace mkit { class SearchBox; }
 
@@ -40,10 +41,13 @@ protected:
   void mouseMoveEvent(QMouseEvent*) override;
   void mousePressEvent(QMouseEvent*) override;
   void leaveEvent(QEvent*) override;
+  bool event(QEvent*) override;   // finger scrolling (QScroller, touch only)
 private:
   struct Item { QString symbol, label, tag; };
   QList<Item> m_all, m_items;
   QString m_current; int m_hover = -1; double m_scroll = 0;
+  double m_item = 25.5;            // row pitch: taller rows for fingers (touch)
+  double maxScroll() const { return std::max(0.0, m_items.size() * m_item - height()); }
 };
 
 class InstrumentDropdown : public QWidget {

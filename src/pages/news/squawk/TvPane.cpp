@@ -140,7 +140,13 @@ void TvPane::layoutView() {
   const QRectF a = videoArea();
   const qreal w = qMin(a.width(), a.height() * 1.70);   // the reference's player box (≈527x310)
   const QRect local(int(a.center().x() - w / 2), int(a.top()), int(w), int(a.height()));
-  m_tv->setGeometry(QRect(mapTo(window(), local.topLeft()), local.size()));
+  const QRect g(mapTo(window(), local.topLeft()), local.size());
+  m_tv->setGeometry(g);
+  const bool out = viewClip && !viewClip().contains(g);
+  if (out != m_clipped) {
+    m_clipped = out;
+    if (m_playing && !m_state.startsWith("error")) { m_tv->setVisible(!out); update(); }
+  }
 }
 void TvPane::resizeEvent(QResizeEvent*) { layoutView(); }
 void TvPane::moveEvent(QMoveEvent*) { layoutView(); }
@@ -179,7 +185,7 @@ function onYouTubeIframeAPIReady(){ new YT.Player('v',{events:{
 </script>
 <script src="https://www.youtube.com/iframe_api"></script></body></html>)").arg(id);
   m_tv->loadHtml(html, QUrl("https://deepwater-terminal.com/tv/"));
-  m_tv->setVisible(true);
+  m_tv->setVisible(!m_clipped);
   layoutView();
   update();
 }

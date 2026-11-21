@@ -40,6 +40,10 @@ QVector<const char*> coreTemplates() {
       QT_TRANSLATE_NOOP("charts", " + %1% spread"),
       // Quant.cpp: the gates' details
       QT_TRANSLATE_NOOP("charts", "%1 Sharpe on data the settings were never picked on (needs above 0)"),
+      // src/trials/Stats.cpp (withRegistry): the checks with every strategy tried on the same data
+      QT_TRANSLATE_NOOP("charts", "%1 probability the edge is real after %2 tries on this data: %3 nearby settings and %4 other strategies (needs above 0.95)"),
+      QT_TRANSLATE_NOOP("charts", "%1% chance the best of the %2 strategies tried on this data is below average on unseen data (needs under 50%)"),
+      QT_TRANSLATE_NOOP("charts", "Overfitting across tries (PBO)"),
       QT_TRANSLATE_NOOP("charts", "%1% chance the best-looking settings are below average on unseen data (needs under 50%)"),
       QT_TRANSLATE_NOOP("charts", "%1 probability the edge is real after %2 version%3 tried (needs above 0.95)"),
       QT_TRANSLATE_NOOP("charts", "%1% with double fees and %2% slippage a side%3 (needs above 0)"),

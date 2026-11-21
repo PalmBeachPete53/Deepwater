@@ -1,6 +1,6 @@
 // Skill "ml" (user's request, 2026-11-16): what AI › ML offers, for the models of the cubes and Claude Code.
 //
-// Reading: ml_status, ml_methods, ml_datasets, ml_read_dataset, ml_runs, ml_run, ml_run_rows.
+// Reading: ml_status, ml_methods, ml_datasets, ml_read_dataset, ml_runs, ml_run, ml_run_rows, ml_compare (MlCompare.cpp).
 // Acting:  ml_load_dataset (prices / macro / COT, as the page's DATA panel), ml_train (one training at a time, in the
 //          trainer's sandbox, named after the environment that asked).
 // Never: deleting or stopping a run, installing anything, reading a file that is not one of the app's data sets.
@@ -65,6 +65,33 @@ QStringList listArg(const QJsonObject& a, const char* k) {
 QString num(double v, int dec = 4) { return std::isfinite(v) ? QString::number(v, 'f', dec) : QStringLiteral("n/a"); }
 QString pct(double v, int dec = 1) { return std::isfinite(v) ? QString::number(v * 100, 'f', dec) + "%" : QStringLiteral("n/a"); }
 double jn(const QJsonValue& v) { return v.isDouble() ? v.toDouble() : NAN; }
+// The supervised run's test predictions traded after costs (train.py trading_eval; step 4 of the roadmap, 2026-11-20)
+QString tradingText(const QJsonObject& t) {
+  if (t.isEmpty()) return {};
+  auto signedPct = [](double v) { return std::isfinite(v) ? (v >= 0 ? "+" : "") + QString::number(v * 100, 'f', 2) + "%" : QStringLiteral("n/a"); };
+  auto line = [&](const QJsonObject& o) {
+    return "net " + signedPct(jn(o.value("total_return"))) + " · Sharpe " + num(jn(o.value("sharpe")), 2) + " · max drawdown " +
+           pct(-jn(o.value("max_drawdown"))) + " · " + QString::number(o.value("trades").toInt()) + " trades · in the market " +
+           pct(jn(o.value("exposure")), 0);
+  };
+  const QJsonObject m = t.value("model").toObject(), vc = t.value("vs_constant").toObject(), c = t.value("constant").toObject();
+  QString out = QString("\nTRADED on the %1 test rows after costs (%2 bp a side; %3):").arg(t.value("rows").toInt())
+                    .arg(num(jn(t.value("cost_bp")), 1), t.value("rule").toString());
+  out += "\n  model: " + line(m.value("x1").toObject()) + " | before costs net " + signedPct(jn(m.value("x0").toObject().value("total_return"))) +
+         " | costs ×2 net " + signedPct(jn(m.value("x2").toObject().value("total_return"))) + " | ×3 net " +
+         signedPct(jn(m.value("x3").toObject().value("total_return")));
+  out += "\n  buy & hold: " + line(t.value("buy_hold").toObject());
+  out += "\n  trend (" + t.value("trend").toObject().value("rule").toString() + "): " + line(t.value("trend").toObject());
+  out += "\n  constant exposure (" + pct(jn(c.value("level")), 0) + " long all along, the model's average): " + line(c);
+  const double p = jn(vc.value("p")), pw = jn(vc.value("p_worse"));
+  out += QString("\n  timing against that constant exposure: %1 bp a row after costs, p %2 (%3)")
+             .arg(num(jn(vc.value("mean_diff_bp")), 2), num(p, 3),
+                  p < 0.05 ? QStringLiteral("the timing earns more than being in the market that much")
+                  : pw < 0.05 ? QStringLiteral("the timing LOSES against being in the market that much, not by chance")
+                              : QStringLiteral("not distinguishable from being in the market that much"));
+  return out;
+}
+
 QJsonObject schema(std::initializer_list<std::pair<const char*, QJsonObject>> props, QStringList required = {}) {
   QJsonObject p;
   for (const auto& [k, v] : props) p[k] = v;
@@ -152,7 +179,10 @@ void methodsNow(const QJsonObject& a, ToolDone done) {
   }
   if (f < 0) out += "\nCall ml_methods with a family for the parameters of its algorithms.";
   out += "\nTarget: a numeric column of the data set; target_transform: raw (its value), change, pct_change or direction "
-         "(1 if higher, 0 if not), looking horizon rows ahead (0 = same row, raw only). Supervised and semi_supervised need a "
+         "(1 if higher, 0 if not), looking horizon rows ahead (0 = same row, raw only); for a price, how much it moves rather "
+         "than where: realized_vol (% over the next horizon rows), range (high − low, %), abs_return (|move|, %) or big_move "
+         "(1 when the furthest move reaches move_pct, default the training rows' 80th percentile) — those are judged against "
+         "HAR and EWMA, the volatility references a forecast must beat (the result's AGAINST HAR / EWMA lines). Supervised and semi_supervised need a "
          "target (semi_supervised: classes, i.e. direction); unsupervised (outcome) and self_supervised (probe) may have one; "
          "reinforcement: target = the price column traded, transform and horizon unused.";
   done(okText(out.trimmed()));
@@ -166,18 +196,40 @@ QString describeSet(const ml::Dataset& d, bool columns = true) {
   if (columns) s += "\n  columns: " + d.numeric.join(", ");
   return s;
 }
+
+// ------------------------------------------------------------------------------------------------ evaluation clock
+// An environment in evaluation mode (ai::Slots::asOf) sees only the data sets cut at or before its moment (built by
+// ml_load_dataset in that mode: "-asof-…" in their id) and the trainings made on them: a data set of the present holds
+// the rows after the moment, and a training on it learned from them (2026-11-20).
+bool visibleSet(const QString& pathOrId, qint64 asOf) {
+  if (asOf <= 0) return true;
+  const qint64 at = ml::datasetAsOf(pathOrId);
+  return at > 0 && at <= asOf;
+}
+bool visibleRun(const ml::Run& r, qint64 asOf) { return asOf <= 0 || (!r.dataPath.isEmpty() && visibleSet(r.dataPath, asOf)); }
+QString setRefused(qint64 asOf) {
+  return "refused: this environment is in evaluation mode at " + asOfStamp(asOf) + ": this data set holds data after that moment. "
+         "Build one with ml_load_dataset (source technical-data): in evaluation mode it is cut at the moment.";
+}
+
 void datasets(const QJsonObject&, ToolDone done) {
-  const auto list = ml::listDatasets();
+  const qint64 asOf = asOfFor("ml_datasets");
+  QList<ml::Dataset> list;
+  for (const auto& d : ml::listDatasets()) if (visibleSet(d.path, asOf)) list << d;
   QString out = list.isEmpty() ? QStringLiteral("No data set on disk yet.") : QString("%1 data set(s), newest first:").arg(list.size());
   for (const auto& d : list) if (d.ok()) out += "\n- " + describeSet(d);
   out += "\nMore with ml_load_dataset(source: prices | technical-data | macro | cot, key, interval). The user's own CSV files are reachable only once "
          "the user has loaded them on the page.";
+  if (asOf > 0) out = "EVALUATION MODE: as of " + asOfStamp(asOf) + " (only the data sets cut at or before that moment).\n" + out;
   done(okText(out));
 }
 
 void loadDataset(const QJsonObject& a, ToolDone done) {
   const QString src = strArg(a, "source").toLower(), key = strArg(a, "key");
   ml::DatasetSpec spec;
+  spec.asOf = asOfFor("ml_load_dataset");   // evaluation mode: technical-data only, cut at the moment
+  if (spec.asOf > 0 && src != "technical-data" && src != "technical_data")
+    { done(fail("refused: this environment is in evaluation mode at " + asOfStamp(spec.asOf) + ": only source technical-data can be cut at that moment")); return; }
   if (src == "prices") {
     const market::Instrument* ins = market::find(key);
     if (!ins) for (const auto& i : market::instruments()) if (i.name.compare(key, Qt::CaseInsensitive) == 0) { ins = &i; break; }
@@ -215,6 +267,7 @@ void loadDataset(const QJsonObject& a, ToolDone done) {
     // the page's choices only: one large file per distinct number asked would fill the disk
     spec.rows = ml::snapTechnicalDataRows(intArg(a, "rows", ml::TECHNICAL_DATA_ROWS_DEFAULT, 1000, ml::TECHNICAL_DATA_ROWS_MAX));
     spec.keepWarm = a.value("keep_warm").toBool(false);
+    spec.orderFlow = a.value("order_flow").toBool(false);
     // the whole series inside the warm-up (BTCUSDT 1W: 483 bars < 600): the table would be empty
     int tfSec = 0;
     for (const auto& t : technicaldata::timeframes()) if (t.name == spec.interval) tfSec = t.seconds;
@@ -247,6 +300,7 @@ void loadDataset(const QJsonObject& a, ToolDone done) {
 void readDataset(const QJsonObject& a, ToolDone done) {
   const ml::Dataset d = ml::datasetById(strArg(a, "dataset_id"));
   if (!d.ok()) { done(fail("error: unknown dataset_id; see ml_datasets")); return; }
+  if (const qint64 asOf = asOfFor("ml_read_dataset"); !visibleSet(d.path, asOf)) { done(fail(setRefused(asOf))); return; }
   QStringList want = listArg(a, "columns");
   for (const auto& c : want) if (!d.columns.contains(c)) { done(fail("error: no column \"" + c + "\" in " + ml::idOf(d) + ". Columns: " + d.columns.join(", "))); return; }
   const int last = intArg(a, "last_rows", 20, 1, 200);
@@ -278,7 +332,8 @@ void readDataset(const QJsonObject& a, ToolDone done) {
 void trainNow(const QJsonObject& a, ToolDone done, const ToolCaller& who);
 // the caller is read now: by the time the environment check answers, another environment may have called a tool
 void train(const QJsonObject& a, ToolDone done) {
-  const ToolCaller who = currentCaller();
+  ToolCaller who = currentCaller();
+  who.asOf = asOfFor("ml_train");
   withEnvironment([a, done, who] { trainNow(a, done, who); });
 }
 void trainNow(const QJsonObject& a, ToolDone done, const ToolCaller& who) {
@@ -289,6 +344,7 @@ void trainNow(const QJsonObject& a, ToolDone done, const ToolCaller& who) {
     if (r.state == ml::RunState::Running) { done(fail("refused: a training is already running (" + r.id + "); wait for it with ml_run(run_id, wait_seconds)")); return; }
   const ml::Dataset d = ml::datasetById(strArg(a, "dataset_id"));
   if (!d.ok()) { done(fail("error: unknown dataset_id; see ml_datasets, or ml_load_dataset first")); return; }
+  if (!visibleSet(d.path, who.asOf)) { done(fail(setRefused(who.asOf))); return; }
   const int fam = ml::familyOf(strArg(a, "family"));
   if (fam < 0) { done(fail("error: family must be one of supervised, unsupervised, semi_supervised, self_supervised, reinforcement")); return; }
   const ml::Algo al = ml::algoById(strArg(a, "algorithm"));
@@ -306,10 +362,11 @@ void trainNow(const QJsonObject& a, ToolDone done, const ToolCaller& who) {
   if (!target.isEmpty() && !d.numeric.contains(target)) { done(fail("error: no numeric column \"" + target + "\". Numeric columns: " + d.numeric.join(", "))); return; }
   QString transform = strArg(a, "target_transform");
   if (transform.isEmpty()) transform = fam == 4 ? "raw" : d.dateColumn.isEmpty() ? "raw" : fam == 1 || fam == 3 ? "pct_change" : "direction";
-  if (!QStringList{"raw", "change", "pct_change", "direction"}.contains(transform)) { done(fail("error: target_transform must be raw, change, pct_change or direction")); return; }
+  static const QStringList kTransforms{"raw", "change", "pct_change", "direction", "realized_vol", "range", "abs_return", "big_move"};
+  if (!kTransforms.contains(transform)) { done(fail("error: target_transform must be one of " + kTransforms.join(", "))); return; }
   int horizon = intArg(a, "horizon", transform == "raw" && d.dateColumn.isEmpty() ? 0 : 1, 0, 250);
   if (fam == 4) { transform = "raw"; horizon = 0; }
-  if (!target.isEmpty() && transform != "raw" && horizon < 1) { done(fail("error: a change or a direction needs horizon ≥ 1")); return; }
+  if (!target.isEmpty() && transform != "raw" && horizon < 1) { done(fail("error: a change, a direction or a volatility target needs horizon ≥ 1")); return; }
   // features: given ones must exist; by default every numeric column but raw price levels (and the target at its own row)
   QStringList feats = listArg(a, "features");
   for (const auto& c : feats)
@@ -358,6 +415,21 @@ void trainNow(const QJsonObject& a, ToolDone done, const ToolCaller& who) {
                   {"features", QJsonArray::fromStringList(feats)}, {"lags", intArg(a, "lags", 0, 0, 10)}, {"algorithm", al.id},
                   {"params", params}, {"test_size", testSize}, {"cv_folds", folds}, {"task", task}, {"seed", 42}};
   if (!d.dateColumn.isEmpty()) job["date_column"] = d.dateColumn;
+  if (transform == "big_move" && a.contains("move_pct")) job["move_pct"] = qBound(0.0, numArg(a, "move_pct", 0), 100.0);
+  if (fam == 0 || fam == 2 || fam == 3) {   // how the test predictions are traded (train.py trading_eval); the cost defaults by market (ml::Runs)
+    const QString side = strArg(a, "trade_side");
+    if (!side.isEmpty() && side != "long" && side != "long_short") { done(fail("error: trade_side must be long or long_short")); return; }
+    if (!side.isEmpty()) job["trade_side"] = side;
+    if (a.contains("cost_bp")) job["cost_bp"] = qBound(0.0, numArg(a, "cost_bp", 15), 200.0);
+  }
+  const QString validation = strArg(a, "validation");
+  if (!validation.isEmpty() && validation != "split" && validation != "walk_forward") { done(fail("error: validation must be split or walk_forward")); return; }
+  if (validation == "walk_forward") {
+    if (fam != 0) { done(fail("error: walk_forward is for the supervised family")); return; }
+    job["validation"] = "walk_forward";
+    job["wf_folds"] = intArg(a, "wf_folds", 5, 2, 20);
+    job["cv_folds"] = 0;
+  }
   // named after the environment that asked: the user sees on the page who trained what
   const QString envTag = who.env >= 0 ? QString("Env %1").arg(who.env + 1) : QStringLiteral("AI");
   QString name = strArg(a, "name").left(80);
@@ -407,7 +479,9 @@ QString headline(const ml::Run& r) {
 }
 void runsList(const QJsonObject& a, ToolDone done) {
   const int n = intArg(a, "last", 10, 1, 30);
-  const auto& list = ml::Runs::instance().list();
+  const qint64 asOf = asOfFor("ml_runs");   // evaluation mode: the trainings on data sets cut at or before the moment
+  QList<ml::Run> list;
+  for (const auto& r : ml::Runs::instance().list()) if (visibleRun(r, asOf)) list << r;
   if (list.isEmpty()) { done(okText("No run yet.")); return; }
   QString out = QString("%1 run(s), newest first:").arg(list.size());
   for (int i = 0; i < list.size() && i < n; ++i) {
@@ -441,14 +515,47 @@ QString runReport(const ml::Run& r) {
   if (fam == "supervised" || fam == "semi_supervised") {
     const bool cls = res.value("task").toString() == "classification";
     const QJsonArray trp = res.value("train_period").toArray(), tep = res.value("test_period").toArray();
-    out += QString("\n%1 · target %2 of %3, %4 row(s) ahead · trained on %5 rows (%6 → %7), tested on the next %8 (%9 → %10)")
+    const bool wfRun = res.value("walk_forward").isObject();
+    out += QString(wfRun ? "\n%1 · target %2 of %3, %4 row(s) ahead · walk-forward: retrained before each test block, the last time on %5 rows "
+                           "(%6 → %7); tested on %8 rows (%9 → %10)"
+                         : "\n%1 · target %2 of %3, %4 row(s) ahead · trained on %5 rows (%6 → %7), tested on the next %8 (%9 → %10)")
                .arg(res.value("task").toString(), job.value("target_transform").toString(), job.value("target").toString())
                .arg(job.value("horizon").toInt()).arg(res.value("train_rows").toInt())
                .arg(trp.at(0).toString().left(10), trp.at(1).toString().left(10)).arg(res.value("test_rows").toInt())
                .arg(tep.at(0).toString().left(10), tep.at(1).toString().left(10));
     out += "\nTEST: " + metrics(res.value("test").toObject(), cls);
     out += "\nNO SKILL (" + res.value("baseline").toObject().value("rule").toString() + "): " + metrics(res.value("baseline").toObject(), cls);
+    if (res.value("persistence").isObject())   // the last seen value of the target, again: a naive rule (written since 2026-11-19)
+      out += QString("\nPERSISTENCE (\"what was last seen happens again\", %1 rows): ").arg(res.value("persistence").toObject().value("rows").toInt()) +
+             metrics(res.value("persistence").toObject(), cls);
+    if (res.value("data").isObject())
+      out += "\ndata version: " + res.value("data").toObject().value("sha256").toString().left(12) + " · " +
+             QString::number(res.value("data").toObject().value("rows").toInt()) + " rows";
     out += "\nTRAIN: " + metrics(res.value("train").toObject(), cls) + "  (far above TEST = learned the past by heart)";
+    out += tradingText(res.value("trading").toObject());
+    if (const QJsonObject refs = res.value("references").toObject(); !refs.isEmpty()) {   // volatility targets
+      for (const char* name : {"har", "ewma"}) {
+        const QJsonObject vs = refs.value(QString("vs_") + name).toObject();
+        const double p = jn(vs.value("p")), pw = jn(vs.value("p_worse"));
+        out += QString("\nAGAINST %1 (%2): %3 → the model %4 (paired moving-block bootstrap on the test rows, p %5, p_worse %6)")
+                   .arg(QString(name).toUpper(), refs.value(name).toObject().value("rule").toString(), metrics(refs.value(name).toObject(), cls),
+                        p < 0.05 ? "does BETTER" : pw < 0.05 ? "does WORSE" : "is not distinguishable", num(p, 3), num(pw, 3));
+      }
+      if (res.contains("move_threshold_pct")) out += QString("\nbig move = the furthest move reaches %1 %").arg(num(jn(res.value("move_threshold_pct")), 3));
+    }
+    const QJsonObject wfr = res.value("walk_forward").toObject();
+    if (!wfr.isEmpty()) {
+      QStringList bl;
+      const QString key = wfr.value("metric").toString();
+      for (const auto& v : wfr.value("blocks").toArray()) {
+        const QJsonObject b = v.toObject();
+        bl << b.value("from").toString().left(10) + "→" + b.value("to").toString().left(10) + " " + (cls ? pct(jn(b.value(key))) : num(jn(b.value(key)))) +
+                  QString(" (trained on %1 rows)").arg(b.value("train_rows").toInt());
+      }
+      out += QString("\nwalk-forward: TEST is over %1 blocks, each predicted by a model retrained on every row before it (%2 row(s) left out "
+                     "before each block); NO SKILL is each block's own; %3 by block: %4").arg(wfr.value("folds").toInt())
+                 .arg(wfr.value("gap_rows").toInt()).arg(key, bl.join(" | "));
+    }
     const QJsonObject cv = res.value("cv").toObject();
     if (!cv.isEmpty()) out += QString("\ncross-validation (%1 folds in time order): %2 = %3 ± %4").arg(cv.value("folds").toInt())
                                   .arg(cv.value("metric").toString(), cls ? pct(jn(cv.value("mean"))) : num(jn(cv.value("mean"))), cls ? pct(jn(cv.value("std"))) : num(jn(cv.value("std"))));
@@ -519,6 +626,8 @@ QString runReport(const ml::Run& r) {
       const char* k = cls ? "balanced_accuracy" : "mae";
       auto v = [&](const char* n) { const double x = jn(p.value(n).toObject().value(k)); return cls ? pct(x) : num(x); };
       out += QString("\nprobe (%1 on later windows): embeddings %2, raw last row %3, raw window %4, no skill %5").arg(k).arg(v("embeddings"), v("raw_now"), v("raw_window"), v("no_skill"));
+      if (p.value("persistence").isObject()) out += ", persistence (last seen value again) " + v("persistence");
+      out += tradingText(p.value("trading").toObject());   // the probe's predictions traded after costs
     }
     const QJsonArray hist = res.value("history").toArray();
     if (!hist.isEmpty()) {
@@ -561,7 +670,8 @@ QString runReport(const ml::Run& r) {
 }
 void runGet(const QJsonObject& a, ToolDone done) {
   const QString id = strArg(a, "run_id");
-  if (!ml::Runs::instance().find(id)) { done(fail("error: no run \"" + id + "\"; see ml_runs")); return; }
+  const qint64 asOf = asOfFor("ml_run");
+  if (!ml::Runs::instance().find(id) || !visibleRun(*ml::Runs::instance().find(id), asOf)) { done(fail("error: no run \"" + id + "\"; see ml_runs")); return; }
   const int wait = intArg(a, "wait_seconds", 0, 0, 25);
   auto answer = [id, done] {
     const ml::Run* r = ml::Runs::instance().find(id);
@@ -581,7 +691,7 @@ void runGet(const QJsonObject& a, ToolDone done) {
 }
 void runRows(const QJsonObject& a, ToolDone done) {
   const ml::Run* r = ml::Runs::instance().find(strArg(a, "run_id"));
-  if (!r) { done(fail("error: no such run; see ml_runs")); return; }
+  if (!r || !visibleRun(*r, asOfFor("ml_run_rows"))) { done(fail("error: no such run; see ml_runs")); return; }
   if (r->state != ml::RunState::Done) { done(fail("error: the run is not finished")); return; }
   const QString fam = familyOfRun(*r);
   const QString file = fam == "reinforcement" ? "equity.csv" : (fam == "unsupervised" || fam == "self_supervised") ? "assignments.csv" : "predictions.csv";
@@ -601,6 +711,8 @@ void runRows(const QJsonObject& a, ToolDone done) {
 }
 }  // namespace
 
+void mlCompare(const QJsonObject& args, ToolDone done);   // MlCompare.cpp
+
 void registerMlTools(Tools& t) {
   const QString S = "ml";
   t.add({"ml_status", S, "AI › ML: whether the Python environment is ready, which libraries are available, the training running now.", schema({}), status});
@@ -614,7 +726,12 @@ void registerMlTools(Tools& t) {
                  {"key", str("prices: symbol (EURUSD, XAUUSD, SPX…); technical-data: a recorded pair, BINANCE:BTCUSDT (default), ETHUSDT, EURUSD…; macro: country code (us, fr, ez…); cot: market id (EUR, GOLD…)")},
                  {"interval", str("prices: 1d (default), 1wk or 1h; technical-data: 1m, 5m, 15m, 1h (default), 4h, 1D or 1W")},
                  {"rows", integer("technical-data only: the newest bars to take: 50000, 200000 (default), 500000 or 1000000 (another number goes up to the next of these)")},
-                 {"keep_warm", QJsonObject{{"type", "boolean"}, {"description", "technical-data only: keep the first 600 bars of the series (long averages not settled), default false"}}}},
+                 {"keep_warm", QJsonObject{{"type", "boolean"}, {"description", "technical-data only: keep the first 600 bars of the series (long averages not settled), default false"}}},
+                 {"order_flow", QJsonObject{{"type", "boolean"}, {"description",
+                     "technical-data only (Binance pairs recording them, 1m to 1D): add the order flow columns (fp_spot_* / fp_perp_* footprint "
+                     "per bar: delta, POC, value area, imbalances, stacks, deltas at the lows and highs; depth_*: the perpetual's book "
+                     "imbalance at ±0.2/1/5 % and depth changes; oi_*: open interest change and long/short ratios) and keep only the "
+                     "bars they cover, so a run on the bar columns alone and one with them are trained on the same rows. Default false"}}}},
                 {"source"}), loadDataset});
   t.add({"ml_read_dataset", S, "The latest rows of a data set (date and chosen columns).",
          schema({{"dataset_id", str("from ml_datasets")}, {"columns", strings("columns to read; empty = every numeric column")},
@@ -622,11 +739,21 @@ void registerMlTools(Tools& t) {
   t.add({"ml_train", S, "Starts one training on a data set (one at a time; it runs in a sandbox). Returns its run id; read the result with ml_run.",
          schema({{"dataset_id", str("from ml_datasets")}, {"family", str("supervised, unsupervised, semi_supervised, self_supervised or reinforcement")},
                  {"algorithm", str("an algorithm id of that family (ml_methods)")}, {"target", str("a numeric column: target, outcome, probe or traded price depending on the family")},
-                 {"target_transform", str("raw, change, pct_change or direction")}, {"horizon", integer("rows ahead for the target (default 1)")},
+                 {"target_transform", str("raw, change, pct_change, direction; or how much a price moves: realized_vol, range, abs_return, big_move")},
+                 {"move_pct", number("big_move: the move (% from the price now) that counts as big; default the training rows' 80th percentile")}, {"horizon", integer("rows ahead for the target (default 1)")},
                  {"features", strings("numeric columns to learn from; empty = all but raw price levels")}, {"lags", integer("past values of each feature too, 0..10")},
                  {"params", QJsonObject{{"type", "object"}, {"description", "the algorithm's parameters (ml_methods with its family); omitted = defaults"}}},
                  {"test_size", number("share of the latest rows held out for testing, 0.05..0.5, default 0.2")},
-                 {"cv_folds", integer("supervised: time-series cross-validation folds, 0..10")}, {"task", str("supervised: auto, classification or regression")},
+                 {"cv_folds", integer("supervised: time-series cross-validation folds, 0..10")},
+                 {"validation", str("supervised: split (default: one model trained once before the test part) or walk_forward (the test "
+                                    "part cut into wf_folds blocks, each predicted by a model retrained on every row before it, the rows "
+                                    "whose target reaches into the block left out: how a model retrained regularly would have done; same "
+                                    "test rows as split, so ml_compare compares the two)")},
+                 {"wf_folds", integer("walk_forward: blocks of the test part, 2..20, default 5")},
+                 {"trade_side", str("supervised, a price target: how the test predictions are traded after costs (the result's "
+                                    "TRADED block): long (default: long when the model says up, flat otherwise) or long_short")},
+                 {"cost_bp", number("supervised: the cost a side for that trading, in basis points; default by market: Binance 15 "
+                                    "(0.10 % fee + 0.05 % slippage, as the Strategy tester), forex 2, others 5")}, {"task", str("supervised: auto, classification or regression")},
                  {"name", str("optional short name")}}, {"dataset_id", "family", "algorithm"}), train});
   t.add({"ml_runs", S, "The latest trainings (the user's and the AIs'): id, family, algorithm, data, state, main result.",
          schema({{"last", integer("how many, default 10, max 30")}}), runsList});
@@ -634,5 +761,20 @@ void registerMlTools(Tools& t) {
          schema({{"run_id", str("from ml_train or ml_runs")}, {"wait_seconds", integer("wait up to this many seconds (max 25) while it is still running")}}, {"run_id"}), runGet});
   t.add({"ml_run_rows", S, "The latest rows a finished training wrote: predictions vs actual (supervised), group per row (unsupervised), simulated equity (reinforcement).",
          schema({{"run_id", str("a finished run")}, {"last_rows", integer("rows from the end, default 20, max 200")}}, {"run_id"}), runRows});
+  t.add({"ml_compare", S,
+         "Compares finished trainings with figures Deepwater computes from their files (quote them; do not recompute). Two modes, "
+         "chosen from the runs: SAME MARKET (one question — what is predicted, traded or grouped — on one market and test period): "
+         "ranked, each against no skill and against persistence (the last seen value again) with a paired test on its test rows, the top "
+         "two against each other, and the number of tries "
+         "on that question and market (the best of many tries looks good by chance); SEVERAL MARKETS (one setup run on several "
+         "markets): each against its own market's no skill or buy & hold, how many markets it beats. Other runs are listed apart. "
+         "Give run_ids, or filters (newest first).",
+         schema({{"run_ids", strings("runs to compare (from ml_runs / ml_train); omitted = the filters below")},
+                 {"market", str("filter: part of the data set's name, e.g. BTCUSDT, EUR/USD")},
+                 {"family", str("filter: supervised, unsupervised, semi_supervised, self_supervised or reinforcement")},
+                 {"algorithm", str("filter: an algorithm id")}, {"target", str("filter: the target column")},
+                 {"only_this_environment", QJsonObject{{"type", "boolean"}, {"description", "filter: only the runs this environment started"}}},
+                 {"last", integer("filters: how many of the newest matching runs, default 40, max 200")}}),
+         mlCompare, 120000});
 }
 }  // namespace ai

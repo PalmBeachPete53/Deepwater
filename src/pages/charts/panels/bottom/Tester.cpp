@@ -17,12 +17,15 @@
 #include "pages/charts/panels/bottom/QuantChecks.h"
 #include "technicaldata/TechnicalDataBars.h"
 #include "technicaldata/TechnicalDataStore.h"
+#include "trials/Registry.h"
+#include "trials/Stats.h"
 #include <QtConcurrent/QtConcurrentRun>
 #include "pages/charts/plot/Chart.h"
 #include "pages/charts/plot/Series.h"
 #include "pages/charts/plot/TimeScale.h"
 #include "pages/charts/plot/PriceScale.h"
 #include <QComboBox>
+#include <QDateTime>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -743,7 +746,7 @@ void TesterTab::runPine(ChartPane* p, const Bars& bars, const QString& symbol, c
   const int gen = ++runGen_;
   P->app->toast(QCoreApplication::translate("charts", "Running %1…").arg(fmt::esc(file)));
   QPointer<ChartPane> pane(p);
-  pine::runAsync(source, bars, o, this, [this, pane, bars, file, symbol, tf, dataNote, gen](const pine::Result& run) {
+  pine::runAsync(source, bars, o, this, [this, pane, bars, file, source, symbol, tf, dataNote, gen](const pine::Result& run) {
     pineRunning_ = false;
     if (gen != runGen_) return;   // a newer run started meanwhile: its result stands
     const pine::StrategyResult sr = pine::fromRun(run, bars);
@@ -756,12 +759,53 @@ void TesterTab::runPine(ChartPane* p, const Bars& bars, const QString& symbol, c
     tr.bars = bars;
     tr.strat = QJsonObject{{"pine", file}, {"initialCapital", sr.config.value("initial_capital").toDouble(1000000)}};
     tr.dataNote = dataNote;
+    tr.config = trials::pineConfig(source);
+    tr.label = "Pine: " + QFileInfo(file).fileName();
     showRun(pane, tr);
   });
 }
 
-void TesterTab::showRun(ChartPane* p, const TestResult& tr) {
+// Every test the user runs is a try in the trial registry shared with the agents and the ML trainings: trying many
+// strategies on the same data and keeping the best is how luck looks like an edge, whoever does it.
+void TesterTab::recordTrial(ChartPane* p, TestResult& tr) {
+  QString market = technicaldata::storedMarket(tr.symbol);
+  if (market.isEmpty()) market = tr.symbol.trimmed().toUpper().remove('/');
+  int sec = 0;
+  try { sec = int(series::parseTf(tr.tf).seconds); } catch (const std::exception&) {}
+  if (market.isEmpty() || !sec || tr.r.equity.size() < 2) return;
+  trials::Trial t;
+  t.at = QDateTime::currentSecsSinceEpoch();
+  t.kind = "backtest";
+  t.origin = "user";
+  t.place = p && p->replay ? "Charts › Tester (bar replay)" : "Charts › Tester";
+  t.family = trials::backtestFamily(market, sec);
+  t.config = tr.config.isEmpty() ? trials::strategyConfig(tr.strat) : tr.config;
+  t.label = tr.label.isEmpty() ? trials::ruleLabel(tr.strat) : tr.label;
+  t.market = market;
+  t.timeframe = tr.tf;
+  t.detail = tr.config.isEmpty() ? QJsonObject{{"strategy", tr.strat}} : tr.strat;
+  t.detail["bars"] = int(tr.bars.size());
+  if (!tr.dataNote.isEmpty()) t.detail["source"] = tr.dataNote;
+  trials::setReturns(t, tr.r.equity);
+  t.netPct = std::isfinite(tr.r.stats.netProfitPct) ? tr.r.stats.netProfitPct : 0.0;
+  auto& reg = trials::Registry::instance();
+  if (!reg.add(t)) return;
+  tr.family = t.family;
+  tr.config = t.config;
+  const QList<trials::Trial> rows = reg.family(t.family);
+  const auto w = trials::tried(rows, {});
+  const auto d = trials::deflate(trials::latestPerConfig(rows));
+  tr.tried = w.all;
+  tr.triedUser = w.user;
+  tr.triedAgents = w.others;
+  tr.bestDsr = d.dsr;
+  tr.bestIsThis = d.best.config == t.config;
+}
+
+void TesterTab::showRun(ChartPane* p, const TestResult& trIn) {
   {
+    TestResult tr = trIn;
+    recordTrial(p, tr);
     const bt::Result& r = tr.r;
     static int resultSeq = 0;
     lastResult = tr;
@@ -827,6 +871,25 @@ void TesterTab::showResult() {
     noteL->setWordWrap(true);
     noteL->setProperty("qtc", "hint");
     outLay_->addWidget(noteL);
+  }
+  if (R.tried > 0) {   // the trial registry: how many strategies were tried on this data, and what that does to the best
+    QString t = R.tried == 1
+                    ? QCoreApplication::translate("charts", "Trial registry: the first strategy tested on this market and timeframe.")
+                    : QCoreApplication::translate("charts", "Trial registry: %n different strategies tested on this market and timeframe", nullptr, R.tried) +
+                          " (" + QCoreApplication::translate("charts", "%n by you", nullptr, R.triedUser) + ", " +
+                          QCoreApplication::translate("charts", "%n by the agents", nullptr, R.triedAgents) + "). ";
+    if (R.tried > 1 && std::isfinite(R.bestDsr))
+      t += (R.bestIsThis ? QCoreApplication::translate("charts", "This one is the best: its deflated Sharpe after these tries is %1 (above 0.95 it is likely real).")
+                         : QCoreApplication::translate("charts", "The best one's deflated Sharpe after these tries is %1 (above 0.95 it is likely real)."))
+               .arg(QLocale().toString(R.bestDsr, 'f', 2));
+    auto* regL = new QLabel(fmt::esc(t));
+    regL->setTextFormat(Qt::RichText);
+    regL->setWordWrap(true);
+    regL->setProperty("qtc", "hint");
+    regL->setToolTip(QCoreApplication::translate("charts", "Every backtest, yours here and the agents', is written in the trial registry and never removed. "
+                                                           "Trying many strategies on the same data and keeping the best is how luck looks like an edge: "
+                                                           "the deflated Sharpe accounts for every try."));
+    outLay_->addWidget(regL);
   }
   // The trades shown here, named after the market they were tested on (captured now, not read at click time).
   const QString csvName = ticker(R.symbol) + "-" + R.tf + "-trades.csv";

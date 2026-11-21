@@ -13,6 +13,7 @@
 #include <QLinearGradient>
 #include <QRadialGradient>
 #include <cmath>
+#include <algorithm>
 
 namespace mkit {
 // Deepwater values in Sem's initialisers, mapped to the current theme; rebuilt when the theme revision changes.
@@ -81,6 +82,7 @@ TitleStrip::TitleStrip(const QString& title, Glyph g, int height, QWidget* paren
   // opaque gradient over the whole strip: the page backdrop under it (grid + glow) needs no repaint on each dot frame
   setAttribute(Qt::WA_OpaquePaintEvent, theme::map("#181205").alpha() == 255 && theme::map("#0d0802").alpha() == 255);
   auto* h = new QHBoxLayout(this);
+  m_row = h;
   h->setContentsMargins(0, 0, 14, 0); h->setSpacing(8);
   m_after = new QHBoxLayout; m_after->setSpacing(8);
   m_right = new QHBoxLayout; m_right->setSpacing(8);
@@ -97,7 +99,22 @@ TitleStrip::TitleStrip(const QString& title, Glyph g, int height, QWidget* paren
 }
 int TitleStrip::titleRight() const {
   const QFont f = theme::mono(10, QFont::Normal, 2.5);
-  return int(50 + textWidth(f, m_title) + 4 + 9);
+  if (m_room == 0) return 32;   // no title: what follows starts right after the dot (the -18 gap below brings it to 50)
+  return int(50 + textWidth(f, shownTitle()) + 4 + 9);
+}
+QString TitleStrip::shownTitle() const {
+  if (m_room < 0) return m_title;
+  if (m_room == 0) return {};
+  return QFontMetricsF(theme::mono(10, QFont::Normal, 2.5)).elidedText(m_title, Qt::ElideRight, m_room);
+}
+void TitleStrip::setTitleRoom(int px) {
+  if (px == m_room) return;
+  m_room = px;
+  // the spacing before afterTitleLayout() follows the shown title
+  if (auto* sp = m_row->itemAt(0) ? m_row->itemAt(0)->spacerItem() : nullptr) sp->changeSize(titleRight() + 18, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+  m_row->invalidate();
+  m_static = QImage();
+  update();
 }
 void TitleStrip::showEvent(QShowEvent*) { m_tick.start(); }
 void TitleStrip::hideEvent(QHideEvent*) { m_tick.stop(); }
@@ -125,7 +142,7 @@ void TitleStrip::paintEvent(QPaintEvent*) {
   rg.setColorAt(0, theme::alpha(dot, int(110 * k))); rg.setColorAt(1, theme::alpha(dot, 0));
   p.setPen(Qt::NoPen); p.setBrush(rg); p.drawEllipse(QPointF(38, cy), 7, 7);
   p.setBrush(dot); p.drawEllipse(QPointF(38, cy), 4, 4);
-  if (m_cursorOn) p.fillRect(QRectF(titleRight() - 9, cy - 6.5, 8, 12), theme::pal().accent);
+  if (m_cursorOn && m_room != 0) p.fillRect(QRectF(titleRight() - 9, cy - 6.5, 8, 12), theme::pal().accent);
 }
 void TitleStrip::paintStatic(QPainter& p) {
   const int H = height(), cy = H / 2;
@@ -152,7 +169,7 @@ void TitleStrip::paintStatic(QPainter& p) {
   const QFont f = theme::mono(10, QFont::Normal, 2.5);
   p.setFont(f); p.setPen(sem().muted);
   const QFontMetricsF fm(f);
-  p.drawText(QPointF(50, cy + fm.capHeight() / 2), m_title);
+  p.drawText(QPointF(50, cy + fm.capHeight() / 2), shownTitle());
 }
 
 // ------------------------------------------------------------------ Badge
@@ -259,14 +276,44 @@ ChipGroup::ChipGroup(QWidget* parent) : QWidget(parent) {
   setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
   setFixedHeight(27);
 }
-void ChipGroup::setChips(const QList<Chip>& c) { m_chips = c; updateGeometry(); update(); }
+void ChipGroup::setChips(const QList<Chip>& c) { m_chips = c; fitWrap(); updateGeometry(); update(); }
 void ChipGroup::setCounts(const QList<int>& counts) {
   for (int i = 0; i < m_chips.size() && i < counts.size(); ++i) m_chips[i].count = counts[i];
-  updateGeometry(); update();
+  fitWrap(); updateGeometry(); update();
+}
+void ChipGroup::setWrap(int width, int rowH) {
+  if (width == m_wrapW && (width == 0 || rowH == m_rowH)) return;
+  m_wrapW = width; m_rowH = width > 0 ? rowH : 27;
+  if (width == 0) setFixedHeight(27);
+  fitWrap(); updateGeometry(); update();
+}
+void ChipGroup::fitWrap() {
+  if (m_wrapW <= 0) return;
+  const auto r = rects();
+  setFixedHeight(r.isEmpty() ? m_rowH : int(r.last().bottom()) + 2);
 }
 void ChipGroup::setCurrent(int i) { if (i == m_cur) return; m_cur = i; update(); }
 QList<QRectF> ChipGroup::rects() const {
   QList<QRectF> out; qreal x = 2;
+  if (m_wrapW > 0) {   // phones: rows filled left to right, each row's chips widened to the full width
+    QList<qreal> nw;
+    for (const auto& c : m_chips) {
+      qreal w = textWidth(chipFont(), c.label) - 1.9 + 18;
+      if (c.count >= 0) w += 5 + textWidth(countFont(), QString::number(c.count)) - 1.0;
+      nw << w;
+    }
+    const qreal avail = m_wrapW - 4;
+    qreal y = 2;
+    for (int i = 0; i < nw.size();) {
+      int j = i; qreal sum = 0;
+      while (j < nw.size() && (j == i || sum + 1 + nw[j] <= avail)) { sum += (j > i ? 1 : 0) + nw[j]; ++j; }
+      const qreal extra = std::max<qreal>(0, (avail - sum) / (j - i));
+      x = 2;
+      for (int k = i; k < j; ++k) { out << QRectF(x, y, nw[k] + extra, m_rowH - 4); x += nw[k] + extra + 1; }
+      y += m_rowH; i = j;
+    }
+    return out;
+  }
   for (const auto& c : m_chips) {
     qreal w = textWidth(chipFont(), c.label) - 1.9 + 18;
     if (c.count >= 0) w += 5 + textWidth(countFont(), QString::number(c.count)) - 1.0;
@@ -276,7 +323,11 @@ QList<QRectF> ChipGroup::rects() const {
   return out;
 }
 QRectF ChipGroup::chipRect(int i) const { const auto r = rects(); return i >= 0 && i < r.size() ? r[i] : QRectF(); }
-QSize ChipGroup::sizeHint() const { const auto r = rects(); return QSize(r.isEmpty() ? 10 : int(r.last().right() + 3), 27); }
+QSize ChipGroup::sizeHint() const {
+  const auto r = rects();
+  if (m_wrapW > 0) return QSize(m_wrapW, height());
+  return QSize(r.isEmpty() ? 10 : int(r.last().right() + 3), 27);
+}
 void ChipGroup::paintEvent(QPaintEvent*) {
   QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
   p.fillRect(rect(), sem().cell);
@@ -296,13 +347,19 @@ void ChipGroup::paintEvent(QPaintEvent*) {
     QFont lf = f; if (hov) lf.setWeight(QFont::Bold);
     p.setFont(lf);
     p.setPen(on ? readable(theme::map("#1a1400"), sem().goldFill) : hov ? sem().goldText : (c.color.isValid() ? c.color : sem().chipText));
-    p.drawText(QPointF(rs[i].left() + 9, by), c.label);
+    qreal tx = rs[i].left() + 9;
+    if (m_wrapW > 0) {   // widened chips (phones): label and count centred
+      qreal nat = textWidth(f, c.label) - 1.9 + 18;
+      if (c.count >= 0) nat += 5 + textWidth(fc, QString::number(c.count)) - 1.0;
+      tx += (rs[i].width() - nat) / 2;
+    }
+    p.drawText(QPointF(tx, by), c.label);
     if (c.count >= 0) {
       p.setFont(fc);
       QColor onCount = theme::map("#3a3000");   // Deepwater: dark amber count on the gold chip
       if (!theme::isDefault()) onCount = theme::alpha(readable(theme::map("#1a1400"), sem().goldFill), 170);
       p.setPen(on ? onCount : hov ? sem().goldText : sem().chipCount);
-      p.drawText(QPointF(rs[i].left() + 9 + textWidth(f, c.label) - 1.9 + 5, by), QString::number(c.count));
+      p.drawText(QPointF(tx + textWidth(f, c.label) - 1.9 + 5, by), QString::number(c.count));
     }
   }
 }

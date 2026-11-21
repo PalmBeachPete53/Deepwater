@@ -72,9 +72,13 @@ protected:
     qreal x = 16 + QFontMetricsF(tf).horizontalAdvance(d) + 12;
     p.setFont(theme::condensed(14, QFont::Medium)); p.setPen(theme::map(0x6c, 0x6e, 0x6c));
     const QString nm = fullName(m_s.name);
-    p.drawText(QPointF(x, height() / 2.0 + 5), nm);
-    x += QFontMetricsF(theme::condensed(14, QFont::Medium)).horizontalAdvance(nm) + 14;
     const QRectF b = pk::drawStatusBadge(p, -1000, height() / 2.0, pk::statusOf(m_s.longPct), 17);
+    const qreal nw = QFontMetricsF(theme::condensed(14, QFont::Medium)).horizontalAdvance(nm) + 14;
+    // narrow (phone) dialog: the full name goes when it would push the badge under the close button
+    if (x + nw + b.width() <= closeRect().left() - 6 || width() >= 640) {
+      p.drawText(QPointF(x, height() / 2.0 + 5), nm);
+      x += nw;
+    }
     pk::drawStatusBadge(p, x + b.width(), height() / 2.0, pk::statusOf(m_s.longPct), 17);
     const QRectF c = closeRect();
     p.setPen(QPen(m_hover ? theme::map(0xe8, 0xe3, 0xda) : theme::map(0x7d, 0x7c, 0x79), 1.3));
@@ -128,7 +132,11 @@ protected:
     p.setFont(theme::sans(13, QFont::Medium)); p.setPen(theme::map(0xc2, 0xc4, 0xcc));
     p.drawText(QRectF(52, 0, 400, 40), Qt::AlignVCenter | Qt::AlignLeft, QCoreApplication::translate("positioning", "Candles · 1h · Yahoo Finance (delayed)"));
     p.setPen(theme::map(0x5d, 0x60, 0x68)); p.setFont(theme::sans(11));
-    p.drawText(QRectF(0, 0, width() - 14, 40), Qt::AlignVCenter | Qt::AlignRight, QCoreApplication::translate("positioning", "Deepwater chart"));
+    // a phone-wide frame has no room for it beside the source: left out when the two would overlap
+    const qreal srcW = QFontMetricsF(theme::sans(13, QFont::Medium)).horizontalAdvance(QCoreApplication::translate("positioning", "Candles · 1h · Yahoo Finance (delayed)"));
+    const qreal ownW = QFontMetricsF(theme::sans(11)).horizontalAdvance(QCoreApplication::translate("positioning", "Deepwater chart"));
+    if (52 + srcW + 16 + ownW <= width() - 14)
+      p.drawText(QRectF(0, 0, width() - 14, 40), Qt::AlignVCenter | Qt::AlignRight, QCoreApplication::translate("positioning", "Deepwater chart"));
     p.setFont(theme::sans(13, QFont::DemiBold));
     for (int i = 0; i < ranges().size(); ++i) {
       const QRectF r = rangeRect(i);
@@ -159,9 +167,19 @@ public:
     if (h == m_chartH) return;
     m_chartH = h; relayout();
   }
+  // Phone (under 640 px): one column — chips on two rows, the chart at full width (kPhoneChartH), the distribution
+  // and statistics panels below it, then the four history panels one under the other.
+  static constexpr int kPhoneChartH = 400, kPhoneHist = 300;
+  bool phone() const { return width() < 640; }
+  int chartTop() const { return phone() ? 72 : kChartTop; }
   void relayout() {
-    m_hist1 = kChartTop + m_chartH + 12; m_hist2 = m_hist1 + 396; m_narr = m_hist2 + 396;
-    frame->setGeometry(12, kChartTop, width() - 12 - 407 - 12 - 11, m_chartH);
+    if (phone()) {
+      frame->setGeometry(12, chartTop(), width() - 24, kPhoneChartH);
+      m_hist1 = int(rightCol().bottom()) + 12; m_hist2 = m_hist1 + 2 * (kPhoneHist + 10); m_narr = m_hist2 + 2 * (kPhoneHist + 10);
+    } else {
+      m_hist1 = kChartTop + m_chartH + 12; m_hist2 = m_hist1 + 396; m_narr = m_hist2 + 396;
+      frame->setGeometry(12, kChartTop, width() - 12 - 407 - 12 - 11, m_chartH);
+    }
     const int need = m_narr + m_narrH + 9 + m_footH + 12;
     if (minimumHeight() != need) setMinimumHeight(need);
     update();
@@ -178,12 +196,15 @@ public:
 
   void startAnim() { m_prog = 0; anim->stop(); anim->start(); }
 protected:
-  QRectF rightCol() const { return QRectF(width() - 12 - 407, kRightTop, 407, m_chartH + 30); }
+  QRectF rightCol() const {
+    if (phone()) return QRectF(12, chartTop() + kPhoneChartH + 12, width() - 24, 288 + 13 + 402);   // distribution + stats
+    return QRectF(width() - 12 - 407, kRightTop, 407, m_chartH + 30);
+  }
   void resizeEvent(QResizeEvent*) override { relayout(); }
   bool event(QEvent* e) override {
     if (e->type() == QEvent::ToolTip) {
       auto* he = static_cast<QHelpEvent*>(e);
-      const QRectF st = rightCol().adjusted(0, 301 + (m_chartH - 673), 0, 0);
+      const QRectF st = rightCol().adjusted(0, 301 + (phone() ? 0 : m_chartH - 673), 0, 0);
       if (st.contains(he->pos()) && he->pos().y() > st.top() + 270)
         QToolTip::showText(he->globalPos(), QCoreApplication::translate("positioning", "Computed by Deepwater from Myfxbook's average entry prices and the live quote (Yahoo Finance) — not a broker figure."), this);
       else QToolTip::hideText();
@@ -196,7 +217,7 @@ protected:
     const int dec = decimalsFor(sym, s.avgLong);
     // chips
     {
-      qreal x = 12; const qreal cy = 22;
+      qreal x = 12; qreal cy = 22;
       const QFont f = theme::mono(12); const QFontMetricsF fm(f);
       auto chip = [&](const QString& t, const QColor& c, bool border) {
         const qreal w = fm.horizontalAdvance(t) + (border ? 14 : 4);
@@ -207,17 +228,18 @@ protected:
       const QString lastV = std::isfinite(last) ? fmt::num(last, dec, false) : fmt::dash();
       const QString lastS = lastFromCandle ? QCoreApplication::translate("positioning", "Last %1 (last 1h close)").arg(lastV) : QCoreApplication::translate("positioning", "Last %1").arg(lastV);
       QString a = QCoreApplication::translate("positioning", "Avg retail LONG entry %1").arg(fmt::num(s.avgLong, dec, false)), b = QCoreApplication::translate("positioning", "Avg retail SHORT entry %1").arg(fmt::num(s.avgShort, dec, false));
-      const qreal avail = width() - 12 - 407 - 23 - 12;
+      const qreal avail = phone() ? width() - 24 - 18 + fm.horizontalAdvance(lastS) : width() - 12 - 407 - 23 - 12;   // phone: "last" on a row of its own
       if (fm.horizontalAdvance(a + b + lastS) + 3 * 7 + 32 > avail) {   // small windows: "Avg LONG …" (full words in the stats panel)
         a = QCoreApplication::translate("positioning", "Avg LONG %1").arg(fmt::num(s.avgLong, dec, false)); b = QCoreApplication::translate("positioning", "Avg SHORT %1").arg(fmt::num(s.avgShort, dec, false));
       }
       chip(a, theme::map(kCy), true);
       chip(b, theme::map(kRd), true);
+      if (phone()) { x = 12; cy += 30; }
       chip(lastS, theme::map(0x76, 0x75, 0x72), false);
-      p.fillRect(QRectF(0, kChartTop - 2, width() - 12 - 407 - 11, 1), theme::map(0x23, 0x24, 0x20));
+      p.fillRect(QRectF(0, chartTop() - 2, phone() ? width() : width() - 12 - 407 - 11, 1), theme::map(0x23, 0x24, 0x20));
     }
     const QRectF rc = rightCol();
-    const qreal ex = m_chartH - 673;   // extra height of a taller chart goes to the distribution panel
+    const qreal ex = phone() ? 0 : m_chartH - 673;   // extra height of a taller chart goes to the distribution panel
     const qreal k = 1 + std::min(0.3, ex / 288.0 * 0.6);
     // distribution
     {
@@ -287,8 +309,13 @@ protected:
     if (ev->rect().bottom() < m_hist1) return;
     // history rows
     const qreal lw = (width() - 24 - 10) / 2.0;
-    const QRectF h1l(12, m_hist1, lw, 385), h1r(12 + lw + 10, m_hist1, width() - 24 - lw - 10, 385);
-    const QRectF h2l(12, m_hist2, lw, 384), h2r(h1r.left(), m_hist2, h1r.width(), 384);
+    QRectF h1l(12, m_hist1, lw, 385), h1r(12 + lw + 10, m_hist1, width() - 24 - lw - 10, 385);
+    QRectF h2l(12, m_hist2, lw, 384), h2r(h1r.left(), m_hist2, h1r.width(), 384);
+    if (phone()) {   // one under the other, full width
+      const qreal step = kPhoneHist + 10;
+      h1l = QRectF(12, m_hist1, width() - 24, kPhoneHist); h1r = h1l.translated(0, step);
+      h2l = h1l.translated(0, 2 * step); h2r = h1l.translated(0, 3 * step);
+    }
     for (const auto& r : {h1l, h1r, h2l, h2r}) { p.setPen(QPen(theme::map(0x23, 0x22, 0x17), 1)); p.setBrush(theme::map(0x14, 0x0f, 0x05)); p.drawRect(r.adjusted(.5, .5, -.5, -.5)); }
     smallTitle(p, h1l.left() + 10, h1l.top() + 16, QCoreApplication::translate("positioning", "LONG / SHORT HISTORY"));
     smallTitle(p, h2l.left() + 10, h2l.top() + 16, QCoreApplication::translate("positioning", "VOLUME"));

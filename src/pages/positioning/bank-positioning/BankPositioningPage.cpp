@@ -7,6 +7,7 @@
 #include "banks/Registry.h"
 #include "market/QuoteHub.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include "app/Pages.h"
 #include <QPainter>
 #include <QTimer>
@@ -30,6 +31,9 @@ namespace banks::pos {
 namespace {
 const banks::DwColor kBg{"#050402"}, kHeadBorder{"#4b482c"};
 constexpr int kHeaderH = 44;
+// Phone held upright (ui::compact): the header grows to three rows — title, FX BANK FORECASTS, DESK | ALL CALLS —
+// each button a full-width finger target; the "Markets" label and the badge follow on their own line.
+constexpr int kPhoneHeaderH = 128, kPhoneBodyTop = 166;
 
 double spotOf(const QString& sym) {
   const auto q = ::market::QuoteHub::instance().quote(sym);
@@ -74,7 +78,7 @@ BankPositioningPage::BankPositioningPage(QWidget* parent) : QWidget(parent) {
 
   auto& f = banks::Forecasts::instance();
   connect(&f, &banks::Forecasts::updated, this, [this] { recompute(); m_overlay->refresh(); });
-  connect(&banks::Research::instance(), &banks::Research::updated, this, [this] { update(QRect(width() - 420, 0, 420, kHeaderH)); });
+  connect(&banks::Research::instance(), &banks::Research::updated, this, [this] { update(width() < 1024 ? rect() : QRect(width() - 420, 0, 420, kHeaderH)); });   // narrow: the badge sits lower
   // quotes arrive in bursts (one reply per 20 symbols): recompute at most every 300 ms
   m_throttle.setSingleShot(true); m_throttle.setInterval(300);
   connect(&m_throttle, &QTimer::timeout, this, [this] { recompute(); m_overlay->refresh(); });
@@ -89,7 +93,12 @@ BankPositioningPage::BankPositioningPage(QWidget* parent) : QWidget(parent) {
   if (ok && hov >= 0 && hov < m_cards.size()) m_cards[hov]->setForcedHover(true);
   if (qEnvironmentVariable("DW_BANKPOS_BTNHOVER") == "1") m_hoverBtn = 0;
   if (qEnvironmentVariable("DW_BANKPOS_VIEW") == "1") setView(1);
+  if (const int sc = qEnvironmentVariableIntValue("DW_BANKPOS_SCROLL"); sc > 0)
+    QTimer::singleShot(2500, this, [this, sc] { (m_view == 0 ? m_deskScroll : m_callsScroll)->verticalScrollBar()->setValue(sc); });
 }
+
+bool BankPositioningPage::phone() const { return ui::compact(width()); }
+int BankPositioningPage::headerH() const { return phone() ? kPhoneHeaderH : kHeaderH; }
 
 // Title, then the buttons right after it (x = 505 / 701 at the reference size); narrow windows use the short title.
 QString BankPositioningPage::titleText() const {
@@ -97,15 +106,18 @@ QString BankPositioningPage::titleText() const {
 }
 // Button widths follow their labels (175 / 68 / 110 px in English, as in the reference; wider in French).
 QRectF BankPositioningPage::forecastBtn() const {
+  if (phone()) return QRectF(10, 44, width() - 20, 34);
   const qreal x = 50 + QFontMetricsF(theme::mono(11, QFont::Normal, 1.7)).horizontalAdvance(titleText()) + 38;
   const qreal w = QFontMetricsF(theme::mono(12, QFont::Bold, 1.1)).horizontalAdvance(QCoreApplication::translate("banks", "FX BANK FORECASTS")) + 35;
   return QRectF(qRound(x), 10, qMax<qreal>(175, std::ceil(w)), 24);
 }
 QRectF BankPositioningPage::deskBtn() const {
+  if (phone()) return QRectF(10, 86, std::floor((width() - 20) / 2.0), 34);
   const qreal w = QFontMetricsF(theme::mono(12, QFont::Bold, 1.1)).horizontalAdvance(QCoreApplication::translate("banks", "DESK")) + 32;
   return QRectF(forecastBtn().right() + 21, 10, qMax<qreal>(68, std::ceil(w)), 24);
 }
 QRectF BankPositioningPage::callsBtn() const {
+  if (phone()) { const QRectF d = deskBtn(); return QRectF(d.right(), d.top(), width() - 10 - d.right(), d.height()); }
   const qreal w = QFontMetricsF(theme::mono(12, QFont::Bold, 1.1)).horizontalAdvance(QCoreApplication::translate("banks", "ALL CALLS")) + 34;
   return QRectF(deskBtn().right(), 10, qMax<qreal>(110, std::ceil(w)), 24);
 }
@@ -113,7 +125,7 @@ QRectF BankPositioningPage::callsBtn() const {
 bool BankPositioningPage::event(QEvent* e) {
   if (e->type() == QEvent::ToolTip && titleText().size() < 20) {
     auto* he = static_cast<QHelpEvent*>(e);
-    if (QRectF(0, 0, forecastBtn().left(), kHeaderH).contains(he->pos())) {
+    if (QRectF(0, 0, phone() ? width() : forecastBtn().left(), kHeaderH).contains(he->pos())) {
       QToolTip::showText(he->globalPos(), QCoreApplication::translate("banks", "Bank positioning — research desk calls & forecasts"), this);
       return true;
     }
@@ -135,8 +147,9 @@ bool BankPositioningPage::eventFilter(QObject* o, QEvent* e) {
 }
 
 void BankPositioningPage::resizeEvent(QResizeEvent*) {
-  m_deskScroll->setGeometry(0, 83, width(), height() - 83);
-  m_callsScroll->setGeometry(10, 86, width() - 20, height() - 96);
+  const int top = phone() ? kPhoneBodyTop : 83;
+  m_deskScroll->setGeometry(0, top, width(), height() - top);
+  m_callsScroll->setGeometry(10, top + 3, width() - 20, height() - top - 13);
   m_overlay->setGeometry(rect());
   m_texture = {};
   layoutDesk();
@@ -146,7 +159,7 @@ void BankPositioningPage::resizeEvent(QResizeEvent*) {
 // Under them the "how to read / banks" notes (≤ 1000 px wide) and, from 1900 px, the full list of calls.
 void BankPositioningPage::layoutDesk() {
   const int W = width();
-  const int cols = W >= 2400 ? 6 : W >= 1280 ? 3 : 2;
+  const int cols = W >= 2400 ? 6 : W >= 1280 ? 3 : phone() ? 1 : 2;   // phone: one card per row, full width
   const int rows = (int(m_cards.size()) + cols - 1) / cols;
   const qreal cw = (W - 20 - 11.0 * (cols - 1)) / cols;
   for (int i = 0; i < m_cards.size(); ++i) {
@@ -157,6 +170,13 @@ void BankPositioningPage::layoutDesk() {
   m_notesTop = 3 + rows * 203 - 13 + 25;
   m_notesWidth = qMin(W - 24, 1000);
   qreal y = m_notesTop + 160;
+  if (W < 1024) {
+    // narrow windows: the two texts wrap on more lines than the fixed boxes hold; they are measured and stacked
+    const QFontMetricsF fm(theme::mono(10, QFont::Normal, 0.4));
+    m_howH = std::ceil(fm.boundingRect(QRectF(0, 0, m_notesWidth, 1e5), Qt::TextWordWrap, howText()).height());
+    m_banksH = std::ceil(fm.boundingRect(QRectF(0, 0, m_notesWidth, 1e5), Qt::TextWordWrap, banksText()).height());
+    y = m_notesTop + 8 + m_howH + 24 + m_banksH;
+  } else m_howH = m_banksH = 0;
   const bool wide = W >= 1900;
   m_deskCalls->setVisible(wide && m_view == 0);
   if (wide) {
@@ -184,6 +204,7 @@ void BankPositioningPage::recompute() {
     if (m_view == 1) m_calls->setCalls(g);
     if (width() >= 1900) { m_deskCalls->setCalls(g); layoutDesk(); }
   }
+  if (width() < 1024) layoutDesk();   // the notes' measured heights follow their text (an error may be appended)
   m_desk->update();
 }
 
@@ -234,9 +255,10 @@ void BankPositioningPage::paintEvent(QPaintEvent*) {
   p.setRenderHint(QPainter::Antialiasing); p.setRenderHint(QPainter::TextAntialiasing);
 
   // header bar
-  QLinearGradient hg(0, 0, 0, kHeaderH); hg.setColorAt(0, theme::map("#181004")); hg.setColorAt(1, theme::map("#100800"));
-  p.fillRect(QRect(0, 0, width(), kHeaderH), hg);
-  p.fillRect(QRect(0, kHeaderH - 1, width(), 1), kHeadBorder);
+  const int hh = headerH();
+  QLinearGradient hg(0, 0, 0, hh); hg.setColorAt(0, theme::map("#181004")); hg.setColorAt(1, theme::map("#100800"));
+  p.fillRect(QRect(0, 0, width(), hh), hg);
+  p.fillRect(QRect(0, hh - 1, width(), 1), kHeadBorder);
   {
     // bank building icon
     QPen ip(theme::map("#dfd28a"), 1.2); p.setPen(ip); p.setBrush(Qt::NoBrush);
@@ -293,11 +315,15 @@ void BankPositioningPage::paintEvent(QPaintEvent*) {
                            : QCoreApplication::translate("banks", "UPDATED WITH EVERY NEW BANK TABLE"));
     QFont bf = theme::mono(9, QFont::Bold, 0.8); bf.setPixelSize(10);
     QString t2 = t;
-    if (width() - 14 - QFontMetricsF(bf).horizontalAdvance(t) - 16 < callsBtn().right() + 16)   // narrow window
+    // below 1024 px the badge leaves the header (it covered ALL CALLS) for the "Markets" line, right-aligned
+    const bool low = width() < 1024;
+    const qreal leftLimit = low ? 10 + QFontMetricsF(theme::mono(12, QFont::Medium, 2.0)).horizontalAdvance(QCoreApplication::translate("banks", "All calls"))
+                                : callsBtn().right();
+    if (width() - 14 - QFontMetricsF(bf).horizontalAdvance(t) - 16 < leftLimit + 16)   // narrow window
       t2 = QCoreApplication::translate("banks", "• %1 NOTES · %2").arg(banks::Research::instance().librarySize())
                .arg(rev.isValid() ? QCoreApplication::translate("banks", "REVISED %1").arg(i18n::locale().toString(rev, "d MMM").toUpper()) : QString());
     const qreal w = QFontMetricsF(bf).horizontalAdvance(t2) + 16;
-    const QRectF b(width() - 14 - w, 13, w, 20);
+    const QRectF b(width() - 14 - w, low ? (phone() ? 138 : 55) : 13, w, 20);
     p.setPen(QPen(theme::map("#7a6a1a"), 1)); p.setBrush(theme::map("#3f3500"));
     p.drawRoundedRect(b.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
     p.setFont(bf); p.setPen(theme::map("#fae8a1"));
@@ -305,39 +331,46 @@ void BankPositioningPage::paintEvent(QPaintEvent*) {
   }
   // Markets label
   p.setFont(theme::mono(12, QFont::Medium, 2.0)); p.setPen(theme::map("#e2d59c"));
-  p.drawText(QPointF(10, 70), m_view == 0 ? QCoreApplication::translate("banks", "Markets") : QCoreApplication::translate("banks", "All calls"));
+  p.drawText(QPointF(10, phone() ? 154 : 70), m_view == 0 ? QCoreApplication::translate("banks", "Markets") : QCoreApplication::translate("banks", "All calls"));
 
+}
+
+QString BankPositioningPage::howText() const {
+  return QCoreApplication::translate("banks",
+      "A call is computed by Deepwater, not taken from a bank: each bank's published forecast for the next quarter end "
+      "is compared with today's price. LONG = forecast above spot by more than the class threshold (G10 FX 1%, Asia & EM FX 1.5%, "
+      "commodities and indices 3%, crypto 5%), SHORT = below, RANGE = within. Rates: forecast yield 0.15 pt below today's = LONG bonds.");
+}
+QString BankPositioningPage::banksText() const {
+  auto& f = banks::Forecasts::instance();
+  QStringList inc;
+  for (const auto& id : f.banksIncluded()) if (const banks::Bank* b = banks::bank(id)) inc << b->researchName;
+  return QCoreApplication::translate("banks",
+      "Read: %1 (forecast tables: FX, commodities, US Treasuries; reuse allowed with attribution, © ING Bank N.V.). "
+      "Not read: TD Economics, MUFG Research, KBC Economics (terms forbid automated access, quoting or deep links), "
+      "Scotiabank, Commerzbank (forecast tables public but no reproduction allowed). %2 other banks checked: their terms allow "
+      "links only — see News › Bank Research › DATA.%3")
+      .arg(inc.isEmpty() ? QString("ING THINK") : inc.join(", "))
+      .arg(banks::researchBanks(banks::Use::LinkOnly).size() + banks::researchBanks(banks::Use::Excluded).size() - 5)
+      .arg(f.error().isEmpty() ? QString() : "  ⚠ " + f.error());
 }
 
 void BankPositioningPage::paintNotes(QPainter& p) {
   p.setRenderHint(QPainter::Antialiasing); p.setRenderHint(QPainter::TextAntialiasing);
     // under the cards: how calls are computed, which banks are read and which are not
-    auto& f = banks::Forecasts::instance();
     const qreal y0 = m_notesTop;
     const qreal tw = m_notesWidth;
     {
       p.setFont(theme::mono(9, QFont::Bold, 2.0)); p.setPen(theme::map("#8a7e4a"));
       p.drawText(QPointF(12, y0), QCoreApplication::translate("banks", "HOW TO READ"));
       p.setFont(theme::mono(10, QFont::Normal, 0.4)); p.setPen(theme::map("#6b675e"));
-      QString how = QCoreApplication::translate("banks",
-          "A call is computed by Deepwater, not taken from a bank: each bank's published forecast for the next quarter end "
-          "is compared with today's price. LONG = forecast above spot by more than the class threshold (G10 FX 1%, Asia & EM FX 1.5%, "
-          "commodities and indices 3%, crypto 5%), SHORT = below, RANGE = within. Rates: forecast yield 0.15 pt below today's = LONG bonds.");
-      p.drawText(QRectF(12, y0 + 8, tw, 60), Qt::TextWordWrap, how);
+      // narrow windows (m_howH set by layoutDesk): boxes as tall as the wrapped texts, stacked
+      const qreal howH = m_howH > 0 ? m_howH : 60, banksY = m_howH > 0 ? y0 + 8 + m_howH + 24 : y0 + 84;
+      p.drawText(QRectF(12, y0 + 8, tw, howH), Qt::TextWordWrap, howText());
       p.setFont(theme::mono(9, QFont::Bold, 2.0)); p.setPen(theme::map("#8a7e4a"));
-      p.drawText(QPointF(12, y0 + 76), QCoreApplication::translate("banks", "BANKS"));
-      QStringList inc;
-      for (const auto& id : f.banksIncluded()) if (const banks::Bank* b = banks::bank(id)) inc << b->researchName;
+      p.drawText(QPointF(12, banksY - 8), QCoreApplication::translate("banks", "BANKS"));
       p.setFont(theme::mono(10, QFont::Normal, 0.4)); p.setPen(theme::map("#6b675e"));
-      const QString banksTxt = QCoreApplication::translate("banks",
-          "Read: %1 (forecast tables: FX, commodities, US Treasuries; reuse allowed with attribution, © ING Bank N.V.). "
-          "Not read: TD Economics, MUFG Research, KBC Economics (terms forbid automated access, quoting or deep links), "
-          "Scotiabank, Commerzbank (forecast tables public but no reproduction allowed). %2 other banks checked: their terms allow "
-          "links only — see News › Bank Research › DATA.%3")
-          .arg(inc.isEmpty() ? QString("ING THINK") : inc.join(", "))
-          .arg(banks::researchBanks(banks::Use::LinkOnly).size() + banks::researchBanks(banks::Use::Excluded).size() - 5)
-          .arg(f.error().isEmpty() ? QString() : "  ⚠ " + f.error());
-      p.drawText(QRectF(12, y0 + 84, tw, 76), Qt::TextWordWrap, banksTxt);
+      p.drawText(QRectF(12, banksY, tw, m_banksH > 0 ? m_banksH : 76), Qt::TextWordWrap, banksText());
     }
   if (m_deskCalls->isVisible()) {
     p.setFont(theme::mono(12, QFont::Medium, 2.0)); p.setPen(theme::map("#e2d59c"));
@@ -350,12 +383,12 @@ void BankPositioningPage::mouseMoveEvent(QMouseEvent* e) {
   if (forecastBtn().contains(e->position())) h = 0;
   else if (deskBtn().contains(e->position())) h = 1;
   else if (callsBtn().contains(e->position())) h = 2;
-  if (h != m_hoverBtn) { m_hoverBtn = h; setCursor(h >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor); update(QRect(0, 0, width(), kHeaderH)); }
+  if (h != m_hoverBtn) { m_hoverBtn = h; setCursor(h >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor); update(QRect(0, 0, width(), headerH())); }
 }
 void BankPositioningPage::mousePressEvent(QMouseEvent* e) {
   if (forecastBtn().contains(e->position())) openOverlay();
   else if (deskBtn().contains(e->position())) setView(0);
   else if (callsBtn().contains(e->position())) setView(1);
 }
-void BankPositioningPage::leaveEvent(QEvent*) { if (m_hoverBtn >= 0) { m_hoverBtn = -1; update(QRect(0, 0, width(), kHeaderH)); } }
+void BankPositioningPage::leaveEvent(QEvent*) { if (m_hoverBtn >= 0) { m_hoverBtn = -1; update(QRect(0, 0, width(), headerH())); } }
 }  // namespace banks::pos

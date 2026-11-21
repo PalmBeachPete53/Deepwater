@@ -12,6 +12,7 @@
 #include "ui/Format.h"
 #include "ui/Kit.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -214,6 +215,16 @@ void LiquidityPage::updateKpis() {
 void LiquidityPage::relayout() {
   const int W = m_scroll->viewport()->width();
   const int inner = W - 28;
+  // phones: the stop-run card on its own row (its sub-line needs the width), the two counts side by side under it
+  const bool phone = ui::compact(width());
+  int top = 109;
+  if (phone) {
+    m_kpi[0]->setGeometry(14, 14, inner, 85);
+    const int half = (inner - 7) / 2;
+    m_kpi[1]->setGeometry(14, 106, half, 85);
+    m_kpi[2]->setGeometry(14 + half + 7, 106, inner - half - 7, 85);
+    top = 201;
+  } else
   for (int i = 0; i < 3; ++i) {
     const int x0 = 14 + i * (inner + 7) / 3, x1 = i == 2 ? 14 + inner : 14 + (i + 1) * (inner + 7) / 3 - 7;
     m_kpi[i]->setGeometry(x0, 14, x1 - x0, 85);
@@ -223,8 +234,8 @@ void LiquidityPage::relayout() {
   const int vh = m_scroll->viewport()->height();
   const int ch = m_chart->userSized() ? m_chart->preferredHeight()
                                       : std::clamp(vh - 372, 280, std::max(521, int(vh * 0.6)));
-  m_chart->setGeometry(14, 109, inner, ch);
-  const int py = 109 + ch + 11;
+  m_chart->setGeometry(14, top, inner, ch);
+  const int py = top + ch + 11;
   m_panel->setGeometry(14, py, inner, std::max(1, m_panel->height()));   // width first: the column count depends on it
   m_panel->resize(inner, m_panel->contentHeight());
   auto* c = static_cast<Content*>(m_content);
@@ -264,6 +275,8 @@ bool LiquidityPage::eventFilter(QObject* o, QEvent* e) {
 }
 
 void LiquidityPage::resizeEvent(QResizeEvent*) {
+  // phones: no room for the title beside the instrument button and the price (the app header names the page)
+  m_title->setTitleRoom(ui::compact(width()) ? 0 : -1);
   m_title->setGeometry(0, 0, width(), kTitleH);
   m_scroll->setGeometry(0, kTitleH + 1, width(), height() - kTitleH - 1 - kFooterH);
   relayout();

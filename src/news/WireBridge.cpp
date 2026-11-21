@@ -6,6 +6,7 @@
 // Started by Q_COREAPP_STARTUP_FUNCTION: no shared file to edit. Test hook: DW_NEWS_SELFTEST=1 runs the headline
 // parser on its real samples, prints the result to stderr and quits (exit code = failures).
 #include "news/Calendar.h"
+#include "core/Startup.h"
 #include "news/DataHeadline.h"
 #include "news/Translate.h"
 #include "wire/ReleaseSource.h"
@@ -108,4 +109,4 @@ void start() {
 
 // the macro needs an unqualified function name at global scope (internal linkage: no clash with other packages)
 static void dw_news_startup() { news::start(); }
-Q_COREAPP_STARTUP_FUNCTION(dw_news_startup)
+DW_STARTUP_FUNCTION(dw_news_startup)

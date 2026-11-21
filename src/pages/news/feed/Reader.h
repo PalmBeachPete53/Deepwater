@@ -103,6 +103,7 @@ private:
   QList<Chip> chips() const;
   QRectF backRect() const;
   double queueX() const;
+  int phonePanelH() const;                 // phones: height of the automated read under the article
   FeedState* m_st;
   news::Story m_s;
   QScrollArea* m_scroll;

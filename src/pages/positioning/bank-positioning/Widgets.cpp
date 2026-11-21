@@ -156,26 +156,39 @@ void MarketCard::paintEvent(QPaintEvent*) {
 }
 
 // ============================================================================================ CallsTable
-namespace { constexpr int kHead = 30, kGroup = 30, kRow = 30; }
+namespace { constexpr int kHeadW = 30, kGroup = 30, kRowW = 30, kHeadP = 42, kRowP = 46; }
+
+// Phone width (< 520 px): each call on two lines (market · call · to target / bank · horizon · forecast · spot),
+// the header on two lines too; the table-revised date is left out (the FX BANK FORECASTS overlay shows it).
+bool CallsTable::phone() const { return width() > 0 && width() < 520; }
+int CallsTable::headH() const { return phone() ? kHeadP : kHeadW; }
+int CallsTable::rowH() const { return phone() ? kRowP : kRowW; }
 
 CallsTable::CallsTable(QWidget* parent) : QWidget(parent) {}
 QSize CallsTable::sizeHint() const { return QSize(800, m_height); }
 void CallsTable::setCalls(const QList<QPair<banks::AssetClass, QList<banks::Call>>>& g) {
   m_groups = g;
-  int h = kHead;
-  for (const auto& x : g) h += kGroup + std::max<int>(1, int(x.second.size())) * kRow;
-  m_height = h + 20;
-  setMinimumHeight(m_height);
+  relayout();
   update();
 }
+void CallsTable::relayout() {
+  int h = headH();
+  for (const auto& x : m_groups) h += kGroup + std::max<int>(1, int(x.second.size())) * rowH();
+  m_height = h + 20;
+  setMinimumHeight(m_height);
+}
+void CallsTable::resizeEvent(QResizeEvent*) { if (!m_groups.isEmpty()) relayout(); }   // the row pitch follows the width
 int CallsTable::groupTop(banks::AssetClass c) const {
-  int y = kHead;
+  const int kRow = rowH();
+  int y = headH();
   for (const auto& x : m_groups) { if (x.first == c) return y; y += kGroup + std::max<int>(1, int(x.second.size())) * kRow; }
   return 0;
 }
 void CallsTable::paintEvent(QPaintEvent* e) {
   QPainter p(this);
   p.setRenderHint(QPainter::Antialiasing); p.setRenderHint(QPainter::TextAntialiasing);
+  if (phone()) { paintPhone(p, e->rect()); return; }
+  constexpr int kHead = kHeadW, kRow = kRowW;
   const qreal W = width();
   // columns (x of left edge, or right edge for numbers)
   const qreal cMarket = 14, cBank = W * 0.20, cCall = W * 0.38, cHor = W * 0.48, rFc = W * 0.64, rSpot = W * 0.76, rMove = W * 0.86, rRev = W - 14;
@@ -229,6 +242,65 @@ void CallsTable::paintEvent(QPaintEvent* e) {
       p.setPen(theme::map("#8c8881"));
       p.drawText(QRectF(rRev - 140, y, 140, kRow), Qt::AlignVCenter | Qt::AlignRight, c.revised.isValid() ? i18n::locale().toString(c.revised, "MMM dd").toUpper() : QString::fromUtf8("—"));
       y += kRow;
+    }
+  }
+}
+void CallsTable::paintPhone(QPainter& p, const QRect& clip) {
+  const qreal W = width();
+  const qreal cMarket = 14, cCall = W * 0.36, rFc = W * 0.74, rEnd = W - 14;
+  const QFont hf = theme::mono(9, QFont::Bold, 1.6);
+  p.setFont(hf); p.setPen(theme::map("#eadb9f"));
+  auto head = [&](qreal x, qreal y, const QString& s, bool right) {
+    p.drawText(right ? QRectF(x - 160, y, 160, 18) : QRectF(x, y, 160, 18), Qt::AlignVCenter | (right ? Qt::AlignRight : Qt::AlignLeft), s);
+  };
+  head(cMarket, 3, QCoreApplication::translate("banks", "MARKET"), false); head(cCall, 3, QCoreApplication::translate("banks", "CALL"), false);
+  head(rEnd, 3, QCoreApplication::translate("banks", "TO TARGET"), true);
+  p.setPen(theme::map("#8a7e4a"));
+  head(cMarket, 21, QCoreApplication::translate("banks", "BANK"), false); head(cCall, 21, QCoreApplication::translate("banks", "HORIZON"), false);
+  head(rFc, 21, QCoreApplication::translate("banks", "FORECAST"), true); head(rEnd, 21, QCoreApplication::translate("banks", "SPOT"), true);
+  p.fillRect(QRectF(0, kHeadP - 1, W, 1), theme::map("#2b261a"));
+  const QLocale en(QLocale::English);
+  int y = kHeadP;
+  for (const auto& [cls, calls] : m_groups) {
+    p.fillRect(QRectF(0, y, W, kGroup), theme::map("#140f03"));
+    p.setFont(theme::mono(10, QFont::Bold, 1.6)); p.setPen(theme::map("#e2d59c"));
+    p.drawText(QRectF(cMarket, y, W - 28, kGroup), Qt::AlignVCenter, QString::fromUtf8("%1 · %2").arg(banks::className(cls)).arg(calls.size()));
+    y += kGroup;
+    if (calls.isEmpty()) {
+      p.setFont(theme::mono(10, QFont::Normal, 1)); p.setPen(theme::map("#5e5b53"));
+      p.drawText(QRectF(cMarket, y, W - 28, kRowP), Qt::AlignVCenter | Qt::TextWordWrap,
+                 QCoreApplication::translate("banks", "— No forecast from the banks Deepwater may read for these markets"));
+      y += kRowP; continue;
+    }
+    for (const auto& c : calls) {
+      if (y > clip.bottom() + kRowP || y + kRowP < clip.top()) { y += kRowP; continue; }
+      const banks::Market* m = banks::market(c.marketId);
+      const banks::Bank* b = banks::bank(c.bankId);
+      const int dec = m ? m->decimals : 4;
+      const QRectF l1(0, y + 3, W, 22), l2(0, y + 23, W, 20);
+      p.fillRect(QRectF(0, y + kRowP - 1, W, 1), theme::map("#1e1a0f"));
+      p.setFont(theme::mono(12, QFont::Bold)); p.setPen(theme::map("#fffefb"));
+      p.drawText(QRectF(cMarket, l1.top(), cCall - cMarket - 6, l1.height()), Qt::AlignVCenter, m ? m->name() : c.marketId);
+      p.setFont(theme::sans(11)); p.setPen(theme::map("#a09d94"));
+      p.drawText(QRectF(cMarket, l2.top(), cCall - cMarket - 6, l2.height()), Qt::AlignVCenter,
+                 QFontMetricsF(p.font()).elidedText(b ? b->researchName : c.bankId, Qt::ElideRight, cCall - cMarket - 6));
+      const QColor bc = c.bias == banks::Bias::Long ? theme::map("#7ec5d0") : c.bias == banks::Bias::Short ? theme::map("#e08a85") : banks::seriesColour("#e9d27a", true);
+      const QColor bb = c.bias == banks::Bias::Long ? theme::map("#062c2f") : c.bias == banks::Bias::Short ? theme::map("#3e1a10") : (theme::isDefault() ? QColor("#2e2804") : theme::alpha(banks::seriesColour("#e9d27a"), 40));
+      const QRectF chip(cCall, l1.center().y() - 8, 58, 16);
+      p.setPen(QPen(theme::alpha(bc, 110), 1)); p.setBrush(bb); p.drawRoundedRect(chip, 2, 2);
+      p.setFont(theme::mono(9, QFont::Bold, 1)); p.setPen(bc);
+      p.drawText(chip, Qt::AlignCenter, banks::biasName(c.bias));
+      p.setFont(theme::mono(11)); p.setPen(theme::map("#8c8881"));
+      p.drawText(QRectF(cCall, l2.top(), rFc - cCall - 70, l2.height()), Qt::AlignVCenter, c.horizon.label());
+      p.setFont(theme::mono(12, QFont::Bold)); p.setPen(theme::signColor(c.change));
+      const QString mv = cls == banks::AssetClass::Rates ? QString("%1%2 pt").arg(c.change >= 0 ? "+" : "").arg(c.change, 0, 'f', 2)
+                                                         : QString("%1%2%").arg(c.change >= 0 ? "+" : "").arg(c.change, 0, 'f', 2);
+      p.drawText(QRectF(rEnd - 140, l1.top(), 140, l1.height()), Qt::AlignVCenter | Qt::AlignRight, mv);
+      p.setFont(theme::mono(11)); p.setPen(theme::map("#fffdfa"));
+      p.drawText(QRectF(rFc - 140, l2.top(), 140, l2.height()), Qt::AlignVCenter | Qt::AlignRight, en.toString(c.forecast, 'f', dec));
+      p.setPen(theme::map("#a09d94"));
+      p.drawText(QRectF(rEnd - 140, l2.top(), 140, l2.height()), Qt::AlignVCenter | Qt::AlignRight, en.toString(c.spot, 'f', dec));
+      y += kRowP;
     }
   }
 }

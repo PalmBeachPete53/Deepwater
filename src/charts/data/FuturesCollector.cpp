@@ -3,6 +3,7 @@
 // Not in test profiles (DW_PROFILE) unless DW_FUTURES_COLLECT=1; not when Binance futures is switched off in Sources.
 // It costs one request per series every 5 minutes (weight 0) and one quiet WebSocket.
 #include "charts/data/FuturesStats.h"
+#include "core/Startup.h"
 #include "core/Settings.h"
 #include "net/Sources.h"
 #include <QCoreApplication>
@@ -23,4 +24,4 @@ void startFuturesCollector() {
   });
 }
 }  // namespace
-Q_COREAPP_STARTUP_FUNCTION(startFuturesCollector)
+DW_STARTUP_FUNCTION(startFuturesCollector)

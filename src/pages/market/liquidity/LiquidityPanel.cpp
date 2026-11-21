@@ -160,6 +160,9 @@ void LiquidityPanel::paintPools(QPainter& p, double y0, double W, int from, int 
     entries << i;
   }
   if (!lastDone) entries << -1;
+  // narrow panels (phones): price, dots and status closer to the side tag, the distance keeps the right edge
+  const bool narrow = W < 520;
+  const double priceX = narrow ? 56 : 88, dotX = narrow ? 168 : 236, statusMin = narrow ? 0 : 330;
   double y = y0 + 3;
   for (int e = from; e < to && e < entries.size(); ++e) {
     if (entries[e] < 0) {
@@ -182,18 +185,18 @@ void LiquidityPanel::paintPools(QPainter& p, double y0, double W, int from, int 
     p.setFont(side); p.setPen(bsl ? theme::map("#e2a9a7") : theme::map("#9fced6"));
     p.drawText(QPointF(20, cy + 3.5), bsl ? "BSL" : "SSL");
     p.setFont(price); p.setPen(live ? theme::map("#fffffa") : theme::map("#8b8880"));
-    p.drawText(QPointF(88, cy + 5), fmt::num(pl.level, m_dec));
+    p.drawText(QPointF(priceX, cy + 5), fmt::num(pl.level, m_dec));
     const int dots = std::min(5, pl.touches);
     const QColor dc = bsl ? theme::map("#e7757d") : theme::map("#3fcfe0");
     for (int k = 0; k < dots; ++k) {
       p.setPen(Qt::NoPen); p.setBrush(theme::alpha(dc, 90 + k * 40));
-      p.drawEllipse(QPointF(236 + k * 8, cy), 2.2, 2.2);
+      p.drawEllipse(QPointF(dotX + k * 8, cy), 2.2, 2.2);
     }
-    double x = 233 + dots * 8;
+    double x = dotX - 3 + dots * 8;
     if (pl.touches > 5) { p.setFont(small); p.setPen(theme::map("#5c5951")); p.drawText(QPointF(x + 1, cy + 3.5), "+" + QString::number(pl.touches - 5)); x += mkit::textWidth(small, "+" + QString::number(pl.touches - 5)) + 4; }
     p.setFont(status); p.setPen(theme::map("#4f4c44"));
     const QString st = pl.state == PoolState::Swept ? QCoreApplication::translate("technical", "SWEPT") : pl.state == PoolState::Broken ? QCoreApplication::translate("technical", "BROKEN") : QString();
-    if (!st.isEmpty()) p.drawText(QPointF(std::max(x + 8, 330.0), cy + 3), st);
+    if (!st.isEmpty()) p.drawText(QPointF(std::max(x + 8, statusMin), cy + 3), st);
     p.setFont(pct); p.setPen(theme::map("#928e88"));
     const QString d = std::isfinite(last) && last > 0 ? fmt::pct((pl.level - last) / last * 100.0, 2) : fmt::dash();
     p.drawText(QRectF(W - 214, y, 200, kPitch), Qt::AlignRight | Qt::AlignVCenter, d);

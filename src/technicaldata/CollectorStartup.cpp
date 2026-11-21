@@ -1,6 +1,9 @@
 // Starts the market collector with the app (kept out of the tests, which link Collector.cpp: no test may reach Binance).
 #include "technicaldata/Dukascopy.h"
+#include "core/Startup.h"
 #include "technicaldata/ForexCollector.h"
+#include "technicaldata/ArchiveCollector.h"
+#include "technicaldata/LiveBook.h"
 #include "core/Settings.h"
 #include "technicaldata/Collector.h"
 #include "technicaldata/TechnicalDataIndicators.h"
@@ -20,6 +23,8 @@ static void startMarketCollector() {
     if (!g_started) return;
     technicaldata::Collector::instance().stop();
     technicaldata::ForexCollector::instance().stop();
+    technicaldata::ArchiveCollector::instance().stop();
+    technicaldata::LiveBook::instance().stop();
     technicaldata::Indicators::instance().shutdown();
     technicaldata::Store::instance().wait();
   });
@@ -31,12 +36,18 @@ static void startMarketCollector() {
       for (const QString& m : only) (technicaldata::dukascopy::isForex(m) ? fx : crypto) << m;
       technicaldata::Collector::instance().setMarkets(crypto.isEmpty() ? QStringList{"NONE:NONE"} : crypto);
       technicaldata::ForexCollector::instance().setMarkets(fx.isEmpty() ? QStringList{"NONE:NONE"} : fx);
+      technicaldata::ArchiveCollector::instance().setMarkets(crypto.isEmpty() ? QStringList{"NONE:NONE"} : crypto);
+      technicaldata::LiveBook::instance().setMarkets(crypto.isEmpty() ? QStringList{"NONE:NONE"} : crypto);
       technicaldata::Indicators::instance().setMarkets(only);
     }
     g_started = true;
     if (!sources::isDisabled("binance")) technicaldata::Collector::instance().start();
     if (!sources::isDisabled("dukascopy")) technicaldata::ForexCollector::instance().start();   // forex: Dukascopy
+    // footprint history (Binance's archives), for the pairs that record one
+    if (!sources::isDisabled("binance-archive")) technicaldata::ArchiveCollector::instance().start();
+    // the live order book of the pairs that ask for it, in memory only (Binance's streams; switched off with Binance)
+    if (!sources::isDisabled("binance")) technicaldata::LiveBook::instance().start();
     technicaldata::Indicators::instance().start();   // the key indicators of every bar stored, by Charts' engine
   });
 }
-Q_COREAPP_STARTUP_FUNCTION(startMarketCollector)
+DW_STARTUP_FUNCTION(startMarketCollector)

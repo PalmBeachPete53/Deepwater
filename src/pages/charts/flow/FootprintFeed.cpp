@@ -1,6 +1,13 @@
 #include "pages/charts/flow/FootprintFeed.h"
 #include "charts/core/Series.h"
+#include "technicaldata/FootprintArchive.h"
+#include "technicaldata/TechnicalDataSpec.h"
+#include "technicaldata/TechnicalDataStore.h"
+#include <QDateTime>
+#include <QTimeZone>
 #include <algorithm>
+#include <list>
+#include <unordered_map>
 
 namespace charts::ui::flow {
 
@@ -22,8 +29,37 @@ namespace {
 }
 }  // namespace
 
+// Decoded stored days (the newest 40 used) and the bars made from them.
+struct FootprintFeed::DayCache {
+  std::list<qint64> order;   // most recent use first
+  std::unordered_map<qint64, std::vector<technicaldata::fp::Minute>> days;
+  std::unordered_map<qint64, std::optional<::charts::flow::FootprintCandle>> bars;   // bar time (s) → candle (none: no trade)
+  void clear() { order.clear(); days.clear(); bars.clear(); }
+};
+
 FootprintFeed::FootprintFeed(const data::FlowMarket& market, const QString& tf, QObject* parent)
-    : QObject(parent), market_(market), tf_(tf), stream_(data::TradeStream::acquire(market)), book_(bucketsFor(tf)) {
+    : QObject(parent), market_(market), tf_(tf), stream_(data::TradeStream::acquire(market)), book_(bucketsFor(tf)),
+      cache_(std::make_shared<DayCache>()) {
+  try {
+    const series::Tf t = series::parseTf(tf);
+    if (t.unit == "s" || t.unit == "m" || t.unit == "h" || t.unit == "D") barSeconds_ = t.seconds;
+  } catch (...) {
+  }
+  pair_ = "BINANCE:" + market.symbol;
+  venue_ = market.venue == data::FlowMarket::BinanceUsdm ? QStringLiteral("perp") : QStringLiteral("spot");
+  loadStoredDays();
+  connect(&technicaldata::Store::instance(), &technicaldata::Store::footprintChanged, this,
+          [this](const QString& m, const QString& v, qint64 day) {
+            if (m != pair_ || v != venue_) return;
+            if (day > 0) storedDays_.insert(day); else loadStoredDays();
+            cache_->bars.clear();   // bars that lacked that day
+            notify(true);
+          });
+  connect(&technicaldata::Store::instance(), &technicaldata::Store::pairsChanged, this, [this](const QString& m) {
+    if (m != pair_) return;
+    loadStoredDays();
+    notify(true);
+  });
   rebuildTimer_.setSingleShot(true);
   notifyTimer_.setSingleShot(true);
   connect(&rebuildTimer_, &QTimer::timeout, this, &FootprintFeed::rebuild);
@@ -86,7 +122,57 @@ void FootprintFeed::notify(bool rebuilt) {
 
 const ::charts::flow::FootprintCandle* FootprintFeed::complete(qint64 barTime) const {
   const auto* c = book_.find(int64_t(barTime) * 1000);
-  return c && !book_.partial(*c) ? c : nullptr;
+  if (c && !book_.partial(*c)) return c;
+  return archived(barTime);   // older than the trades in memory: the stored history, when there is one
+}
+
+void FootprintFeed::loadStoredDays() {
+  storedDays_.clear();
+  cache_->clear();
+  auto& st = technicaldata::Store::instance();
+  if (!technicaldata::specFromJson(st.pairSpec(pair_)).footprint.contains(venue_)) return;
+  for (const auto& d : st.footprintDays(pair_, venue_)) storedDays_.insert(d.day);
+}
+
+const ::charts::flow::FootprintCandle* FootprintFeed::archived(qint64 barTime) const {
+  if (barSeconds_ <= 0 || storedDays_.isEmpty() || !stream_->ready()) return nullptr;
+  auto& c = *cache_;
+  if (const auto it = c.bars.find(barTime); it != c.bars.end()) return it->second ? &*it->second : nullptr;
+  const qint64 end = barTime + barSeconds_;
+  // every day the bar touches must be stored
+  for (qint64 day = barTime - ((barTime % 86400) + 86400) % 86400; day < end; day += 86400)
+    if (!storedDays_.contains(day)) return nullptr;
+  technicaldata::fp::Minute merged;
+  for (qint64 day = barTime - ((barTime % 86400) + 86400) % 86400; day < end; day += 86400) {
+    auto it = c.days.find(day);
+    if (it == c.days.end()) {
+      std::vector<technicaldata::fp::Minute> ms;
+      technicaldata::fp::decodeDay(technicaldata::Store::instance().footprintData(pair_, venue_, day), day, ms);
+      it = c.days.emplace(day, std::move(ms)).first;
+      c.order.push_front(day);
+      while (c.order.size() > 40) { c.days.erase(c.order.back()); c.order.pop_back(); }
+    } else {
+      c.order.remove(day);
+      c.order.push_front(day);
+    }
+    const auto& ms = it->second;
+    auto m = std::lower_bound(ms.begin(), ms.end(), barTime, [](const technicaldata::fp::Minute& x, qint64 t) { return x.t < t; });
+    for (; m != ms.end() && m->t < end; ++m) technicaldata::fp::merge(merged, *m);
+  }
+  if (c.bars.size() > 50000) c.bars.clear();
+  auto& slot = c.bars[barTime];
+  if (merged.trades > 0) slot = technicaldata::fp::tickCandle(merged, stream_->ticks());
+  return slot ? &*slot : nullptr;
+}
+
+bool FootprintFeed::fromArchive(qint64 barTime) const {
+  const auto* c = book_.find(int64_t(barTime) * 1000);
+  return !(c && !book_.partial(*c)) && archived(barTime) != nullptr;
+}
+
+int64_t FootprintFeed::archiveMinGroup(double price) const {
+  if (storedDays_.isEmpty() || !stream_->ready() || !(price > 0)) return 0;
+  return int64_t(std::ceil(price * (technicaldata::fp::kGrowth - 1) / stream_->ticks().step));
 }
 
 qint64 FootprintFeed::coveredFromMs() const {

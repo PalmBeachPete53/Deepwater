@@ -7,6 +7,7 @@
 #include "macro/CentralBanks.h"
 #include "app/Pages.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QStackedWidget>
@@ -18,6 +19,9 @@
 #include <QPaintEvent>
 #include <QTimer>
 #include <QCoreApplication>
+#include <QScroller>
+#include <QScrollerProperties>
+#include <QScrollPrepareEvent>
 #include <functional>
 #include <cmath>
 
@@ -46,20 +50,25 @@ public:
     const bool on = eco::Blink::instance().on();
     p.setPen(Qt::NoPen); p.setBrush(on ? C("#f5c518") : C("#736f13"));
     p.drawEllipse(QPointF(38, 17), 2.6, 2.6);
-    const QString t = QCoreApplication::translate("economy", "GLOBAL ASSET NETWORK — LIVE SURVEILLANCE");
-    const qreal adv = eco::micro(p, 50, 21, t, C("#5b574e"), 11, 3.5);
-    if (eco::Blink::instance().phase() % 3 != 2) p.fillRect(QRectF(50 + adv + 4, 11, 6, 11), C("#f5c518"));
+    // phones: the coverage pill alone (the title would run under it), in a smaller face so it fits 430 px
+    const bool phone = ui::compact(width());
+    if (!phone) {
+      const QString t = QCoreApplication::translate("economy", "GLOBAL ASSET NETWORK — LIVE SURVEILLANCE");
+      const qreal adv = eco::micro(p, 50, 21, t, C("#5b574e"), 11, 3.5);
+      if (eco::Blink::instance().phase() % 3 != 2) p.fillRect(QRectF(50 + adv + 4, 11, 6, 11), C("#f5c518"));
+    }
     // coverage pill
     const auto cov = MacroStore::instance().coverage();
     const QString pill = QCoreApplication::translate("economy", "• %1 ECONOMIES · %2 MONTHLY · %3 LIVE FEEDS")
                            .arg(cov.economies).arg(cov.monthly).arg(cov.liveFeeds);
-    const QFont f = eco::mono(10, QFont::Bold, 1);
-    const qreal pw = QFontMetricsF(f).horizontalAdvance(pill) + 18;
-    const QRectF pr(width() - 15 - pw, 9, pw, 18);
+    const QFont f = phone ? eco::mono(9, QFont::Bold, 0.3) : eco::mono(10, QFont::Bold, 1);
+    const qreal pw = phone ? std::min(QFontMetricsF(f).horizontalAdvance(pill) + 14, width() - 50 - 8.0)
+                           : QFontMetricsF(f).horizontalAdvance(pill) + 18;
+    const QRectF pr(phone ? 50 : width() - 15 - pw, 9, pw, 18);
     p.setPen(QPen(C("#9b8720"), 1)); p.setBrush(C("#4f3f00"));
     p.drawRoundedRect(pr.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
     p.setFont(f); p.setPen(C("#e7d592"));
-    p.drawText(pr, Qt::AlignCenter, pill);
+    p.drawText(pr, Qt::AlignCenter, phone ? QFontMetricsF(f).elidedText(pill, Qt::ElideRight, pr.width() - 8) : pill);
     setToolTip(QCoreApplication::translate("economy", "Economies in the registry · economies with monthly official series · economies with a daily policy-rate feed "
                "(central bank or BIS; the euro area counts once)"));
   }
@@ -69,7 +78,24 @@ public:
 class Registry : public QWidget {
 public:
   std::function<void(const QString&)> onHover, onClick;
-  explicit Registry(QWidget* p) : QWidget(p) { setMouseTracking(true); setList(Group::G20); }
+  explicit Registry(QWidget* p) : QWidget(p) {
+    setMouseTracking(true); setList(Group::G20);
+    // a finger drags the list (QScroller: kinetic, and a tap still opens the row); the mouse keeps the wheel
+    if (ui::touch::enabled()) {
+#ifdef Q_OS_IOS
+      QScroller::grabGesture(this, QScroller::TouchGesture);
+#else
+      QScroller::grabGesture(this, QScroller::LeftMouseButtonGesture);
+#endif
+      QScrollerProperties sp = QScroller::scroller(this)->scrollerProperties();
+      sp.setScrollMetric(QScrollerProperties::HorizontalOvershootPolicy, QScrollerProperties::OvershootAlwaysOff);
+      sp.setScrollMetric(QScrollerProperties::VerticalOvershootPolicy, QScrollerProperties::OvershootAlwaysOff);
+      sp.setScrollMetric(QScrollerProperties::DragStartDistance, 0.004);
+      QScroller::scroller(this)->setScrollerProperties(sp);
+    }
+  }
+  // phones: group tabs spread over the width and 30 px tall (finger targets), rows start lower to make room
+  void setPhone(bool on) { if (on != m_phone) { m_phone = on; m_scroll = std::clamp(m_scroll, 0.0, maxScroll()); update(); } }
   // large windows: the whole panel is drawn at a scale (338 logical px wide) so it does not get lost
   // the page sets the geometry (338 * k wide, minus the 2 px gap): no fixed width, or the widget pokes 2 px out
   void setScale(qreal k) { m_k = k; update(); }
@@ -82,11 +108,15 @@ public:
     m_scroll = 0; update();
   }
   Group group() const { return m_group; }
-  int rowTop() const { return 66; }
+  int rowTop() const { return m_phone ? 76 : 66; }
   qreal pitch() const { return 31.7; }
   QRectF tabRect(int i) const {
     static const qreal xs[6] = {6, 52, 111, 163, 215, 254};
     static const qreal ws[6] = {42, 54, 48, 48, 35, 60};
+    if (m_phone) {
+      const qreal k = std::max(1.0, (lw() - 12) / 308.0);
+      return QRectF(6 + (xs[i] - 6) * k, 38, ws[i] * k, 30);
+    }
     return QRectF(xs[i], 41, ws[i], 18);
   }
   int rowAt(const QPointF& pos) const {
@@ -190,7 +220,25 @@ public:
     m_scroll = std::clamp(m_scroll - dy, 0.0, maxScroll());
     update();
   }
+  // finger scrolling (QScroller, touch only): the scroller moves m_scroll in widget pixels
+  bool event(QEvent* e) override {
+    if (e->type() == QEvent::ScrollPrepare) {
+      auto* se = static_cast<QScrollPrepareEvent*>(e);
+      se->setViewportSize(QSizeF(size()));
+      se->setContentPosRange(QRectF(0, 0, 0, maxScroll() * m_k));
+      se->setContentPos(QPointF(0, m_scroll * m_k));
+      se->accept();
+      return true;
+    }
+    if (e->type() == QEvent::Scroll) {
+      m_scroll = std::clamp(static_cast<QScrollEvent*>(e)->contentPos().y() / m_k, 0.0, maxScroll());
+      update();
+      return true;
+    }
+    return QWidget::event(e);
+  }
 private:
+  bool m_phone = false;
   Group m_group = Group::G20;
   QList<Economy> m_list;
   QPointF m_mouse{-1, -1};
@@ -205,11 +253,16 @@ public:
   std::function<void()> onReset, onToggle;
   bool live = true, monthly = true, annual = true;
   explicit Controls(QWidget* p) : QWidget(p) { setMouseTracking(true); setAttribute(Qt::WA_TranslucentBackground); }
-  QRectF resetRect() const { return QRectF(8, height() - 31, 22, 22); }
+  // phones: the same controls 1.3x wider and 30 px tall, finger targets (the page gives them a 48 px band)
+  bool phone = false;
+  qreal k() const { return phone ? 1.3 : 1.0; }
+  QRectF resetRect() const { return phone ? QRectF(8, height() - 38, 30, 30) : QRectF(8, height() - 31, 22, 22); }
+  QRectF frameRect() const { return QRectF(segRect(0).left() - 4, segRect(0).top() - 4, 230 * k(), segRect(0).height() + 8); }
   QRectF segRect(int i) const {
-    const qreal right = width() - 8, w0 = 230;
+    const qreal right = width() - 8, w0 = 230 * k();
     const qreal x0 = right - w0;
     static const qreal xs[3] = {4, 88, 164}, ws[3] = {80, 72, 62};
+    if (phone) return QRectF(x0 + xs[i] * k(), height() - 37, ws[i] * k(), 28);
     return QRectF(x0 + xs[i], height() - 29, ws[i], 18);
   }
   void paintEvent(QPaintEvent*) override {
@@ -222,7 +275,7 @@ public:
     const QPointF c = rr.center();
     p.drawArc(QRectF(c.x() - 5, c.y() - 5, 10, 10), 40 * 16, 280 * 16);
     p.drawLine(c + QPointF(3.8, -4.6), c + QPointF(4.3, -1.6));
-    const QRectF frame(segRect(0).left() - 4, height() - 33, 230, 26);
+    const QRectF frame = frameRect();   // desktop: (left - 4, height - 33, 230, 26)
     p.setPen(QPen(C("#2a2418"), 1)); p.setBrush(Qt::NoBrush); p.drawRect(frame.adjusted(0.5, 0.5, -0.5, -0.5));
     const QStringList labs{QCoreApplication::translate("economy", "• LIVE FEED"), QCoreApplication::translate("economy", "• MONTHLY"), QCoreApplication::translate("economy", "• ANNUAL")};
     const bool st[3] = {live, monthly, annual};
@@ -236,7 +289,7 @@ public:
       }
       if (r.contains(m_mouse)) text = text.lighter(130);
       p.setPen(QPen(border, 1)); p.setBrush(fill); p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
-      p.setFont(eco::mono(9, QFont::Bold, 1)); p.setPen(text);
+      p.setFont(eco::mono(phone ? 10 : 9, QFont::Bold, 1)); p.setPen(text);
       p.drawText(r, Qt::AlignCenter, labs[i]);
     }
   }
@@ -261,11 +314,12 @@ private:
 class GlobeView : public QWidget {
 public:
   explicit GlobeView(QWidget* p) : QWidget(p) {}
+  bool phone = false;   // registry under the globe: the gradient spans the whole width
   // The gradient is painted where exposed, not kept as a full-size 2x pixmap (~20 MB): the opaque globe covers almost
   // all of it and this view repaints only on resize or around the side widgets.
   void paintEvent(QPaintEvent*) override {
     QPainter p(this);
-    const QRectF area(0, 0, width() - 338, height());
+    const QRectF area(0, 0, phone ? width() : width() - 338, height());
     QRadialGradient g(QPointF(area.width() * 0.25, area.height() * 0.85), area.width() * 0.9);
     g.setColorAt(0, C("#0f0a03")); g.setColorAt(1, C("#040301"));
     p.fillRect(area, g);
@@ -334,6 +388,22 @@ void MacroPage::updateTint() {
 void MacroPage::resizeEvent(QResizeEvent*) {
   m_top->setGeometry(0, 0, width(), 36);
   m_stack->setGeometry(0, 36, width(), height() - 36);
+  // phone held upright: the globe on top at full width (its controls under it, finger-sized), the registry below with
+  // the rest of the height; its list scrolls by finger (QScroller). A phone held sideways keeps the desktop layout.
+  const bool phone = ui::compact(width());
+  m_registry->setPhone(phone);
+  m_controls->phone = phone;
+  static_cast<GlobeView*>(m_globeView)->phone = phone;
+  if (phone) {
+    const int W = m_stack->width(), H = m_stack->height();
+    const int gh = std::clamp(int(W * 0.93), 260, std::max(260, H / 2));
+    m_registry->setScale(1);
+    m_globe->setGeometry(0, 0, W, gh);
+    m_controls->setGeometry(0, gh - 48, W, 48);
+    m_registry->setGeometry(0, gh + 2, W, std::max(0, H - gh - 2));
+    m_file->setViewportHeight(H);
+    return;
+  }
   // registry grows with the window on large screens (338 px at the reference width, up to 460 px)
   const qreal k = std::clamp(std::sqrt(width() / 1600.0), 1.0, 460.0 / 338.0);
   m_registry->setScale(k);

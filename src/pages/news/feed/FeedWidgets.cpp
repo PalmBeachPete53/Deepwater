@@ -6,6 +6,7 @@
 #include "core/I18n.h"
 #include <QCoreApplication>
 #include "ui/Kit.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QMouseEvent>
@@ -241,6 +242,28 @@ QList<WireHeader::Hit> WireHeader::hits() const {
   const double langX = width() - 14 - QFontMetricsF(theme::mono(10, QFont::Normal, 1.5)).horizontalAdvance(QCoreApplication::translate("news", "%1 STORIES").arg("000")) - 9 - langW;
   const double liveClock = 12 + 52 + 11 + 82;
   const double captionW = 209;
+  if (ui::compact(width())) {
+    // phones: two rows (the page gives the header 85 px). Row 1: title, LIVE, language chip, count; row 2: the
+    // source chips from the left edge, 32 px tall for a finger, folded into "+N" when they do not fit the width.
+    QList<news::FeedSource> shown = news::Feed::instance().sources();
+    m_hidden.clear(); m_caption = false;
+    auto rowW = [&](bool more) {
+      double w = 12; for (const auto& s : shown) w += fm.horizontalAdvance(sourceLabel(s.name)) + 18 + 6;
+      return w + (more ? 50 : 0);
+    };
+    for (int pass = 0; pass < 2 && rowW(!m_hidden.isEmpty()) > width() - 12; ++pass)
+      for (int i = int(shown.size()) - 1; i >= 0 && rowW(!m_hidden.isEmpty()) > width() - 12; --i)
+        if (pass == 1 || m_st->sourcesOff.contains(shown[i].id)) { m_hidden.prepend(shown[i].id); shown.removeAt(i); }
+    double x = 12;
+    for (const auto& s : shown) {
+      const double w = fm.horizontalAdvance(sourceLabel(s.name)) + 18;
+      out << Hit{QRectF(x, 47, w, 32), s.id};
+      x += w + 6;
+    }
+    if (!m_hidden.isEmpty()) out << Hit{QRectF(x, 47, 44, 32), "more"};
+    out << Hit{QRectF(langX, 6, langW, 29), "lang"};
+    return out;
+  }
   // fold sources into "+N" (switched-off ones first, then from the end) until chips + live/clock fit
   QList<news::FeedSource> shown = news::Feed::instance().sources();
   m_hidden.clear();
@@ -275,8 +298,9 @@ void WireHeader::paintEvent(QPaintEvent*) {
     p.setFont(tf); p.setPen(theme::map("#f6d24a"));
     p.drawText(QRectF(14, 0, 200, 41), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "MARKET WIRE"));
   }
+  const bool phone = ui::compact(width());
   p.setFont(theme::mono(9, QFont::Normal, 2)); p.setPen(theme::map("#b7b1a8"));
-  p.drawText(QRectF(178, 8, 60, 22), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "SOURCES"));
+  if (!phone) p.drawText(QRectF(178, 8, 60, 22), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "SOURCES"));
   const auto hs = hits();
   double after = 236;
   for (int i = 0; i < hs.size(); ++i) {
@@ -287,7 +311,7 @@ void WireHeader::paintEvent(QPaintEvent*) {
       p.setPen(theme::map("#2a2418")); p.drawRect(h.r.adjusted(0.5, 0.5, -0.5, -0.5));
       p.setFont(theme::mono(11, QFont::Bold)); p.setPen(theme::map("#a9a59a"));
       p.drawText(h.r, Qt::AlignCenter, QString("+%1").arg(m_hidden.size()));
-      after = h.r.right();
+      if (!phone) after = h.r.right();
       continue;
     }
     QString name; for (const auto& s : news::Feed::instance().sources()) if (s.id == h.id) name = sourceLabel(s.name);
@@ -297,8 +321,9 @@ void WireHeader::paintEvent(QPaintEvent*) {
     p.setPen(on ? theme::map("#464127") : theme::map("#2a2418")); p.drawRect(h.r.adjusted(0.5, 0.5, -0.5, -0.5));
     p.setFont(theme::mono(11, QFont::Bold, 0.8)); p.setPen(on ? (err ? theme::map("#c9a9a0") : theme::map("#fdfaf0")) : theme::map("#6d6a60"));
     p.drawText(h.r, Qt::AlignCenter, name);
-    after = h.r.right();
+    if (!phone) after = h.r.right();
   }
+  if (phone) after = 156;   // LIVE right of the title (the chips are on the second row)
   // LIVE chip + clock
   const QString liveText = m_live ? QCoreApplication::translate("news", "LIVE") : QCoreApplication::translate("news", "STALE");
   const QRectF live(after + 12, 9, std::max(52.0, QFontMetricsF(theme::mono(10, QFont::Normal, 1)).horizontalAdvance(liveText) + 24), 22);
@@ -311,7 +336,9 @@ void WireHeader::paintEvent(QPaintEvent*) {
   p.setFont(theme::mono(10, QFont::Normal, 1)); p.setPen(theme::map("#7f7d73"));
   p.drawText(live.adjusted(17, 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter, m_live ? QCoreApplication::translate("news", "LIVE") : QCoreApplication::translate("news", "STALE"));
   p.setFont(theme::mono(14, QFont::Medium)); p.setPen(theme::map("#d6bb9a"));
-  p.drawText(QRectF(live.right() + 11, 0, 100, 41), Qt::AlignLeft | Qt::AlignVCenter, QTime::currentTime().toString("HH:mm:ss"));
+  // phones: the clock only when it clears the language chip (the app header shows the time anyway)
+  if (!phone || live.right() + 11 + QFontMetricsF(p.font()).horizontalAdvance("00:00:00") < hs.last().r.left() - 8)
+    p.drawText(QRectF(live.right() + 11, 0, 100, 41), Qt::AlignLeft | Qt::AlignVCenter, QTime::currentTime().toString("HH:mm:ss"));
 
   // right: AUTO-TRANSLATED [lang] N STORIES
   const QFont cf = theme::mono(10, QFont::Normal, 1.5);
@@ -334,7 +361,7 @@ void WireHeader::paintEvent(QPaintEvent*) {
   p.setFont(theme::mono(9, QFont::Normal, 1.2)); p.setPen(frOk ? theme::map("#4a4742") : theme::map("#8a5a52"));
   const QString cap = m_st->fr && !tr.usable() ? QCoreApplication::translate("news", "FR UNAVAILABLE") : frOk ? QCoreApplication::translate("news", "AUTO-TRANSLATED") : QCoreApplication::translate("news", "ORIGINAL");
   if (m_caption) p.drawText(QRectF(lr.x() - 209, 0, 200, 41), Qt::AlignRight | Qt::AlignVCenter, cap);
-  p.fillRect(QRectF(0, 40, W, 1), theme::map("#0a0504"));
+  p.fillRect(QRectF(0, height() - 1, W, 1), theme::map("#0a0504"));   // 40 on desktop (41 px tall)
 }
 
 void WireHeader::mouseMoveEvent(QMouseEvent* e) {
@@ -502,7 +529,27 @@ void LeadStory::paintEvent(QPaintEvent*) {
   p.setRenderHint(QPainter::Antialiasing, false);
   p.setFont(theme::mono(13, QFont::Bold, 2.4)); p.setPen(theme::map("#eedfa3"));
   p.drawText(QRectF(21, 12, 300, 20), Qt::AlignLeft | Qt::AlignVCenter, QCoreApplication::translate("news", "LEAD STORY"));
-  if (m_has) {
+  if (m_has && r.width() < 520) {
+    // phones: the image across the panel, the headline below it (22 px, up to 3 lines), then source · age
+    const double ih = std::min(180.0, std::round((r.width() - 2) * 0.45));
+    const QRectF img(1, 39, r.width() - 2, ih);
+    p.drawPixmap(img.topLeft(), storyPixmap(m_s, img.size().toSize(), this));
+    const double tx = 14, tw = r.width() - 28;
+    double y = img.bottom() + 12;
+    if (m_tag && m_s.primaryTopic()) {
+      p.setFont(theme::mono(10, QFont::Bold, 2.2)); p.setPen(kTag);
+      p.drawText(QRectF(tx, y, tw, 16), Qt::AlignLeft | Qt::AlignVCenter, news::topicName(m_s.primaryTopic()));
+      y += 22;
+    }
+    const QFont tf = theme::sans(22, QFont::DemiBold);
+    p.setFont(tf); p.setPen(m_hover ? theme::map("#f2df93") : kWhite);
+    for (const auto& l : wrap(m_st->tx(m_s.title), tf, tw, 3)) { p.drawText(QRectF(tx, y, tw + 20, 28), Qt::AlignLeft | Qt::AlignVCenter, l); y += 28; }
+    p.setFont(theme::mono(10, QFont::Bold, 0.8)); p.setPen(kWhite);
+    const QFontMetricsF fm(p.font());
+    p.drawText(QRectF(tx, y + 4, tw, 18), Qt::AlignLeft | Qt::AlignVCenter, sourceLabel(m_s.source));
+    p.setFont(theme::mono(10, QFont::Normal, 0.8)); p.setPen(kMetaDim);
+    p.drawText(QRectF(tx + fm.horizontalAdvance(sourceLabel(m_s.source)) + 8, y + 4, tw, 18), Qt::AlignLeft | Qt::AlignVCenter, "·  " + ageUpper(m_s.time));
+  } else if (m_has) {
     double iw = std::clamp(std::round(r.width() * 0.34), 240.0, 560.0), ih = std::round(iw * 260 / 421);
     if (ih > r.height() - 40) { ih = r.height() - 40; iw = std::round(ih * 421 / 260); }   // short viewports
     const QRectF img(1, 39, iw, ih);
@@ -538,6 +585,10 @@ int LeadStory::preferredHeight(int w, int viewH) {
   if (viewH > 0 && viewH < 560) ih = std::min(ih, std::max(110.0, std::round(viewH * 0.30)));
   return int(ih) + 40;
 }
+int LeadStory::phoneHeight(int w, bool tag) {
+  // label 39 + image + 12 + tag 22 + 3 lines × 28 + meta 26 + 8: the headline's room is kept whatever its length
+  return 39 + int(std::min(180.0, std::round((w - 2) * 0.45))) + 12 + (tag ? 22 : 0) + 3 * 28 + 26 + 8;
+}
 void LeadStory::mousePressEvent(QMouseEvent*) { if (m_has) emit m_st->openStory(m_s.id); }
 void LeadStory::enterEvent(QEnterEvent*) { m_hover = true; update(); }
 void LeadStory::leaveEvent(QEvent*) { m_hover = false; update(); }
@@ -552,22 +603,28 @@ FilterBar::FilterBar(FeedState* st, QWidget* parent) : QWidget(parent), m_st(st)
   QPalette pl = m_search->palette(); pl.setColor(QPalette::PlaceholderText, theme::map("#4a463d")); m_search->setPalette(pl);
   connect(m_search, &QLineEdit::textChanged, this, [this](const QString& t) { m_st->search = t.trimmed(); emit m_st->changed(); });
 }
-void FilterBar::resizeEvent(QResizeEvent*) { m_search->setGeometry(36, 13, 160, 24); }
+// phones (< 520 px): the search box takes the first row at full width, the chips wrap below it, 34 px tall
+void FilterBar::resizeEvent(QResizeEvent*) {
+  if (width() < 520) m_search->setGeometry(36, 16, width() - 60, 24);
+  else m_search->setGeometry(36, 13, 160, 24);
+}
 QFont FilterBar::chipFont(bool tight) const {
   QFont f = theme::condensed(13, QFont::Bold); f.setLetterSpacing(QFont::AbsoluteSpacing, tight ? 0.6 : 1.4);
   return f;
 }
 QList<FilterBar::Hit> FilterBar::hits(bool tight) const {
   QList<Hit> out;
-  double x = 205, y = 10;
+  const bool phone = width() < 520;
+  double x = phone ? 12 : 205, y = phone ? 56 : 10;
+  const double ch = phone ? 34 : 31, pitch = phone ? 42 : 39;
   const QFontMetricsF fm(chipFont(tight));
   const double pad = tight ? 16 : 26, gap = tight ? 6 : 8;
   QList<QPair<int, QString>> items{{0, QCoreApplication::translate("news", "TOP IMPACT")}};
   for (auto t : news::allTopics()) items << qMakePair(int(t), news::topicName(t));
   for (const auto& [id, t] : items) {
     const double w = fm.horizontalAdvance(t) + pad + (id == 0 ? 12 : 0);
-    if (x + w > width() - 10 && x > 12) { x = 12; y += 39; }   // narrow windows: the chips wrap to a new row
-    out << Hit{QRectF(x, y, w, 31), id, t};
+    if (x + w > width() - 10 && x > 12) { x = 12; y += pitch; }   // narrow windows: the chips wrap to a new row
+    out << Hit{QRectF(x, y, w, ch), id, t};
     x += w + gap;
   }
   return out;
@@ -591,10 +648,12 @@ void FilterBar::paintEvent(QPaintEvent*) {
   const QRectF r = rect();
   p.fillRect(r, theme::map("#090703"));
   p.setPen(theme::map("#231e14")); p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
-  const QRectF sr(12, 10, 185, 32);
+  const bool phone = width() < 520;
+  const QRectF sr = phone ? QRectF(12, 10, width() - 24, 36) : QRectF(12, 10, 185, 32);
+  const double iy = phone ? 27 : 25;   // magnifier centre
   p.setPen(theme::map("#252114")); p.drawRect(sr.adjusted(0.5, 0.5, -0.5, -0.5));
   p.setRenderHint(QPainter::Antialiasing, true);
-  p.setPen(QPen(theme::map("#5e5a50"), 1.2)); p.drawEllipse(QPointF(25, 25), 4, 4); p.drawLine(QPointF(28, 28), QPointF(31, 31));
+  p.setPen(QPen(theme::map("#5e5a50"), 1.2)); p.drawEllipse(QPointF(25, iy), 4, 4); p.drawLine(QPointF(28, iy + 3), QPointF(31, iy + 6));
   p.setRenderHint(QPainter::Antialiasing, false);
   const bool tightChips = tight();
   const auto hs = hits(tightChips);
@@ -643,7 +702,11 @@ void CardList::relayout() {
   if (m_layoutW == width()) return;
   m_layoutW = width();
   m_cards.clear();
-  const QFont tf = theme::sans(20, QFont::Medium);
+  // phones (< 520 px): smaller thumbnail and headline font, 3 lines, no room kept for the hover "+" (no hover on a
+  // touch screen; opening a story queues it anyway)
+  const bool phone = width() < 520;
+  const QFont tf = theme::sans(phone ? 17 : 20, QFont::Medium);
+  const double textX = phone ? 98 : 115, rightPad = phone ? 12 : 60, lineH = phone ? 23 : 27;
   const int cols = width() >= 1800 ? 2 : 1;   // very wide windows: two columns (headlines stay ≤ ~900 px)
   const double cw = (width() - (cols - 1) * 9.0) / cols;
   double y = 0;
@@ -653,9 +716,9 @@ void CardList::relayout() {
     for (int k = 0; k < cols && i + k < m_s.size(); ++k) {
       const auto& s = m_s[i + k];
       Card c; c.x = k * (cw + 9); c.w = cw; c.y = y;
-      c.lines = wrap(m_st->tx(s.title), tf, cw - 115 - 60, 2);
+      c.lines = wrap(m_st->tx(s.title), tf, cw - textX - rightPad, phone ? 3 : 2);
       const bool tag = m_tags && s.primaryTopic();
-      const double block = (tag ? 18 : 0) + c.lines.size() * 27 + 21;
+      const double block = (tag ? 18 : 0) + c.lines.size() * lineH + 21;
       rowH = std::max(rowH, block + 24);
       row << c;
     }
@@ -668,7 +731,9 @@ int CardList::heightForWidth(int) const { return height(); }
 void CardList::resizeEvent(QResizeEvent*) { relayout(); }
 void CardList::paintEvent(QPaintEvent* ev) {
   QPainter p(this);
-  const QFont tf = theme::sans(20, QFont::Medium);
+  const bool phone = width() < 520;   // same metrics as relayout()
+  const QFont tf = theme::sans(phone ? 17 : 20, QFont::Medium);
+  const double lineH = phone ? 23 : 27;
   for (int i = 0; i < m_cards.size(); ++i) {
     const Card& c = m_cards[i];
     if (c.y > ev->rect().bottom() || c.y + c.h < ev->rect().top()) continue;
@@ -677,7 +742,7 @@ void CardList::paintEvent(QPaintEvent* ev) {
     const bool hov = i == m_hover;
     p.fillRect(r, hov ? theme::map("#1a1302") : theme::map("#040302"));
     p.setPen(hov ? theme::map("#342e20") : theme::map("#241e1a")); p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
-    const QRectF th(r.x() + 10, r.center().y() - 34, 96, 68);
+    const QRectF th = phone ? QRectF(r.x() + 8, r.center().y() - 30, 80, 60) : QRectF(r.x() + 10, r.center().y() - 34, 96, 68);
     {
       QPainterPath clip; clip.addRoundedRect(th, 2, 2);
       p.save(); p.setRenderHint(QPainter::Antialiasing, true); p.setClipPath(clip);
@@ -685,22 +750,22 @@ void CardList::paintEvent(QPaintEvent* ev) {
       p.restore();
     }
     const bool tag = m_tags && s.primaryTopic();
-    const double block = (tag ? 18 : 0) + c.lines.size() * 27 + 21;
+    const double block = (tag ? 18 : 0) + c.lines.size() * lineH + 21;
     double y = r.center().y() - block / 2;
-    const double x = r.x() + 115;
+    const double x = r.x() + (phone ? 98 : 115);
     if (tag) {
       p.setFont(theme::mono(9, QFont::Bold, 2)); p.setPen(theme::map("#cebb96"));
       p.drawText(QRectF(x, y, 400, 14), Qt::AlignLeft | Qt::AlignVCenter, news::topicName(s.primaryTopic()));
       y += 18;
     }
     p.setFont(tf); p.setPen(hov ? theme::map("#f2df93") : kWhite);
-    for (const auto& l : c.lines) { p.drawText(QRectF(x, y, r.right() - x - 50, 27), Qt::AlignLeft | Qt::AlignVCenter, l); y += 27; }
+    for (const auto& l : c.lines) { p.drawText(QRectF(x, y, r.right() - x - (phone ? 4 : 50), lineH), Qt::AlignLeft | Qt::AlignVCenter, l); y += lineH; }
     p.setFont(theme::mono(10, QFont::Bold, 0.8)); p.setPen(kWhite);
     const QFontMetricsF fm(p.font());
     p.drawText(QRectF(x, y + 3, 400, 16), Qt::AlignLeft | Qt::AlignVCenter, sourceLabel(s.source));
     p.setFont(theme::mono(10, QFont::Normal, 0.8)); p.setPen(theme::map("#45443f"));
     p.drawText(QRectF(x + fm.horizontalAdvance(sourceLabel(s.source)) + 8, y + 3, 300, 16), Qt::AlignLeft | Qt::AlignVCenter, "·  " + ageUpper(s.time));
-    if (hov) {
+    if (hov && !phone) {
       const QRectF pr = plusRect(r);
       const bool queued = m_st->queue.contains(s.id);
       p.fillRect(pr, m_hoverPlus ? theme::map("#3a300c") : theme::map("#1f1805"));
@@ -721,10 +786,10 @@ void CardList::hoverAt(const QPoint& pos) {
   int h = -1; bool plus = false;
   for (int i = 0; i < m_cards.size(); ++i)
     if (QRectF(m_cards[i].x, m_cards[i].y, m_cards[i].w, m_cards[i].h).contains(pos)) {
-      h = i; plus = plusRect(QRectF(m_cards[i].x, m_cards[i].y, m_cards[i].w, m_cards[i].h)).contains(pos);
+      h = i; plus = width() >= 520 && plusRect(QRectF(m_cards[i].x, m_cards[i].y, m_cards[i].w, m_cards[i].h)).contains(pos);
     }
   setCursor(h >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
-  if (h >= 0 && !plus && m_cards[h].lines.size() == 2 && m_cards[h].lines.last().endsWith("..."))
+  if (h >= 0 && !plus && m_cards[h].lines.size() >= 2 && m_cards[h].lines.last().endsWith("..."))
     QToolTip::showText(mapToGlobal(pos), ui::plainTip(m_st->tx(m_s[h].title)), this);
   if (h >= 0 && plus) QToolTip::showText(mapToGlobal(pos), m_st->queue.contains(m_s[h].id) ? QCoreApplication::translate("news", "In the reading queue") : QCoreApplication::translate("news", "Add to the reading queue"), this);
   if (h != m_hover || plus != m_hoverPlus) { m_hover = h; m_hoverPlus = plus; update(); }
@@ -773,6 +838,7 @@ void HeadlinesPanel::relayout() {
   const QFont f = theme::sans(16, QFont::DemiBold);
   double y = 39;
   for (const auto& s : m_s) {
+    if (m_maxRows >= 0 && m_rows.size() >= m_maxRows) break;
     Row r; r.lines = wrap(m_st->tx(s.title), f, width() - 26, 3);
     r.y = y; r.h = 15 + 22 + (r.lines.size() - 1) * 21.5 + 19;
     y += r.h; m_rows << r;
@@ -839,6 +905,7 @@ void HeadlinesPanel::paintEvent(QPaintEvent*) {
 void HeadlinesPanel::wheelEvent(QWheelEvent* e) {
   const double total = m_rows.isEmpty() ? 0 : m_rows.last().y + m_rows.last().h;
   const double maxS = std::max(0.0, total - height() + 10);
+  if (maxS <= 0) { e->ignore(); return; }   // everything in view (phones): the page scrolls instead
   if (!e->pixelDelta().isNull()) { m_scroll = m_target = std::clamp(m_scroll - e->pixelDelta().y(), 0.0, maxS); update(); }
   else { m_target = std::clamp(m_target - e->angleDelta().y() / 120.0 * 110, 0.0, maxS); if (!m_anim.isActive()) m_anim.start(); }
   e->accept();

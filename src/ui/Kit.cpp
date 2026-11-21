@@ -68,7 +68,15 @@ PillBar::PillBar(const QStringList& items, QWidget* parent, Style s) : QWidget(p
   setCursor(Qt::PointingHandCursor);
   setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 }
-void PillBar::setItems(const QStringList& items) { m_items = items; m_counts.clear(); m_cur = qBound(0, m_cur, int(items.size()) - 1); updateGeometry(); update(); }
+// an empty list keeps index 0 (qBound(0, x, -1) is an assertion failure: Data › Technical data's footprint pills of a
+// pair recording no footprint closed the app, 2026-11-20)
+void PillBar::setItems(const QStringList& items) {
+  m_items = items;
+  m_counts.clear();
+  m_cur = items.isEmpty() ? 0 : qBound(0, m_cur, int(items.size()) - 1);
+  updateGeometry();
+  update();
+}
 void PillBar::setCounts(const QList<int>& c) { m_counts = c; updateGeometry(); update(); }
 void PillBar::setCurrent(int i, bool emitSignal) {
   if (i == m_cur) return;

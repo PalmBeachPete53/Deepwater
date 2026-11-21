@@ -1,7 +1,10 @@
 // AI › LLM › Integration: Claude Code (ai::claudecode). Left: is it installed, signed in, which model and effort it uses.
 // Right: the four AI › Agents environments, to load Claude Code into one (or eject it), and what it may do there.
 // It can also be dragged onto a cube from the list of AI › Agents.
+// Phones (pages/ai/PhoneScroll.h): one column (Claude Code, then the environments), the model and effort choices in
+// combo boxes, 34 px buttons; the page scrolls. On iOS no program can be started: Claude Code shows "not found".
 #include "pages/ai/LlmParts.h"
+#include "pages/ai/PhoneScroll.h"
 #include "ai/ClaudeCode.h"
 #include "ai/Slots.h"
 #include "ui/Kit.h"
@@ -39,18 +42,22 @@ QLabel* text(const QString& s, const QFont& f, const QColor& c, QWidget* p, bool
 
 class IntegrationPage : public QWidget {
 public:
-  explicit IntegrationPage(QWidget* parent) : QWidget(parent) {
+  explicit IntegrationPage(QWidget* parent) : QWidget(parent), m_scroll(this) {
     const auto& c = theme::pal();
     auto* root = new QVBoxLayout(this);
+    m_root = root;
     root->setContentsMargins(16, 12, 16, 12); root->setSpacing(10);
 
     auto* head = new QHBoxLayout; head->setSpacing(12);
     head->addWidget(text(QCoreApplication::translate("ai", "INTEGRATION"), theme::title(), c.accentText, this));
-    head->addWidget(text(QCoreApplication::translate("ai", "AI tools installed on this computer that a cube can hold"), theme::mono(11), c.textDim, this));
+    m_sub = text(QCoreApplication::translate("ai", "AI tools installed on this computer that a cube can hold"), theme::mono(11), c.textDim, this);
+    head->addWidget(m_sub);
     head->addStretch(1);
     root->addLayout(head);
+    m_head = head;
 
     auto* body = new QHBoxLayout; body->setSpacing(12);
+    m_body = body;
     root->addLayout(body, 1);
 
     // ---------------------------------------------------------------- left: Claude Code itself
@@ -84,6 +91,8 @@ public:
     m_model->setCurrent(int(qMax<qsizetype>(0, ai::claudecode::modelAliases().indexOf(ai::claudecode::model()))));
     connect(m_model, &ui::PillBar::changed, this, [](int i) { ai::claudecode::setModel(ai::claudecode::modelAliases().value(i)); });
     cc->body()->addWidget(m_model, 0, Qt::AlignLeft);
+    m_modelBox = pillCombo(m_model, {QCoreApplication::translate("ai", "DEFAULT"), "OPUS", "SONNET", "FABLE", "HAIKU"}, cc);
+    cc->body()->addWidget(m_modelBox);
     cc->body()->addSpacing(4);
     cc->body()->addWidget(text(QCoreApplication::translate("ai", "EFFORT"), theme::microLabel(), c.textMute, cc));
     m_effort = new ui::PillBar({QCoreApplication::translate("ai", "DEFAULT"), QCoreApplication::translate("ai", "LOW"),
@@ -92,6 +101,10 @@ public:
     m_effort->setCurrent(int(qMax<qsizetype>(0, ai::claudecode::effortLevels().indexOf(ai::claudecode::effort()))));
     connect(m_effort, &ui::PillBar::changed, this, [](int i) { ai::claudecode::setEffort(ai::claudecode::effortLevels().value(i)); });
     cc->body()->addWidget(m_effort, 0, Qt::AlignLeft);
+    m_effortBox = pillCombo(m_effort, {QCoreApplication::translate("ai", "DEFAULT"), QCoreApplication::translate("ai", "LOW"),
+                                       QCoreApplication::translate("ai", "MEDIUM"), QCoreApplication::translate("ai", "HIGH"),
+                                       QCoreApplication::translate("ai", "EXTRA HIGH"), QCoreApplication::translate("ai", "MAX")}, cc);
+    cc->body()->addWidget(m_effortBox);
     cc->body()->addWidget(text(QCoreApplication::translate("ai", "DEFAULT keeps Claude Code's own choice. A change applies from the next question."),
                                theme::sans(11), c.textMute, cc, true));
     cc->body()->addStretch(1);
@@ -133,19 +146,44 @@ public:
     cubes->body()->addStretch(1);
     body->addWidget(cubes, 5);
 
-    connect(&ai::claudecode::Probe::instance(), &ai::claudecode::Probe::changed, this, [this] { sync(); });
+    connect(&ai::claudecode::Probe::instance(), &ai::claudecode::Probe::changed, this, [this] { sync(); m_scroll.relayout(); });
     connect(&ai::Slots::instance(), &ai::Slots::changed, this, [this] { sync(); });
     sync();
+    // phones and short windows: the content's own height (the wrapped texts at this width), the page scrolls
+    m_scroll.height = [this](int w, int) { return layoutHeight(m_root, w); };
   }
 
 protected:
   void paintEvent(QPaintEvent*) override { QPainter p(this); p.fillRect(rect(), theme::pal().bg); }
+  // A page built hidden gets Qt's default 100 x 30 first: no phone arrangement for that (it would leave the desktop
+  // layouts measured differently), the real size arrives with the show.
+  void resizeEvent(QResizeEvent*) override {
+    if (!isVisible()) return;
+    setPhone(ui::compact(width()));
+    m_scroll.resize();
+  }
   void showEvent(QShowEvent*) override {
+    resizeEvent(nullptr);
     const auto& st = ai::claudecode::Probe::instance().status();
     if (!st.checking) ai::claudecode::Probe::instance().refresh();   // re-read each visit: it may have been installed meanwhile
   }
 
 private:
+  // One column on a phone: the subtitle under the title, Claude Code above the environments, combo boxes for the
+  // five / six choices (the boxed bars are wider than the screen), finger-sized buttons.
+  void setPhone(bool on) {
+    if (on == m_phone) return;
+    m_phone = on;
+    m_head->setDirection(on ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_sub->setWordWrap(on);
+    m_body->setDirection(on ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_model->setVisible(!on); m_modelBox->setVisible(on);
+    m_effort->setVisible(!on); m_effortBox->setVisible(on);
+    QList<QPushButton*> buttons = m_load;
+    buttons << m_recheck;
+    for (auto* b : buttons) b->setMinimumHeight(on ? 34 : 0);
+    for (auto* l : m_holds) l->setMinimumWidth(on ? 40 : 0);   // a long model name is cut instead of widening the row
+  }
   void sync() {
     const auto& c = theme::pal();
     const auto& st = ai::claudecode::Probe::instance().status();
@@ -191,6 +229,12 @@ private:
   ui::PillBar *m_model, *m_effort;
   QList<QLabel*> m_holds;
   QList<QPushButton*> m_load;
+  PhoneScroll m_scroll;
+  QVBoxLayout* m_root;
+  QLabel* m_sub;
+  QBoxLayout *m_head, *m_body;
+  QComboBox *m_modelBox, *m_effortBox;
+  bool m_phone = false;
 };
 }  // namespace
 

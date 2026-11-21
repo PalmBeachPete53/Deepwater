@@ -66,6 +66,7 @@ private:
   void connectSource();
   void rebuild();
   QDate weekStart() const { return m_week; }
+  bool phone() const;               // narrower than 520 px: finger-sized filters, two-line rows
   QList<QRectF> countryRects() const;
   QRectF moreRect() const;
   QList<QRectF> impactRects() const;

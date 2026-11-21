@@ -41,7 +41,13 @@ public:
   QSize sizeHint() const override;
 protected:
   void paintEvent(QPaintEvent*) override;
+  void resizeEvent(QResizeEvent*) override;
 private:
+  bool phone() const;                    // < 520 px: two-line rows
+  int headH() const;
+  int rowH() const;
+  void relayout();                       // height from the groups and the row pitch
+  void paintPhone(QPainter& p, const QRect& clip);
   QList<QPair<banks::AssetClass, QList<banks::Call>>> m_groups;
   int m_height = 200;
 };

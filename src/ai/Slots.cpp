@@ -26,6 +26,12 @@ Slots& Slots::instance() { static Slots* s = new Slots; return *s; }
 Slots::Slots() {
   m_slots.resize(kCount);
   m_skills.resize(kCount);
+  m_asOf.resize(kCount);
+  m_blind.resize(kCount);
+  const QStringList bl = settings::value("ai.blind").toStringList();
+  for (int i = 0; i < kCount && i < bl.size(); ++i) m_blind[i] = bl[i].toUInt();
+  const QStringList ao = settings::value("ai.asof").toStringList();
+  for (int i = 0; i < kCount && i < ao.size(); ++i) m_asOf[i] = qMax<qint64>(0, ao[i].toLongLong());
   const QStringList sk = settings::value("ai.skills").toStringList();
   for (int i = 0; i < kCount && i < sk.size(); ++i) m_skills[i] = sk[i].split(',', Qt::SkipEmptyParts);
   const QStringList saved = settings::value("ai.slots").toStringList();
@@ -92,6 +98,26 @@ void Slots::setSkill(int i, const QString& id, bool on) {
   for (const auto& k : m_skills) l << k.join(',');
   settings::setValue("ai.skills", l);
   emit skillsChanged(i);
+}
+
+void Slots::setAsOf(int i, qint64 secs) {
+  if (i < 0 || i >= kCount) return;
+  secs = qMax<qint64>(0, secs);
+  if (m_asOf[i] == secs) return;
+  m_asOf[i] = secs;
+  QStringList l;
+  for (qint64 v : m_asOf) l << (v > 0 ? QString::number(v) : QString());
+  settings::setValue("ai.asof", l);
+  emit asOfChanged(i);
+}
+
+void Slots::setBlind(int i, quint32 seed) {
+  if (i < 0 || i >= kCount || m_blind[i] == seed) return;
+  m_blind[i] = seed;
+  QStringList l;
+  for (quint32 v : m_blind) l << (v ? QString::number(v) : QString());
+  settings::setValue("ai.blind", l);
+  emit asOfChanged(i);   // what the model sees changes as with the clock: a fresh context (Engine::syncClock)
 }
 
 qint64 Slots::memoryTotal() const {

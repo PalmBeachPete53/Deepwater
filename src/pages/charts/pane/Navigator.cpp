@@ -51,20 +51,19 @@ nav::ZoomMap Navigator::zoomMap() const {
   m.full = domain().width();
   m.minPx = kMinWindowPx;
   m.linearPx = kLinearPx;
-  if (chart_) {   // the chart's deepest zoom: its widest bar spacing (0 = half the plot), as visible bars
+  if (chart_) {   // the chart's deepest zoom as visible bars: minVisibleBars, else its widest bar spacing (0 = half the plot)
     const auto* ts = chart_->timeScale();
-    const double w = ts->width(), maxSp = ts->options().maxBarSpacing > 0 ? ts->options().maxBarSpacing : 0.5 * w;
-    if (w > 0 && maxSp > 0) m.minBars = std::max(1.0, w / maxSp);
+    const auto& o = ts->options();
+    const double w = ts->width(), maxSp = o.maxBarSpacing > 0 ? o.maxBarSpacing : 0.5 * w;
+    if (o.minVisibleBars > 0) m.minBars = o.minVisibleBars;
+    else if (w > 0 && maxSp > 0) m.minBars = std::max(1.0, w / maxSp);
   }
   return m;
 }
 
-Span Navigator::display() {
-  if (drag_) return dragShown_;
-  const Span full = domain();
+nav::Win Navigator::window() const {
   const auto v = view();
-  disp_ = v ? nav::shownSpan(disp_, full, *v, zoomMap()) : full;
-  return *disp_;
+  return v ? nav::windowOf(*v, domain(), zoomMap()) : nav::Win{0, 0};
 }
 
 std::optional<Span> Navigator::view() const {
@@ -149,6 +148,7 @@ void Navigator::rebuildCurve(bool force, const Span& dom) {
   }
   const auto& v = style::v();
   QPainter p(&curvePix_);
+  p.scale(1.0 / dpr, 1.0 / dpr);   // the path is in device pixels; a painter on a pixmap with a ratio works in logical ones
   p.setRenderHint(QPainter::Antialiasing);
   QPainterPath area = line;
   area.lineTo(lastX + 0.5, H);
@@ -169,42 +169,16 @@ void Navigator::paintEvent(QPaintEvent*) {
   const QRectF r = rect();
   p.fillRect(r, v.bg);
   p.fillRect(QRectF(0, 0, width(), 1), v.border);
-  const Span all = domain();
-  const Span dom = display();
+  const Span dom = domain();   // always the whole history: the mini curve never zooms (user's rule 2026-11-20)
   // a new theme, span or size redraws in any case; new data only when it shows (see rebuildCurve)
   const bool force = curveFull_ || curveRev_ != style::revision() || !(curveDom_ == dom) ||
                      curvePix_.size() != QSize(int(std::ceil(width() * devicePixelRatioF())), int(std::ceil(height() * devicePixelRatioF())));
   if (force || curveDirty_) rebuildCurve(force, dom);
   p.drawPixmap(0, 0, curvePix_);
-  // more history beyond a side (the navigator zoomed in): a fade and a small chevron on that side
-  {
-    QColor fade = v.backdrop;
-    fade.setAlphaF(v.light ? 0.18 : 0.45);
-    QColor clear = fade;
-    clear.setAlphaF(0);
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing);
-    QColor mark = v.muted;
-    auto side = [&](bool left) {
-      const double w = 14, x0 = left ? 0 : width() - w;
-      QLinearGradient g(QPointF(left ? 0 : width(), 0), QPointF(left ? w : width() - w, 0));
-      g.setColorAt(0, fade);
-      g.setColorAt(1, clear);
-      p.fillRect(QRectF(x0, 1, w, height() - 1), g);
-      const double cx = left ? 5 : width() - 5, cy = height() / 2.0, d = left ? 1 : -1;
-      p.setPen(QPen(mark, 1.3));
-      p.drawLine(QPointF(cx + 2 * d, cy - 4), QPointF(cx - 1.5 * d, cy));
-      p.drawLine(QPointF(cx - 1.5 * d, cy), QPointF(cx + 2 * d, cy + 4));
-    };
-    if (dom.a > all.a + 1e-9) side(true);
-    if (dom.b < all.b - 1e-9) side(false);
-    p.restore();
-  }
-  const auto full = view();
-  const auto win = full ? nav::clip(*full, dom) : std::nullopt;
-  if (!win) return;
+  if (!view()) return;
+  const nav::Win w = window();
   const double W = width();
-  const double xa = std::round(nav::toPx(win->a, dom, W)), xb = std::round(nav::toPx(win->b, dom, W));
+  const double xa = std::round(w.x), xb = std::round(w.right());
   // outside the window: slightly darker
   QColor shade = v.backdrop;
   shade.setAlphaF(v.light ? 0.10 : 0.32);
@@ -246,17 +220,15 @@ void Navigator::resizeEvent(QResizeEvent* e) {
 // ---------- mouse (Qt grabs the mouse for the pressed widget: a drag goes on outside the navigator) ----------
 void Navigator::mousePressEvent(QMouseEvent* e) {
   if (e->button() != Qt::LeftButton) return QWidget::mousePressEvent(e);
-  const Span dom = display();
   const auto full = view();
-  const auto win = full ? nav::clip(*full, dom) : std::nullopt;
-  if (!win) return;
+  if (!full) return;
   const double x = e->position().x();
-  const Part part = nav::hit(*win, dom, width(), x);
+  const nav::Win w = window();
+  const Part part = nav::hit(w.x, w.right(), x);
   if (part == Part::None) return;
-  drag_.emplace(part, *full, dom, domain(), zoomMap(), x);
-  const nav::Gesture::Step st = drag_->atPress();
-  dragShown_ = st.shown;
-  if (part == Part::Outside || !(st.view == *full)) apply(st.view);
+  drag_.emplace(part, *full, domain(), zoomMap(), x);
+  const Span st = drag_->atPress();
+  if (part == Part::Outside || !(st == *full)) apply(st);
   updateCursor();
   update();
   e->accept();
@@ -264,27 +236,17 @@ void Navigator::mousePressEvent(QMouseEvent* e) {
 
 void Navigator::mouseMoveEvent(QMouseEvent* e) {
   const double x = e->position().x();
-  if (drag_) {
-    const nav::Gesture::Step st = drag_->move(x);
-    dragShown_ = st.shown;
-    apply(st.view);
-    return;
-  }
-  const Span dom = display();
-  const auto full = view();
-  const auto win = full ? nav::clip(*full, dom) : std::nullopt;
-  setHover(win ? nav::hit(*win, dom, width(), x) : Part::None);
+  if (drag_) { apply(drag_->move(x)); return; }
+  const nav::Win w = window();
+  setHover(view() ? nav::hit(w.x, w.right(), x) : Part::None);
 }
 
 void Navigator::mouseReleaseEvent(QMouseEvent* e) {
   if (e->button() != Qt::LeftButton || !drag_) return QWidget::mouseReleaseEvent(e);
-  disp_ = dragShown_;   // kept if it still fits the view (shownSpan), else placed inside the data again
   drag_.reset();
-  const Span dom = display();   // recomputed now the gesture is over (it may have moved the view near an edge)
-  const auto full = view();
-  const auto win = full ? nav::clip(*full, dom) : std::nullopt;
+  const nav::Win w = window();
   hover_ = Part::None;
-  setHover(win && rect().contains(e->position().toPoint()) ? nav::hit(*win, dom, width(), e->position().x()) : Part::None);
+  setHover(view() && rect().contains(e->position().toPoint()) ? nav::hit(w.x, w.right(), e->position().x()) : Part::None);
   updateCursor();
   update();
 }

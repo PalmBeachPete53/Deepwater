@@ -90,14 +90,20 @@ CategoryPills::CategoryPills(QWidget* parent) : QWidget(parent) { setMouseTracki
 void CategoryPills::setItems(const QStringList& l, const QList<int>& c) { m_labels = l; m_counts = c; updateGeometry(); update(); }
 void CategoryPills::setCurrent(int i) { if (i != m_cur) { m_cur = i; update(); } }
 QList<QRectF> CategoryPills::rects() const {
-  QList<QRectF> out; qreal x = 0;
+  QList<QRectF> out; qreal x = 0, y = 0;
+  const qreal h = m_wrapW > 0 ? 34 : 28;
   for (int i = 0; i < m_labels.size(); ++i) {
     const qreal w = 11 + adv(pillFont(), m_labels[i]) + 7 + adv(badgeFont(), QString::number(m_counts.value(i))) + 8 + 9;
-    out << QRectF(x, 0, w, 28); x += w + 8;
+    if (m_wrapW > 0 && x > 0 && x + w > m_wrapW) { x = 0; y += h + 8; }   // phone: next row
+    out << QRectF(x, y, w, h); x += w + 8;
   }
   return out;
 }
-QSize CategoryPills::sizeHint() const { const auto r = rects(); return QSize(r.isEmpty() ? 0 : int(r.last().right()) + 1, 28); }
+QSize CategoryPills::sizeHint() const {
+  const auto r = rects();
+  if (m_wrapW > 0) return QSize(m_wrapW, r.isEmpty() ? 34 : int(r.last().bottom()) + 1);
+  return QSize(r.isEmpty() ? 0 : int(r.last().right()) + 1, 28);
+}
 void CategoryPills::paintEvent(QPaintEvent*) {
   QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
   const auto rs = rects();
@@ -138,10 +144,13 @@ void Segmented::setCurrent(int i) { if (i != m_cur) { m_cur = i; update(); } }
 qreal Segmented::labelWidth() const { return adv(segLabelFont(), m_label) + 10; }
 QList<QRectF> Segmented::rects() const {
   QList<QRectF> out; qreal x = labelWidth() + 4;
-  for (const auto& s : m_items) { const qreal w = adv(segFont(), s) + 18; out << QRectF(x, 3, w, 18); x += w + 2; }
+  for (const auto& s : m_items) {
+    const qreal w = adv(segFont(), s) + (m_tall ? 26 : 18);
+    out << QRectF(x, 3, w, m_tall ? 30 : 18); x += w + 2;
+  }
   return out;
 }
-QSize Segmented::sizeHint() const { const auto r = rects(); return QSize(int(r.last().right()) + 5, 24); }
+QSize Segmented::sizeHint() const { const auto r = rects(); return QSize(int(r.last().right()) + 5, m_tall ? 36 : 24); }
 void Segmented::paintEvent(QPaintEvent*) {
   QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
   p.setFont(segLabelFont()); p.setPen(label());
@@ -227,12 +236,14 @@ void StatCard::paintEvent(QPaintEvent*) {
     }
     case Leader: case Laggard: {
       QFont f = theme::mono(22, QFont::Bold); p.setFont(f); p.setPen(theme::map(QColor(0xf0, 0xf0, 0xee)));
-      QString s = m_sym; const qreal maxw = width() - 120;
+      QString s = m_sym;
+      const qreal maxw = m_phone ? width() - 22 - 7 - adv(theme::mono(13, QFont::Medium), fmt::pct(m_pct)) : width() - 120;
       s = QFontMetricsF(f).elidedText(s, Qt::ElideRight, maxw);
       p.drawText(QPointF(11, 49), s);
       p.setFont(theme::mono(13, QFont::Medium)); p.setPen(sign(m_pct));
       p.drawText(QPointF(11 + adv(f, s) + 7, 49), fmt::pct(m_pct));
-      p.setFont(theme::mono(10)); p.setPen(dimc); p.drawText(QPointF(11, 67), m_name);
+      p.setFont(theme::mono(10)); p.setPen(dimc);
+      p.drawText(QPointF(11, 67), m_phone ? QFontMetricsF(theme::mono(10)).elidedText(m_name, Qt::ElideRight, width() - 20) : m_name);
       break;
     }
   }

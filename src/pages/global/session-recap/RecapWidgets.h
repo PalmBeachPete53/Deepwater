@@ -16,12 +16,15 @@ public:
   void setContentHeight(int h);
   int contentHeight() const { return m_h; }
   int offset() const;
+  // phone page: a box shown whole (nothing to scroll) hands the wheel to the page's scroll instead of eating it
+  void setPassWheel(bool on) { m_passWheel = on; }
 protected:
   void wheelEvent(QWheelEvent*) override;
   void resizeEvent(QResizeEvent*) override;
 private:
   QVariantAnimation* m_anim;
   int m_target = 0, m_h = 0;
+  bool m_passWheel = false;
 };
 
 // Left column list: day groups of sessions (or weeks) with their top mover.

@@ -18,7 +18,12 @@ public:
   explicit CotPage(QWidget* parent = nullptr);
 protected:
   void showEvent(QShowEvent*) override;
+  void resizeEvent(QResizeEvent*) override;
 private:
+  // Phones (upright, or sideways: page under 420 px tall): the title row and the market buttons move into the
+  // scrolling content, so the panels get the whole screen; upright (< 520 px) they wrap onto several rows.
+  void setPhoneMode(bool on);
+  bool m_phone = false;
   void setAssetClass(const QString& cls, bool keepMarket = false);
   void selectMarket(const QString& id);
   void loadPrice();

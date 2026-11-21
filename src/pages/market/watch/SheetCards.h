@@ -144,12 +144,14 @@ class TechTilesCard : public SheetCard {
 public:
   explicit TechTilesCard(QWidget* parent = nullptr);
   void setTiles(const QVector<Tile>& t);
+  void setColumns(int n) { if (n != m_cols) { m_cols = n; update(); } }   // phones: tiles on rows of n (0 = one row)
 protected:
   void paintBody(QPainter&, const QRectF&) override;
   bool event(QEvent*) override;
 private:
   QRectF tileRect(int i) const;
   QVector<Tile> m_tiles;
+  int m_cols = 0;
 };
 
 class IndexPerfCard : public SheetCard {

@@ -10,6 +10,7 @@
 #include "market/QuoteHub.h"
 #include "ui/Format.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QRadialGradient>
 #include <QScrollArea>
@@ -289,6 +290,11 @@ static int columnsFor(int W) {
 }
 
 void WatchPage::layoutBoard() {
+  const bool phone = ui::compact(m_scroll->viewport()->width());
+  m_pills->setWrap(phone ? m_scroll->viewport()->width() - 24 : 0);
+  m_period->setTall(phone); m_order->setTall(phone);
+  for (auto* c : m_cards) c->setPhone(phone);
+  if (phone) { layoutPhone(m_scroll->viewport()->width()); return; }
   const int W = std::max(600, m_scroll->viewport()->width());
   // short windows (1024x600, 1280x720): a one-line title and a thinner search box, so the lists start ~85 px higher
   const bool cpt = m_scroll->viewport()->height() < 700;
@@ -355,6 +361,32 @@ void WatchPage::layoutBoard() {
     bottom = top + p->heightFor();
   }
   m_board->resize(W, bottom + 24);
+}
+
+// Phone held upright: the board is the viewport's width (no sideways scroll), one-line title, full-width search,
+// pills on several rows, the four cards 2 x 2, the two segmented controls on their own rows, then the category
+// panels one under the other (a chosen category shows its single panel).
+void WatchPage::layoutPhone(int W) {
+  const int m = 12, gap = 10;
+  m_hero->setCompact(true);
+  m_hero->setGeometry(0, 0, W, HeroHeader::heightFor(true));
+  int y = HeroHeader::heightFor(true) + 8;
+  m_search->setGeometry(m, y, W - 2 * m, 44); y += 44 + gap;
+  const int ph = m_pills->sizeHint().height();
+  m_pills->setGeometry(m, y, W - 2 * m, ph); y += ph + gap + 2;
+  const int cw = (W - 2 * m - 8) / 2;
+  for (int i = 0; i < 4; ++i) m_cards[i]->setGeometry(m + (i % 2) * (cw + 8), y + (i / 2) * (81 + 8), i % 2 ? W - 2 * m - cw - 8 : cw, 81);
+  y += 2 * 81 + 8 + gap + 2;
+  m_period->setGeometry(m, y, std::min(W - 2 * m, m_period->sizeHint().width()), 36); y += 36 + 8;
+  m_order->setGeometry(m, y, std::min(W - 2 * m, m_order->sizeHint().width()), 36); y += 36 + gap + 2;
+  for (int k = 0; k < m_panels.size(); ++k) {
+    auto* p = m_panels[k];
+    if (m_cat != 0 && m_cat != k + 1) continue;
+    p->setColumns(1);
+    p->setGeometry(m, y, W - 2 * m, p->heightFor());
+    y += p->heightFor() + gap;
+  }
+  m_board->resize(W, y + 14);
 }
 
 bool WatchPage::eventFilter(QObject* o, QEvent* e) {

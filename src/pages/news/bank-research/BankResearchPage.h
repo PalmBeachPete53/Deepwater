@@ -36,12 +36,16 @@ private:
   void closeNote();
   void selectBank(const QString& bankId);
   void applyTestHooks();
+  void layoutPhone(int W, int H);
+  void reparent(QWidget* w, QWidget* parent);
   Strip* m_strip;
   LeftColumn* m_left;
   RegistryColumn* m_right;
   QWidget* m_centre;
   GlobeView* m_globe;
   PdfPanel* m_pdf;
+  QScrollArea* m_page = nullptr;   // phones only (made on the first compact layout): one scrolling column
+  QWidget* m_body = nullptr;
   QTimer m_blink;
   QElapsedTimer m_blinkClock;   // since the page was shown
   qint64 m_nextBlink = 500;     // when the cursors toggle next (ms on m_blinkClock)

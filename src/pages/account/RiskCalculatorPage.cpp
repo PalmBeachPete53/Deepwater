@@ -9,6 +9,9 @@
 #include "app/Pages.h"
 #include "ui/Format.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
+#include <QScroller>
+#include <QScrollPrepareEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QLineEdit>
@@ -141,7 +144,7 @@ InstrumentPicker::InstrumentPicker(QWidget* parent) : QWidget(parent) {
   m_list->setHoverable(true);
   m_list->installEventFilter(this);
   m_list->setPaint([this](QPainter& p, const QRectF& r, const QPointF& mouse, double) {
-    const double pitch = 25.5;
+    const double pitch = this->pitch();
     p.setClipRect(r);
     const int first = std::max(0, int(m_scroll / pitch));
     for (int i = first; i < m_items.size(); ++i) {
@@ -161,7 +164,7 @@ InstrumentPicker::InstrumentPicker(QWidget* parent) : QWidget(parent) {
     }
   });
   connect(m_list, &PaintPanel::clicked, this, [this](const QPointF& pt) {
-    const int i = int((pt.y() + m_scroll) / 25.5);
+    const int i = int((pt.y() + m_scroll) / pitch());
     if (i < 0 || i >= m_items.size()) return;
     m_symbol = m_items[i].symbol;
     setOpen(false);
@@ -175,7 +178,29 @@ InstrumentPicker::InstrumentPicker(QWidget* parent) : QWidget(parent) {
     p.fillRect(QRectF(0, 0, 9, 2), theme::map("#857f67")); p.fillRect(QRectF(0, 0, 2, 9), theme::map("#857f67"));
   });
   m_search->hide(); m_list->hide(); m_corner->hide();
+  // a finger drags the list (QScroller: kinetic, a tap still picks the row); the mouse keeps the wheel
+  if (ui::touch::enabled()) {
+#ifdef Q_OS_IOS
+    QScroller::grabGesture(m_list, QScroller::TouchGesture);
+#else
+    QScroller::grabGesture(m_list, QScroller::LeftMouseButtonGesture);
+#endif
+    QScrollerProperties sp = QScroller::scroller(m_list)->scrollerProperties();
+    sp.setScrollMetric(QScrollerProperties::HorizontalOvershootPolicy, QScrollerProperties::OvershootAlwaysOff);
+    sp.setScrollMetric(QScrollerProperties::VerticalOvershootPolicy, QScrollerProperties::OvershootAlwaysOff);
+    sp.setScrollMetric(QScrollerProperties::DragStartDistance, 0.004);
+    QScroller::scroller(m_list)->setScrollerProperties(sp);
+  }
   refilter();
+}
+
+double InstrumentPicker::maxScroll() const { return std::max(0.0, m_items.size() * pitch() - m_list->height()); }
+void InstrumentPicker::setCompact(bool on) {
+  if (on == m_compact) return;
+  m_compact = on;
+  m_scroll = 0;
+  resizeEvent(nullptr);
+  update();
 }
 
 void InstrumentPicker::refilter() {
@@ -188,7 +213,7 @@ void InstrumentPicker::refilter() {
 }
 void InstrumentPicker::setSymbol(const QString& s) { m_symbol = s; update(); m_list->update(); }
 void InstrumentPicker::setListHeight(int h) { m_listH = std::max(90, h); }
-int InstrumentPicker::preferredHeight() const { return m_open ? 31 + 2 + m_listH : 31; }
+int InstrumentPicker::preferredHeight() const { return m_open ? comboH() + 2 + m_listH : comboH(); }
 void InstrumentPicker::setOpen(bool on) {
   if (on == m_open) return;
   m_open = on;
@@ -196,7 +221,7 @@ void InstrumentPicker::setOpen(bool on) {
   if (on) {
     m_search->clear(); refilter();
     int idx = 0; for (int i = 0; i < m_items.size(); ++i) if (m_items[i].symbol == m_symbol) idx = i;
-    m_scroll = std::max(0.0, idx * 25.5 - 25.5 * 3);
+    m_scroll = std::max(0.0, idx * pitch() - pitch() * 3);
     if (idx < 7) m_scroll = 0;
     m_search->setFocus();
   }
@@ -204,14 +229,29 @@ void InstrumentPicker::setOpen(bool on) {
   emit openChanged(on);
 }
 void InstrumentPicker::resizeEvent(QResizeEvent*) {
-  m_search->setGeometry(6, 31 + 2 + 7, width() - 12, 25);
-  m_list->setGeometry(6, 31 + 2 + 35, width() - 12, std::max(0, height() - (31 + 2 + 35) - 6));
+  const int listTop = comboH() + 2 + 7 + searchH() + 3;   // 68 at the desktop sizes
+  m_search->setGeometry(6, comboH() + 2 + 7, width() - 12, searchH());
+  m_list->setGeometry(6, listTop, width() - 12, std::max(0, height() - listTop - 6));
+  m_corner->move(6, comboH() + 9);
 }
 bool InstrumentPicker::eventFilter(QObject* o, QEvent* e) {
+  if (o == m_list && e->type() == QEvent::ScrollPrepare) {   // finger drag (QScroller)
+    auto* se = static_cast<QScrollPrepareEvent*>(e);
+    se->setViewportSize(QSizeF(m_list->size()));
+    se->setContentPosRange(QRectF(0, 0, 0, maxScroll()));
+    se->setContentPos(QPointF(0, m_scroll));
+    se->accept();
+    return true;
+  }
+  if (o == m_list && e->type() == QEvent::Scroll) {
+    m_scroll = std::clamp(static_cast<QScrollEvent*>(e)->contentPos().y(), 0.0, maxScroll());
+    m_list->update();
+    return true;
+  }
   if (o == m_list && e->type() == QEvent::Wheel) {
     auto* we = static_cast<QWheelEvent*>(e);
-    const double maxS = std::max(0.0, m_items.size() * 25.5 - m_list->height());
-    const double d = !we->pixelDelta().isNull() ? we->pixelDelta().y() : we->angleDelta().y() / 120.0 * 25.5 * 2;
+    const double maxS = maxScroll();
+    const double d = !we->pixelDelta().isNull() ? we->pixelDelta().y() : we->angleDelta().y() / 120.0 * pitch() * 2;
     m_scroll = std::clamp(m_scroll - d, 0.0, maxS);
     m_list->update();
     return true;
@@ -228,17 +268,17 @@ bool InstrumentPicker::eventFilter(QObject* o, QEvent* e) {
 void InstrumentPicker::paintEvent(QPaintEvent*) {
   QPainter p(this);
   p.setRenderHint(QPainter::Antialiasing);
-  const QRectF combo(0.5, 0.5, width() - 1, 30);
+  const QRectF combo(0.5, 0.5, width() - 1, comboH() - 1);
   p.setPen(theme::map("#1b170d")); p.setBrush(theme::map("#060502"));
   p.drawRoundedRect(combo, 2, 2);
   p.setFont(theme::condensed(14, QFont::Medium)); p.setPen(theme::map("#ece8de"));
   p.drawText(combo.adjusted(9, 0, -30, 0), Qt::AlignVCenter | Qt::AlignLeft, account::displaySymbol(m_symbol));
   QPen pen(theme::map("#ece8de"), 1.2); pen.setCapStyle(Qt::RoundCap); p.setPen(pen);
-  const QPointF ch(width() - 15, 15.5);
+  const QPointF ch(width() - 15, comboH() / 2.0);
   const qreal d = m_open ? -1 : 1;
   p.drawPolyline(QPolygonF{ch + QPointF(-3, -1.5 * d), ch + QPointF(0, 1.5 * d), ch + QPointF(3, -1.5 * d)});
   if (m_open) {
-    const QRectF box(0.5, 33.5, width() - 1, height() - 34);
+    const QRectF box(0.5, comboH() + 2.5, width() - 1, height() - comboH() - 3);
     p.setPen(theme::map("#4a4224")); p.setBrush(theme::map("#060502"));
     p.drawRect(box);
     p.setRenderHint(QPainter::Antialiasing, false);
@@ -247,7 +287,7 @@ void InstrumentPicker::paintEvent(QPaintEvent*) {
     p.drawLine(br, br - QPointF(8, 0)); p.drawLine(br + QPointF(0, 1), br - QPointF(0, 8));
   }
 }
-void InstrumentPicker::mousePressEvent(QMouseEvent* e) { if (e->position().y() < 32) setOpen(!m_open); }
+void InstrumentPicker::mousePressEvent(QMouseEvent* e) { if (e->position().y() < comboH() + 1) setOpen(!m_open); }
 
 // ================================================================ page
 RiskCalculatorPage::RiskCalculatorPage(QWidget* parent) : QWidget(parent) {
@@ -274,7 +314,8 @@ RiskCalculatorPage::RiskCalculatorPage(QWidget* parent) : QWidget(parent) {
   m_toggle->setPaint([this](QPainter& p, const QRectF& r, const QPointF& mouse, double) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(theme::map("#2a2618")); p.setBrush(Qt::NoBrush); p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
-    const QRectF a(3, 2.5, 21, r.height() - 5), b(24, 2.5, 21, r.height() - 5);
+    const qreal hw = std::floor((r.width() - 5) / 2);   // 21 px halves at the desktop 47 px, wider on phones
+    const QRectF a(3, 2.5, hw, r.height() - 5), b(3 + hw, 2.5, hw, r.height() - 5);
     const QRectF on = m_cash ? b : a, off = m_cash ? a : b;
     // after a click the active button glows (focus), as in the reference from t14
     if (m_toggle->hasFocus()) for (int k = 4; k >= 1; --k) {
@@ -290,7 +331,7 @@ RiskCalculatorPage::RiskCalculatorPage(QWidget* parent) : QWidget(parent) {
   });
   connect(qApp, &QApplication::focusChanged, m_toggle, [this] { m_toggle->update(); });
   connect(m_toggle, &PaintPanel::clicked, this, [this](const QPointF& pt) {
-    const bool cash = pt.x() >= 24;
+    const bool cash = pt.x() >= 3 + std::floor((m_toggle->width() - 5) / 2.0);
     if (cash == m_cash) return;
     m_cash = cash; settings::setValue("account.risk.unit", cash ? "cash" : "pct");
     m_toggle->update(); compute();
@@ -325,8 +366,11 @@ RiskCalculatorPage::RiskCalculatorPage(QWidget* parent) : QWidget(parent) {
     const qreal step = r.width() * 0.328;
     const QStringList labels{QCoreApplication::translate("account", "LOT SIZE"), QCoreApplication::translate("account", "POSITION SIZE"),
                              QCoreApplication::translate("account", "STOP DISTANCE")};
+    // three columns; phones: the lot size alone on top, position size and stop distance side by side under it
+    const qreal colX[3] = {14, m_phone ? 14 : 14 + step, m_phone ? 14 + r.width() / 2 : 14 + 2 * step};
+    const qreal labelY[3] = {52, m_phone ? 152.0 : 52, m_phone ? 152.0 : 52}, valueY = m_phone ? 184 : 86;
     p.setFont(mono(9, false, 2.8)); p.setPen(c().faint);
-    for (int i = 0; i < 3; ++i) p.drawText(QPointF(14 + i * step, 52), labels[i]);
+    for (int i = 0; i < 3; ++i) p.drawText(QPointF(colX[i], labelY[i]), labels[i]);
     p.setRenderHint(QPainter::Antialiasing);
     // lot size, big yellow with glow
     const QString lots = m_c.ok ? fmt::num(m_c.lots, 2) : fmt::dash();
@@ -347,11 +391,11 @@ RiskCalculatorPage::RiskCalculatorPage(QWidget* parent) : QWidget(parent) {
     const QFont fv = mono(24, true);
     p.setFont(fv); p.setPen(c().white);
     const QString units = m_c.ok ? fmt::num(m_c.units, m_c.units < 100 ? 2 : 0) : fmt::dash();
-    p.drawText(QPointF(14 + step, 86), units);
+    p.drawText(QPointF(colX[1], valueY), units);
     p.setFont(cond(15, false)); p.setPen(c().dim);
-    p.drawText(QPointF(14 + step + QFontMetricsF(fv).horizontalAdvance(units) + 8, 86), unitLabel(sp.unit));
+    p.drawText(QPointF(colX[1] + QFontMetricsF(fv).horizontalAdvance(units) + 8, valueY), unitLabel(sp.unit));
     p.setFont(fv); p.setPen(c().white);
-    p.drawText(QPointF(14 + 2 * step, 86), std::isfinite(m_c.stopDist) ? fmt::num(m_c.stopDist, sp.decimals, false) : fmt::dash());
+    p.drawText(QPointF(colX[2], valueY), std::isfinite(m_c.stopDist) ? fmt::num(m_c.stopDist, sp.decimals, false) : fmt::dash());
     // direction badge
     if (std::isfinite(m_c.stopDist) && m_c.stopDist > 0) {
       const QRectF b(r.width() - 15 - 50, 16, 50, 18);
@@ -433,7 +477,8 @@ RiskCalculatorPage::RiskCalculatorPage(QWidget* parent) : QWidget(parent) {
     p.setFont(cond(12, true)); p.setPen(vc);
     p.drawText(QRectF(0, cy - 8 * k - 2, r.width(), 18), Qt::AlignCenter, verdict);
     // scale 1:0 … 1:4
-    const QRectF bar(cx - 237 * std::max(1.0, k), cy + 26 * k, 474 * std::max(1.0, k), 6);
+    const qreal barW = m_phone ? r.width() - 60 : 474 * std::max(1.0, k);   // phones: the scale fits the panel
+    const QRectF bar(cx - barW / 2, cy + 26 * k, barW, 6);
     p.setPen(Qt::NoPen); p.setBrush(theme::map("#151006")); p.drawRoundedRect(bar, 3, 3);
     if (has) { p.setBrush(theme::map("#f8d61a")); p.drawRoundedRect(QRectF(bar.left(), bar.top(), bar.width() * std::min(m_c.rr, 4.0) / 4.0, 6), 3, 3); }
     p.fillRect(QRectF(bar.left() + bar.width() / 4 - 0.5, bar.top(), 1.5, 6), theme::map("#151006"));
@@ -448,8 +493,17 @@ RiskCalculatorPage::RiskCalculatorPage(QWidget* parent) : QWidget(parent) {
                         has ? trimNum(m_c.reward, 2) : fmt::dash()};
     const QList<QColor> C{c().white, theme::map("#f07070"), theme::map("#41cee9")};
     for (int i = 0; i < 3; ++i) {
-      const qreal x = cx + (i - 1) * 161 * std::max(1.0, k);
       p.setFont(mono(9, false, 2.8)); p.setPen(c().faint);
+      if (m_phone) {
+        // phones: three equal columns, the labels may wrap on two lines above their values
+        const qreal cw = (r.width() - 12) / 3, x = 6 + i * cw;
+        p.setFont(mono(9, false, 1.2));
+        p.drawText(QRectF(x + 2, cy + 70 * k - 2, cw - 4, 28), Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, L[i]);
+        p.setFont(mono(15)); p.setPen(C[i]);
+        p.drawText(QRectF(x, cy + 70 * k + 28, cw, 22), Qt::AlignCenter, V[i]);
+        continue;
+      }
+      const qreal x = cx + (i - 1) * 161 * std::max(1.0, k);
       p.drawText(QRectF(x - 120, cy + 70 * k, 240, 14), Qt::AlignCenter, L[i]);
       p.setFont(mono(15)); p.setPen(C[i]);
       p.drawText(QRectF(x - 120, cy + 85 * k, 240, 22), Qt::AlignCenter, V[i]);
@@ -482,13 +536,16 @@ RiskCalculatorPage::RiskCalculatorPage(QWidget* parent) : QWidget(parent) {
   m_risk->setText(settings::value("account.risk.risk", "1").toString());
   setInstrument(settings::value("account.risk.instrument", "EURUSD").toString(), true);
 
-  // test hooks: DW_RC_OPEN=1 opens the list, DW_RC_UNIT=cash|pct, DW_RC_LEVELS=entry,stop,tp fixes the levels
+  // test hooks: DW_RC_OPEN=1 opens the list, DW_RC_UNIT=cash|pct, DW_RC_LEVELS=entry,stop,tp fixes the levels,
+  //             DW_RC_SCROLL=<px> scrolls the desk (phone captures)
   if (qEnvironmentVariableIsSet("DW_RC_UNIT")) m_cash = qEnvironmentVariable("DW_RC_UNIT") == "cash";
   if (qEnvironmentVariableIsSet("DW_RC_LEVELS")) {
     const auto l = qEnvironmentVariable("DW_RC_LEVELS").split(',');
     if (l.size() == 3) { m_entry->setText(l[0]); m_stop->setText(l[1]); m_tp->setText(l[2]); m_levelsTouched = true; m_prefilled = true; }
   }
   if (qEnvironmentVariable("DW_RC_OPEN") == "1") m_picker->setOpen(true);
+  if (qEnvironmentVariableIsSet("DW_RC_SCROLL"))
+    QTimer::singleShot(900, this, [this] { m_scroll->scrollTo(qEnvironmentVariable("DW_RC_SCROLL").toInt(), false); });
   installTestHooks(this);
   compute();
 
@@ -590,7 +647,9 @@ void RiskCalculatorPage::compute() {
   }
   if (c0.hasTp && c0.tpWrong) err << QCoreApplication::translate("account", "The take profit is on the stop's side of the entry.");
   c0.error = err.join("\n");
+  const bool errorChanged = c0.error != m_c.error;
   m_c = c0;
+  if (m_phone && errorChanged) layoutPage();   // phones: the form panel is as tall as its error text
   for (auto* w : {m_left, m_toggle, m_pos, m_riskCard, m_rewardCard, m_map, m_rr}) w->update();
   m_foot->update();
 }
@@ -600,6 +659,9 @@ void RiskCalculatorPage::layoutPage() {
   const int W = width();
   m_scroll->setGeometry(0, kTitleH, W, height() - kTitleH);
   const int VH = m_scroll->viewport()->height();
+  m_phone = ui::compact(W);
+  m_picker->setCompact(m_phone);
+  if (m_phone) { layoutPhone(); return; }
   // ultrawide: the desk is capped at 2400 px and centred (stretching the cards over 3000+ px leaves them
   // mostly empty with tiny values far apart)
   const int cw = std::min(W, 2400), ox = (W - cw) / 2;
@@ -645,6 +707,42 @@ void RiskCalculatorPage::layoutPage() {
   update();
 }
 
+// Phones: one column — the form, then position, risk, reward, trade map, ratio and the note, each the page width.
+void RiskCalculatorPage::layoutPhone() {
+  const int vw = m_scroll->viewport()->width();
+  const int x = 14, w = vw - 28, fx = 13, fw = w - 26;
+  m_picker->setListHeight(36 * 8 + 18);
+  const int pickerH = m_picker->preferredHeight();
+  int y = 56 + pickerH + 31;
+  const int yBalance = y; y += 38 + 31;
+  const int yRisk = y; y += 38 + 31;
+  const int yEntry = y; y += 38 + 31;
+  const int yStop = y; y += 38 + 30;
+  const int yTp = y;
+  int errH = 0;
+  if (!m_c.error.isEmpty())
+    errH = std::min(60, int(std::ceil(QFontMetricsF(cond(13, false)).boundingRect(QRectF(0, 0, w - 26, 200), Qt::TextWordWrap, m_c.error).height()))) + 14;
+  const int leftH = yTp + 39 + errH + 15;
+  m_left->setGeometry(x, 14, w, leftH);
+  m_picker->setGeometry(fx, 56, fw, pickerH);
+  m_balance->setGeometry(fx, yBalance, fw, 38);
+  m_risk->setGeometry(fx, yRisk, fw - 82, 38);
+  m_toggle->setGeometry(fx + fw - 77, yRisk + 1, 77, 37);   // two 36 px halves (finger)
+  m_entry->setGeometry(fx, yEntry, fw, 38);
+  m_stop->setGeometry(fx, yStop, fw, 38);
+  m_tp->setGeometry(fx, yTp, fw, 39);
+  int ry = 14 + leftH + 14;
+  m_pos->setGeometry(x, ry, w, 206); ry += 206 + 14;
+  m_riskCard->setGeometry(x, ry, w, 108); ry += 108 + 14;
+  m_rewardCard->setGeometry(x, ry, w, 108); ry += 108 + 14;
+  m_map->setGeometry(x, ry, w, 140); ry += 140 + 14;
+  m_rr->setGeometry(x, ry, w, 290); ry += 290 + 14;
+  const int footH = int(QFontMetricsF(cond(10, false)).boundingRect(QRectF(0, 0, w, 400), Qt::TextWordWrap, footText()).height()) + 2;
+  m_foot->setGeometry(x, ry, w, footH); ry += footH + 14;
+  m_content->setGeometry(0, 0, vw, ry);
+  update();
+}
+
 void RiskCalculatorPage::paintEvent(QPaintEvent*) {
   QPainter p(this);
   p.fillRect(rect(), c().page);
@@ -666,11 +764,15 @@ void RiskCalculatorPage::paintEvent(QPaintEvent*) {
   p.drawEllipse(QPointF(38, 17), 3, 3);
   const QFont tf = mono(10, false, 2.3);
   p.setFont(tf); p.setPen(c().faint);
-  const QString title = QCoreApplication::translate("account", "RISK CALCULATOR — POSITION SIZING DESK");
+  const bool phone = ui::compact(width());
+  QString title = QCoreApplication::translate("account", "RISK CALCULATOR — POSITION SIZING DESK");
+  // phones: no badge (the instrument is in the form just below), the title elided to the width
+  if (phone) title = QFontMetricsF(tf).elidedText(title, Qt::ElideRight, width() - 50 - 24);
   p.drawText(QPointF(50, 21), title);
   const qreal tw = QFontMetricsF(tf).horizontalAdvance(title);
   m_cursorX = int(50 + tw + 3);              // the title's width depends on the language
   if ((m_tick * 100 / 530) % 2 == 0) p.fillRect(QRectF(50 + tw + 3, 11, 7, 12), theme::map("#fbd911"));
+  if (phone) return;
   // badge
   const QString badge = QCoreApplication::translate("account", "• %1 · DETERMINISTIC MATH").arg(account::displaySymbol(m_picker->symbol()));
   const QFont bf = mono(9, true, 1.0);

@@ -6,6 +6,7 @@
 #include "global/PageScroll.h"
 #include "global/Sessions.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
@@ -30,7 +31,14 @@ protected:
     p.setClipRegion(e->region());
     p.setRenderHint(QPainter::Antialiasing);
     look::pageBackground(p, QRectF(rect()));
-    look::text(p, 14, disclaimerY, QCoreApplication::translate("global", kDisclaimer), theme::mono(8, QFont::Normal, 1.2), theme::map("#65655c"));
+    const QFont f = theme::mono(8, QFont::Normal, 1.2);
+    if (ui::compact(width())) {   // phone: the one-line disclaimer ran off the screen, it wraps
+      p.setFont(f); p.setPen(theme::map("#65655c"));
+      p.drawText(QRectF(14, disclaimerY - QFontMetricsF(f).ascent(), width() - 28, 60), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                 QCoreApplication::translate("global", kDisclaimer));
+      return;
+    }
+    look::text(p, 14, disclaimerY, QCoreApplication::translate("global", kDisclaimer), f, theme::map("#65655c"));
   }
 };
 
@@ -86,9 +94,25 @@ void MarketHoursPage::resizeEvent(QResizeEvent*) { m_scroll->setGeometry(0, 37, 
 //   Height: 966 = reference (566 px panels, empty band under the disclaimer). Shorter pages give the band up
 //   first, then the panels down to 400 px, then the page scrolls. Taller pages grow the panels and the cards
 //   (cards scale uniformly up to 1.25x).
+//   phone upright (ui::compact): one column, the clock (dial as wide as the screen), the timeline, the four cards
+//   (each the full width, at their reference size), then the disclaimer, wrapped; the page scrolls.
 int MarketHoursPage::layoutChildren(int W, int VH) {
   const int H = VH + 37;
   const int m = 14, top = 51 - 37, gap = 11, discH = 30;
+  if (ui::compact(W)) {
+    const int w = W - 2 * m;
+    int y = top;
+    const int clockH = qBound(420, w - 20 + 136, 640);   // dial scale (w - 20) / 430 fills the width (ClockPanel::geometryFor)
+    m_clock->setGeometry(m, y, w, clockH);
+    y += clockH + 10;
+    m_timeline->setGeometry(m, y, w, 370);   // rows + overlaps with two label lines (TimelinePanel's top clamp)
+    y += 370 + 10;
+    m_cardsTop = y + 37;
+    for (auto* c : m_cards) { c->setGeometry(m, y, w, 176); y += 176 + gap; }
+    m_canvas->disclaimerY = y + 6;
+    m_canvas->update();
+    return y + 6 + 50;
+  }
   const bool grid = W < 1300;
   const double cw = grid ? (W - 2 * m - gap + 1) / 2.0 : (W - 2 * m - 3 * gap + 1) / 4.0;
   const double cardScale = qBound(1.0, qMin(cw / 385.0, H / 966.0), 1.25);
@@ -132,12 +156,18 @@ void MarketHoursPage::paintEvent(QPaintEvent*) {
   p.setBrush(theme::map(QColor(252, 215, 0, 60))); p.drawEllipse(QPointF(40.5, 18), 4, 4);
   p.setBrush(theme::map("#c9a90c")); p.drawEllipse(QPointF(40.5, 18), 2.5, 2.5);
   const QFont tf = theme::mono(10, QFont::Normal, 2.4);
-  const qreal tw = look::text(p, 50, 21.5, QCoreApplication::translate("global", "MARKET HOURS — THE FOUR FX SESSIONS"), tf, theme::map("#6d6a61"));
-  if (look::cursorOn()) look::cursorBlock(p, 50 + tw, 12.5);
+  const QRect br = badgeRect();
+  // phone: the title overlapped the badge; with no room for it beside the badge it is left out (the header names
+  // the page)
+  if (!ui::compact(width()) || br.left() - 12 - 50 >= 120) {
+    const QString title = QCoreApplication::translate("global", "MARKET HOURS — THE FOUR FX SESSIONS");
+    const qreal tw = look::text(p, 50, 21.5, ui::compact(width()) ? QFontMetricsF(tf).elidedText(title, Qt::ElideRight, br.left() - 12 - 50) : title,
+                                tf, theme::map("#6d6a61"));
+    if (look::cursorOn()) look::cursorBlock(p, 50 + tw, 12.5);
+  }
 
   // badge: live sessions and the user's offset
   const QDateTime utc = global::nowUtc();
-  const QRect br = badgeRect();
   p.setPen(QPen(theme::map("#8a7e45"), 1)); p.setBrush(theme::map("#1e1803"));
   p.drawRoundedRect(QRectF(br).adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
   const QFont bf = theme::mono(9, QFont::Bold, 1);

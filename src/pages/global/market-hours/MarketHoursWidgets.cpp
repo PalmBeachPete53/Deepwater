@@ -384,16 +384,19 @@ void TimelinePanel::paintEvent(QPaintEvent*) {
   for (const auto& sn : ss) nameW = qMax(nameW, look::width(global::sessionName(sn).toUpper(), nf));
   QFont ovf = theme::mono(9, QFont::Normal, 2.5);
   const QString ovText = QCoreApplication::translate("global", "OVERLAPS");
-  const qreal x0 = qMin<qreal>(width() * 0.25, std::max({qMin<qreal>(159, width() * 0.15 + 20), 39 + nameW + 14, 11 + look::width(ovText, ovf) + 12}));
+  // phone (panel < 520 px): the names went under the bars' start; they move above their bar and the bars take the
+  // whole width (the OVERLAPS label likewise above its row)
+  const bool phone = width() < 520;
+  const qreal x0 = phone ? 11 : qMin<qreal>(width() * 0.25, std::max({qMin<qreal>(159, width() * 0.15 + 20), 39 + nameW + 14, 11 + look::width(ovText, ovf) + 12}));
   const qreal x1 = width() - 12;
-  if (11 + look::width(ovText, ovf) + 8 > x0) ovf.setLetterSpacing(QFont::AbsoluteSpacing, 1);   // tighten before eliding
+  if (!phone && 11 + look::width(ovText, ovf) + 8 > x0) ovf.setLetterSpacing(QFont::AbsoluteSpacing, 1);   // tighten before eliding
   const qreal ppm = (x1 - x0) / 1440.0;
   const qreal pitch = 55.6 * qBound(1.0, height() / 566.0, 1.3);
   // axis labels row: a third of the panel down as the reference, higher on short panels so the rows and the
   // overlaps row (≈ 3 pitches + 180 px under it) always fit
   const qreal top = qMax<qreal>(36, qMin<qreal>(height() * 0.327, height() - (3 * pitch + 180)));
   const qreal g0 = top + 9, rowsTop = g0;
-  const qreal rowC0 = top + 38;
+  const qreal rowC0 = top + 38 + (phone ? 14 : 0);
   const qreal g1 = rowC0 + 3 * pitch + 29;                    // gridline bottom
   const auto overlaps = global::overlapsOnDay(l.date(), zone);
   const qreal ovC = g1 + 30;                                  // overlaps row centre
@@ -417,8 +420,10 @@ void TimelinePanel::paintEvent(QPaintEvent*) {
   // rows
   for (int i = 0; i < ss.size(); ++i) {
     const qreal cy = rowC0 + i * pitch;
-    p.drawPixmap(QPointF(11, cy - 6.5), ui::flag(ss[i].flag, QSize(20, 13), devicePixelRatioF()));
-    look::text(p, 39, cy + 4.5, global::sessionName(ss[i]).toUpper(), nf, theme::map("#a4a199"));
+    if (!phone) {   // phone: the names go above their bar, after the now line (below)
+      p.drawPixmap(QPointF(11, cy - 6.5), ui::flag(ss[i].flag, QSize(20, 13), devicePixelRatioF()));
+      look::text(p, 39, cy + 4.5, global::sessionName(ss[i]).toUpper(), nf, theme::map("#a4a199"));
+    }
     p.fillRect(QRectF(x0, cy - 10, x1 - x0, 20), theme::map("#19140a"));
     for (const auto& seg : global::segmentsOnDay(ss[i], l.date(), zone)) {
       const bool live = seg.span.contains(m_utc);
@@ -443,7 +448,8 @@ void TimelinePanel::paintEvent(QPaintEvent*) {
   }
 
   // overlaps row: windows where two or more centres trade together today
-  look::text(p, 11, ovC + 3.5, QFontMetricsF(ovf).elidedText(ovText, Qt::ElideRight, x0 - 8 - 11), ovf, theme::map("#55524a"));
+  if (phone) look::text(p, 11, ovC - 10, ovText, ovf, theme::map("#55524a"));
+  else look::text(p, 11, ovC + 3.5, QFontMetricsF(ovf).elidedText(ovText, Qt::ElideRight, x0 - 8 - 11), ovf, theme::map("#55524a"));
   p.fillRect(QRectF(x0, ovC - 4, x1 - x0, 8), theme::map("#120f08"));
   if (overlaps.isEmpty()) {
     look::text(p, x0 + 8, ovC + 18, QCoreApplication::translate("global", "NO OVERLAP TODAY"), theme::mono(9, QFont::Normal, 2), theme::map("#4a473f"));
@@ -479,6 +485,17 @@ void TimelinePanel::paintEvent(QPaintEvent*) {
   look::glowLine(p, QPointF(xn, rowsTop), QPointF(xn, g1), theme::map("#f0d356"), 2, 6, 60);
   p.setRenderHint(QPainter::Antialiasing, false);
   p.fillRect(QRectF(xn - 1, rowsTop, 2, g1 - rowsTop), theme::map("#f0d356"));
+  // phone: name rows above the bars, on the panel's colour so the now line and the gridlines stop under them
+  if (phone) {
+    p.setRenderHint(QPainter::Antialiasing);
+    for (int i = 0; i < ss.size(); ++i) {
+      const qreal ny = rowC0 + i * pitch - 22;
+      const QString n = global::sessionName(ss[i]).toUpper();
+      p.fillRect(QRectF(7, ny - 10, 32 + look::width(n, nf) + 6, 20), theme::map("#070503"));
+      p.drawPixmap(QPointF(11, ny - 6.5), ui::flag(ss[i].flag, QSize(20, 13), devicePixelRatioF()));
+      look::text(p, 39, ny + 4.5, n, nf, theme::map("#a4a199"));
+    }
+  }
 }
 
 // ================================================================= SessionCard
