@@ -72,6 +72,9 @@ if(IOS)
   target_link_libraries(Deepwater PRIVATE "-framework Foundation" "-framework UIKit" "-framework Vision" "-framework PDFKit" "-framework CoreGraphics")
   # Qt 6.12.0's RHI compositor with the upstream fix for QTBUG-151881 (whole window copied on every repaint): Qt is
   # static on iOS, so this file's definitions replace the library's (third_party/qt-patches/SOURCES.md)
+  # binaries that are published (the iOS release): source and Qt header paths in assert messages written without the
+  # builder's home folder
+  target_compile_options(Deepwater PRIVATE "-ffile-prefix-map=${CMAKE_SOURCE_DIR}/=" "-ffile-prefix-map=$ENV{HOME}/=~/")
   find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
   target_sources(Deepwater PRIVATE third_party/qt-patches/qbackingstoredefaultcompositor.cpp)
   target_link_libraries(Deepwater PRIVATE Qt6::GuiPrivate)
@@ -98,7 +101,10 @@ if(IOS)
   # iPhone and iPad (1, 2); the window's minimum (960 x 540) fits an iPad in landscape
   set_target_properties(Deepwater PROPERTIES XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
                                              XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER com.deepwater-terminal.Deepwater
-                                             XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME AppIcon)
+                                             XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME AppIcon
+                                             MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+                                             XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION ${PROJECT_VERSION}
+                                             XCODE_ATTRIBUTE_MARKETING_VERSION ${PROJECT_VERSION})
   # the home screen icon: the Deepwater logo as a full square (iOS rounds it), made by tools/ios_icon from
   # resources/icon/deepwater.svg; compiled by Xcode's asset catalog step (the Xcode generator, build-ios-xcode)
   target_sources(Deepwater PRIVATE ios/Assets.xcassets)
