@@ -1,0 +1,167 @@
+name: Release
+
+# A version tag builds the three platforms and publishes the release the apps update from (src/app/Updater):
+#   git tag -a v0.2.0 -m "<what's new, Markdown>"   (the version in CMakeLists.txt's project(), the message = the notes)
+#   git push origin v0.2.0
+# Release vX.Y.Z: Deepwater-X.Y.Z-macos.dmg, -win64.exe, -win64.zip, -ios.ipa and SHA256SUMS.txt; then a message on
+# the ntfy topic the running apps hold a WebSocket on, so they look at once (the message itself is not trusted: it
+# only makes them ask GitHub).
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  NTFY_TOPIC: deepwater-releases-pb53-7c1f9e   # src/app/Updater.cpp kTopic
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: The tag names the project's version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          proj=$(sed -n 's/^project(Deepwater VERSION \([0-9.]*\) .*/\1/p' CMakeLists.txt)
+          if [ "$tag" != "$proj" ]; then echo "::error::tag $GITHUB_REF_NAME but CMakeLists.txt says $proj"; exit 1; fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows
+    needs: version
+    uses: ./.github/workflows/windows.yml
+
+  macos:
+    name: macOS (.dmg)
+    needs: version
+    runs-on: macos-26   # the translation helper (dw-translate) needs the macOS 26 SDK
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.12.0
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qthttpserver qtwebsockets
+          cache: true
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7
+      - name: Ninja
+        run: command -v ninja || brew install ninja
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+      - name: Build
+        run: cmake --build build -- -k 0
+      - name: Package
+        run: cmake --build build --target dist
+      # The packed app must start on its own (Qt inside it): a fresh profile, the Overview, a screenshot, quit.
+      - name: Smoke test
+        run: |
+          mkdir -p smoke
+          DW_PROFILE="$PWD/smoke/profile" DW_CACHE_DIR="$PWD/smoke/cache" DW_UPDATE_NTFY=off \
+            build/dist/stage/Deepwater.app/Contents/MacOS/Deepwater --page global/overview --size 1600x1000 \
+            --delay 25000 --screenshot "$PWD/smoke/smoke-macos.png" > smoke/smoke-macos.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 180); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          if kill -0 $pid 2>/dev/null; then kill $pid; tail -80 smoke/smoke-macos.log; echo "::error::no exit within 3 minutes"; exit 1; fi
+          wait $pid || { tail -80 smoke/smoke-macos.log; echo "::error::Deepwater exited with an error"; exit 1; }
+          test -s smoke/smoke-macos.png || { echo "::error::no screenshot"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepwater-macos
+          path: build/dist/*.dmg
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-macos
+          path: smoke/*.*
+          if-no-files-found: ignore
+
+  ios:
+    name: iOS (.ipa)
+    needs: version
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      # Qt for iOS builds with the macOS Qt's tools (QT_HOST_PATH): both kits, side by side
+      - name: Install Qt (macOS host)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.12.0
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qthttpserver qtwebsockets
+          cache: true
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7
+      - name: Install Qt (iOS)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.12.0
+          host: mac
+          target: ios
+          arch: ios
+          modules: qthttpserver qtwebsockets
+          cache: true
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7
+      - name: Configure (Xcode)
+        run: |
+          QT=$RUNNER_WORKSPACE/Qt/6.12.0
+          "$QT/ios/bin/qt-cmake" -S . -B build-ios -G Xcode -DQT_HOST_PATH="$QT/macos" \
+            -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_ARCHITECTURES=arm64
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project build-ios/Deepwater.xcodeproj -scheme Deepwater -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      # Unsigned: installed with Sideloadly or AltStore, which sign it with the user's Apple ID
+      - name: Package
+        run: |
+          app=$(find build-ios -type d -path '*Release-iphoneos/Deepwater.app' | head -1)
+          test -n "$app" || { echo "::error::no Deepwater.app built"; exit 1; }
+          mkdir -p ipa/Payload
+          cp -R "$app" ipa/Payload/
+          rm -rf ipa/Payload/Deepwater.app/_CodeSignature ipa/Payload/Deepwater.app/embedded.mobileprovision
+          (cd ipa && zip -qry -X "Deepwater-${{ needs.version.outputs.version }}-ios.ipa" Payload)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepwater-ios
+          path: ipa/*.ipa
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [version, windows, macos, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the tag's message is the release's text
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deepwater-*
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd assets && ls -la && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag \
+            --title "Deepwater ${{ needs.version.outputs.version }}" assets/*
+      - name: Tell the running apps
+        run: curl -sf -d "$GITHUB_REF_NAME" "https://ntfy.sh/$NTFY_TOPIC"

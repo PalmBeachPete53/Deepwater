@@ -2,7 +2,7 @@
 #include <QWidget>
 #include <QTimer>
 
-// App header: wordmark, the main tabs, clock, the documentation ? and the options gear on the first row; sub-tabs of the active tab
+// App header: wordmark, the main tabs, clock, the update icon, the documentation ? and the options gear on the first row; sub-tabs of the active tab
 // on the second. Compact (ui::compact, a phone): one row of kCompactHeight with ☰ (the menu: app/NavDrawer), the
 // current tab › sub-tab, the time, the ? and the gear.
 class Header : public QWidget {
@@ -21,6 +21,7 @@ signals:
   void navigate(int main, int sub);
   void optionsRequested();
   void helpRequested();      // the ? left of the gear: the documentation (app/HelpWindow)
+  void updateRequested();    // the update icon left of the ?: app/UpdateDialog
   void menuRequested();
 protected:
   void paintEvent(QPaintEvent*) override;
@@ -35,9 +36,10 @@ private:
   QList<Hit> hits() const;
   int m_main = 0, m_sub = 0;
   int m_hoverMain = -1, m_hoverSub = -1;
-  bool m_hoverGear = false, m_hoverHelp = false;
+  bool m_hoverGear = false, m_hoverHelp = false, m_hoverUpdate = false;
   QRectF gearRect() const;
   QRectF helpRect() const;
+  QRectF updateRect() const;
   QList<int> m_lastSub;     // remembered sub-tab per main tab
   QTimer m_clock;
 };

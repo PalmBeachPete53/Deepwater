@@ -72,6 +72,8 @@ Alpaca, Massive (ex-Polygon) et OANDA sont marqués **CLÉ API** mais n'ont pas 
 | Pages de recherche des banques | Liens seulement, rien de téléchargé | Non |
 | Hub Hugging Face | Recherche et téléchargement de modèles | Jeton facultatif (modèles restreints) |
 | Discord, Slack, Telegram, vos propres webhooks | Rien n'est lu : les alertes déclenchées sont postées à l'URL donnée | Votre propre URL |
+| GitHub (publications de Deepwater) | Nouvelles versions de Deepwater : vérification et téléchargement des mises à jour | Non |
+| ntfy.sh | Un message à chaque nouvelle version publiée, pour que l'icône de mise à jour s'allume aussitôt | Non |
 
 ## Sources graph
 

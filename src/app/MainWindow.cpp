@@ -8,6 +8,7 @@
 #include "ui/Theme.h"
 #include "app/OptionsDialog.h"
 #include "app/HelpWindow.h"
+#include "app/UpdateDialog.h"
 #include "core/I18n.h"
 #include "charts/data/Store.h"
 #include "app/Preload.h"
@@ -46,6 +47,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   connect(m_header, &Header::navigate, this, &MainWindow::open);
   connect(m_header, &Header::optionsRequested, this, &MainWindow::showOptions);
   connect(m_header, &Header::helpRequested, this, [this] { showHelp(); });
+  connect(m_header, &Header::updateRequested, this, &MainWindow::showUpdates);
   m_drawer = new app::NavDrawer(central);
   connect(m_header, &Header::menuRequested, this, [this] { m_drawer->open(m_header->currentMain(), m_header->currentSub()); });
   connect(m_drawer, &app::NavDrawer::navigate, this, &MainWindow::open);
@@ -190,6 +192,15 @@ void MainWindow::showHelp(const QString& chapter, const QString& section) {
   m_help->show();
   m_help->raise();
   m_help->activateWindow();
+}
+
+void MainWindow::showUpdates() {
+  static QPointer<UpdateDialog> dlg;
+  if (!dlg) dlg = new UpdateDialog(this);   // kept: a download goes on while it is closed
+  dlg->fit();
+  dlg->show();
+  dlg->raise();
+  dlg->activateWindow();
 }
 
 void MainWindow::rebuildPages() {

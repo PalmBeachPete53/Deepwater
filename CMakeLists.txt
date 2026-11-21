@@ -119,7 +119,7 @@ if(IOS)
                                              MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
                                              XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION ${PROJECT_VERSION}
                                              XCODE_ATTRIBUTE_MARKETING_VERSION ${PROJECT_VERSION})
-  # the home screen icon: the Deepwater logo as a full square (iOS rounds it), made by tools/ios_icon from
+  # the home screen icon: the Deepwater logo as a full square (iOS rounds it), made by tools/app_icons from
   # resources/icon/deepwater.svg; compiled by Xcode's asset catalog step (the Xcode generator, build-ios-xcode)
   target_sources(Deepwater PRIVATE ios/Assets.xcassets)
   set_source_files_properties(ios/Assets.xcassets PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
@@ -127,7 +127,28 @@ endif()
 set_target_properties(Deepwater PROPERTIES
   MACOSX_BUNDLE_GUI_IDENTIFIER com.deepwater-terminal.Deepwater
   MACOSX_BUNDLE_BUNDLE_NAME Deepwater
-  MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+  MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+  MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
+# The app's version (Help › the update check compares it with the releases' tags): the project's, set once above.
+# (main.cpp only: a new version recompiles one file, not the app)
+set_source_files_properties(src/main.cpp PROPERTIES COMPILE_DEFINITIONS "DW_VERSION=\"${PROJECT_VERSION}\"")
+if(APPLE AND NOT IOS)
+  # the Dock / Finder icon: the Deepwater logo at every size macOS asks for (macos/Deepwater.icns, made by
+  # tools/app_icons from resources/icon/deepwater.svg)
+  set_target_properties(Deepwater PROPERTIES MACOSX_BUNDLE_ICON_FILE Deepwater.icns)
+  target_sources(Deepwater PRIVATE macos/Deepwater.icns)
+  set_source_files_properties(macos/Deepwater.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  # ---- macOS package: build/dist/Deepwater-<version>-macos.dmg (cmake/MacDist.cmake)
+  find_program(DW_MACDEPLOYQT macdeployqt HINTS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_BINS}" "${Qt6_DIR}/../../../bin")
+  set(DW_DIST_DEPS Deepwater deepwater-llm)
+  if(TARGET dw_translate)
+    list(APPEND DW_DIST_DEPS dw_translate)
+  endif()
+  add_custom_target(dist
+    COMMAND ${CMAKE_COMMAND} -DAPP=$<TARGET_BUNDLE_DIR:Deepwater> -DOUT=${CMAKE_BINARY_DIR}/dist
+            -DVERSION=${PROJECT_VERSION} -DMACDEPLOYQT=${DW_MACDEPLOYQT} -P ${CMAKE_SOURCE_DIR}/cmake/MacDist.cmake
+    DEPENDS ${DW_DIST_DEPS} VERBATIM)
+endif()
 
 # On-device EN→FR translation helper (Apple Translation framework), built next to the executable. Not on iOS: an iOS
 # app cannot start another program.

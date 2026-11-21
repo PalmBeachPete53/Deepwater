@@ -525,4 +525,111 @@
         <translation>F1 ouvre la page affichée · Entrée : résultat suivant · Échap ferme</translation>
     </message>
 </context>
+<context>
+    <name>update</name>
+    <message>
+        <source>%1 could not be replaced (no permission to write there).</source>
+        <translation>Impossible de remplacer %1 (pas le droit d'écrire à cet endroit).</translation>
+    </message>
+    <message>
+        <source>Check now</source>
+        <translation>Vérifier maintenant</translation>
+    </message>
+    <message>
+        <source>Deepwater is up to date.</source>
+        <translation>Deepwater est à jour.</translation>
+    </message>
+    <message>
+        <source>Deepwater starts again by itself once it is installed.</source>
+        <translation>Deepwater redémarre tout seul une fois la mise à jour installée.</translation>
+    </message>
+    <message>
+        <source>Downloading version %1… %2 %</source>
+        <translation>Téléchargement de la version %1… %2 %</translation>
+    </message>
+    <message>
+        <source>GitHub limits how often it is asked; try again later.</source>
+        <translation>GitHub limite la fréquence des demandes ; réessayez plus tard.</translation>
+    </message>
+    <message>
+        <source>Install and restart</source>
+        <translation>Installer et redémarrer</translation>
+    </message>
+    <message>
+        <source>Installed in %1; start it from there.</source>
+        <translation>Installé dans %1 ; lancez-le depuis là.</translation>
+    </message>
+    <message>
+        <source>Installed: version %1.</source>
+        <translation>Installée : version %1.</translation>
+    </message>
+    <message>
+        <source>Installing version %1…</source>
+        <translation>Installation de la version %1…</translation>
+    </message>
+    <message>
+        <source>iOS does not let an app install itself: install the new version from its release page (Sideloadly, AltStore, or TestFlight).</source>
+        <translation>iOS ne permet pas à une app de s'installer elle-même : installez la nouvelle version depuis sa page de publication (Sideloadly, AltStore ou TestFlight).</translation>
+    </message>
+    <message>
+        <source>Looking for a new version…</source>
+        <translation>Recherche d'une nouvelle version…</translation>
+    </message>
+    <message>
+        <source>no answer</source>
+        <translation>pas de réponse</translation>
+    </message>
+    <message>
+        <source>No notes for this version.</source>
+        <translation>Pas de notes pour cette version.</translation>
+    </message>
+    <message>
+        <source>Open the release page</source>
+        <translation>Ouvrir la page de la version</translation>
+    </message>
+    <message>
+        <source>Published on %1.</source>
+        <translation>Publiée le %1.</translation>
+    </message>
+    <message>
+        <source>The check did not work.</source>
+        <translation>La vérification n'a pas abouti.</translation>
+    </message>
+    <message>
+        <source>The download was incomplete; try again.</source>
+        <translation>Le téléchargement est incomplet ; réessayez.</translation>
+    </message>
+    <message>
+        <source>The downloaded app is version %1, not %2.</source>
+        <translation>L'app téléchargée est en version %1, pas %2.</translation>
+    </message>
+    <message>
+        <source>The downloaded file could not be kept.</source>
+        <translation>Le fichier téléchargé n'a pas pu être conservé.</translation>
+    </message>
+    <message>
+        <source>The GitHub source is switched off in the Sources tab.</source>
+        <translation>La source GitHub est coupée dans l'onglet Sources.</translation>
+    </message>
+    <message>
+        <source>The installer could not be started; run %1 yourself.</source>
+        <translation>L'installateur n'a pas pu démarrer ; lancez %1 vous-même.</translation>
+    </message>
+    <message>
+        <source>UPDATE</source>
+        <translation>MISE À JOUR</translation>
+    </message>
+    <message>
+        <source>Updates</source>
+        <translation>Mises à jour</translation>
+    </message>
+    <message>
+        <source>Version %1 · checked at %2.</source>
+        <translation>Version %1 · dernière vérification à %2.</translation>
+    </message>
+    <message>
+        <source>Version %1 is available.</source>
+        <translation>La version %1 est disponible.</translation>
+    </message>
+</context>
 </TS>

@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QLineEdit>
 #include "app/HelpWindow.h"
+#include "app/Updater.h"
 #include <QSurfaceFormat>
 #include <QScreen>
 #include <QDir>
@@ -56,10 +57,10 @@ int main(int argc, char** argv) {
   QApplication::setOrganizationName("deepwater-terminal");
   QApplication::setOrganizationDomain("deepwater-terminal.com");
   QApplication::setApplicationName("Deepwater");
-  QApplication::setApplicationVersion("0.1.0");
+  QApplication::setApplicationVersion(QStringLiteral(DW_VERSION));   // CMakeLists.txt project() VERSION
 
   QCommandLineParser cli;
-  cli.addOptions({{"lang", "en | fr (saved, like the Options dialog)", "lang"}, {"theme", "theme id (saved)", "id"}, {"options", "open the Options dialog"}, {"help-page", "open the documentation: chapter[#section]", "chapter"}, {"help-search", "search the documentation", "text"},
+  cli.addOptions({{"lang", "en | fr (saved, like the Options dialog)", "lang"}, {"theme", "theme id (saved)", "id"}, {"options", "open the Options dialog"}, {"help-page", "open the documentation: chapter[#section]", "chapter"}, {"help-search", "search the documentation", "text"}, {"updates", "open the update window"},
                   {"page", "page id", "id"}, {"size", "WxH", "size"}, {"screenshot", "png path", "file"},
                   {"delay", "ms", "ms", "6000"}, {"goto", "page", "page"}, {"goto-at", "ms", "ms", "5000"}, {"quit-after", "ms", "ms"}, {"layout-audit", "dir", "dir"},
                   {"audit-sizes", "WxH,...", "sizes", "1024x600,1280x720,1440x900,1728x1052"}, {"audit-pages", "ids", "ids"},
@@ -99,6 +100,9 @@ int main(int argc, char** argv) {
   }
   w.show();
   if (cli.isSet("options")) QTimer::singleShot(300, &w, [&w] { w.showOptions(); });
+  // updates (app/Updater): the launch check and the release WebSocket; not during the audits, which measure pages
+  if (!cli.isSet("layout-audit") && !cli.isSet("perf-audit")) app::Updater::instance().start();
+  if (cli.isSet("updates")) QTimer::singleShot(300, &w, [&w] { w.showUpdates(); });
   if (cli.isSet("help-page"))
     QTimer::singleShot(300, &w, [&w, v = cli.value("help-page"), q = cli.value("help-search")] {
       w.showHelp(v.section('#', 0, 0), v.section('#', 1));

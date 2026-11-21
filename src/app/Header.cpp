@@ -1,4 +1,6 @@
 #include "app/Header.h"
+#include "app/Updater.h"
+#include <QCoreApplication>
 #include "app/Pages.h"
 #include "ui/Theme.h"
 #include "core/I18n.h"
@@ -23,6 +25,7 @@ QFont utcFont() { return theme::mono(11); }
 constexpr qreal kWordX = 54;
 constexpr qreal kGearW = 34;   // gear button at the right end of the first row
 constexpr qreal kHelpW = 30;   // the documentation ? left of the gear
+constexpr qreal kUpdateW = 30; // the update icon left of the ?
 
 // What the header shows at a given width, most complete first (laptops at 1024–1366 px drop the extras).
 struct Fit { bool word; int clock; qreal pad; qreal sp; };   // clock: 2 utc+date+time, 1 date+time, 0 time
@@ -42,7 +45,7 @@ qreal tabsWidth(qreal pad, qreal sp) {
 }
 Fit fitFor(qreal width) {
   for (const auto& f : kFits)
-    if (tabsStart(f.word) + tabsWidth(f.pad, f.sp) + 24 <= width - 16 - kGearW - kHelpW - clockWidth(f.clock)) return f;
+    if (tabsStart(f.word) + tabsWidth(f.pad, f.sp) + 24 <= width - 16 - kGearW - kHelpW - kUpdateW - clockWidth(f.clock)) return f;
   return kFits[std::size(kFits) - 1];
 }
 struct SubFit { qreal pad; qreal sp; int px; };
@@ -70,6 +73,29 @@ void drawHelp(QPainter& p, const QRectF& r, bool hover) {
   p.setFont(theme::mono(11, QFont::ExtraBold)); p.setPen(col);
   p.drawText(r.adjusted(0, 0, 0, 0.5), Qt::AlignCenter, "?");
 }
+// the update button: an arrow into a tray; amber with a dot when a new version is available, a ring of progress while
+// it downloads (app::Updater)
+void drawUpdate(QPainter& p, const QRectF& r, bool hover) {
+  const auto& c = theme::pal();
+  const auto& u = app::Updater::instance();
+  using S = app::Updater::State;
+  const bool avail = u.state() == S::Available || u.state() == S::Downloading || u.state() == S::Installing;
+  if (hover) { p.setPen(Qt::NoPen); p.setBrush(c.panelAlt); p.drawRoundedRect(r, 3, 3); }
+  const QColor col = avail ? c.accent : hover ? c.accent : c.textDim;
+  const QPointF m = r.center();
+  p.setPen(QPen(col, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.setBrush(Qt::NoBrush);
+  p.drawLine(m + QPointF(0, -7), m + QPointF(0, 3));                                   // the arrow
+  p.drawPolyline(QPolygonF{m + QPointF(-4, -1), m + QPointF(0, 3), m + QPointF(4, -1)});
+  p.drawPolyline(QPolygonF{m + QPointF(-7, 2), m + QPointF(-7, 7), m + QPointF(7, 7), m + QPointF(7, 2)});   // the tray
+  if (u.state() == S::Downloading) {
+    p.setPen(QPen(theme::alpha(c.accent, 70), 2)); p.drawEllipse(m, 11, 11);
+    p.setPen(QPen(c.accent, 2, Qt::SolidLine, Qt::RoundCap));
+    p.drawArc(QRectF(m - QPointF(11, 11), QSizeF(22, 22)), 90 * 16, -int(360 * 16 * u.progress()));
+  } else if (avail) {
+    p.setPen(QPen(theme::map("#050301"), 1.5)); p.setBrush(c.accent);
+    p.drawEllipse(m + QPointF(7.5, -7), 3.6, 3.6);                                      // the dot: something new
+  }
+}
 const QPainterPath& gearPath() {
   static const QPainterPath gear = [] {
     QPainterPath teeth;
@@ -92,6 +118,7 @@ Header::Header(QWidget* parent) : QWidget(parent) {
   m_clock.setInterval(1000);
   connect(&m_clock, &QTimer::timeout, this, [this] { update(QRect(width() - 360, 0, 360, kRow1)); });
   m_clock.start();
+  connect(&app::Updater::instance(), &app::Updater::changed, this, [this] { update(updateRect().adjusted(-6, -6, 6, 6).toAlignedRect()); });
 }
 
 void Header::setCurrent(int main, int sub) {
@@ -151,7 +178,8 @@ void Header::paintCompact(QPainter& p) {
   if (m_hoverGear) { p.setPen(Qt::NoPen); p.setBrush(c.panelAlt); p.drawRoundedRect(g, 3, 3); }
   p.save(); p.translate(g.center()); p.setPen(Qt::NoPen); p.setBrush(m_hoverGear ? c.accent : c.textDim); p.drawPath(gearPath()); p.restore();
   drawHelp(p, helpRect(), m_hoverHelp);
-  qreal right = helpRect().left() - 10;
+  drawUpdate(p, updateRect(), m_hoverUpdate);
+  qreal right = updateRect().left() - 10;
   const QString hm = QDateTime::currentDateTime().toString("HH:mm");
   p.setFont(clockFont());
   const qreal wc = QFontMetricsF(p.font()).horizontalAdvance(hm);
@@ -254,7 +282,7 @@ void Header::paintEvent(QPaintEvent*) {
   const QString local = fit.clock == 0 ? now.toString("HH:mm:ss")
                                        : i18n::locale().toString(now, "ddd dd MMM  HH:mm:ss");
   const qreal wl = QFontMetricsF(p.font()).horizontalAdvance(local);
-  const qreal right = width() - 16 - kGearW - kHelpW;
+  const qreal right = width() - 16 - kGearW - kHelpW - kUpdateW;
   p.drawText(QPointF(right - wl, kRow1 / 2.0 + 4.5), local);
   if (fit.clock == 2) {
     const QString utc = "UTC " + now.toUTC().toString("HH:mm");
@@ -274,6 +302,7 @@ void Header::paintEvent(QPaintEvent*) {
     p.restore();
   }
   drawHelp(p, helpRect(), m_hoverHelp);
+  drawUpdate(p, updateRect(), m_hoverUpdate);
 }
 
 QRectF Header::gearRect() const {
@@ -286,13 +315,22 @@ QRectF Header::helpRect() const {
   return isCompact() ? g.translated(-g.width() - 4, 0) : g.translated(-kHelpW, 0);
 }
 
+QRectF Header::updateRect() const {
+  const QRectF h = helpRect();
+  return isCompact() ? h.translated(-h.width() - 4, 0) : h.translated(-kUpdateW, 0);
+}
+
 void Header::mouseMoveEvent(QMouseEvent* e) {
   const bool qh = helpRect().contains(e->position());
   if (qh != m_hoverHelp) { m_hoverHelp = qh; update(helpRect().adjusted(-2, -2, 2, 2).toAlignedRect()); }
+  const bool uh = updateRect().contains(e->position());
+  if (uh != m_hoverUpdate) { m_hoverUpdate = uh; update(updateRect().adjusted(-6, -6, 6, 6).toAlignedRect()); }
+  if (uh) setToolTip(QCoreApplication::translate("update", "Updates"));
+  else if (toolTip().size()) setToolTip({});
   if (isCompact()) {
     const bool gh = gearRect().contains(e->position()), mh = menuRect().contains(e->position());
     if (gh != m_hoverGear || mh != m_hoverMenu) { m_hoverGear = gh; m_hoverMenu = mh; update(); }
-    setCursor(gh || mh || qh ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    setCursor(gh || mh || qh || uh ? Qt::PointingHandCursor : Qt::ArrowCursor);
     return;
   }
   const bool gh = gearRect().contains(e->position());
@@ -300,11 +338,12 @@ void Header::mouseMoveEvent(QMouseEvent* e) {
   int hm = -1, hs = -1;
   for (const auto& h : hits()) if (h.r.contains(e->position())) { if (h.sub < 0) hm = h.main; else hs = h.sub; }
   if (hm != m_hoverMain || hs != m_hoverSub) { m_hoverMain = hm; m_hoverSub = hs; update(); }
-  setCursor(hm >= 0 || hs >= 0 || gh || qh ? Qt::PointingHandCursor : Qt::ArrowCursor);
+  setCursor(hm >= 0 || hs >= 0 || gh || qh || uh ? Qt::PointingHandCursor : Qt::ArrowCursor);
 }
 void Header::mousePressEvent(QMouseEvent* e) {
   if (gearRect().contains(e->position())) { emit optionsRequested(); return; }
   if (helpRect().contains(e->position())) { emit helpRequested(); return; }
+  if (updateRect().contains(e->position())) { emit updateRequested(); return; }
   if (isCompact()) { if (menuRect().contains(e->position()) || e->position().x() < width() / 2) emit menuRequested(); return; }
   for (const auto& h : hits()) {
     if (!h.r.contains(e->position())) continue;
@@ -313,4 +352,4 @@ void Header::mousePressEvent(QMouseEvent* e) {
     return;
   }
 }
-void Header::leaveEvent(QEvent*) { m_hoverMain = m_hoverSub = -1; m_hoverGear = m_hoverMenu = m_hoverHelp = false; update(); }
+void Header::leaveEvent(QEvent*) { m_hoverMain = m_hoverSub = -1; m_hoverGear = m_hoverMenu = m_hoverHelp = m_hoverUpdate = false; update(); }

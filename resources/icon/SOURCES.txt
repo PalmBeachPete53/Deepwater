@@ -1,2 +1,3 @@
 deepwater.svg — Deepwater logo, supplied by the project owner (2026-11-14), recoloured in the app amber palette.
-ios/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png — the iOS home screen icon, rendered from deepwater.svg by tools/ios_icon (2026-11-21): the tile's square to the corners, no alpha.
+ios/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png — the iOS home screen icon, rendered from deepwater.svg by tools/app_icons (2026-11-21): the tile's square to the corners, no alpha.
+macos/Deepwater.icns — the macOS app icon (Dock, Finder), every size rendered from deepwater.svg by tools/app_icons then joined by iconutil (2026-11-21).

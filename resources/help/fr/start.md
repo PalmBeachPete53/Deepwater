@@ -6,7 +6,7 @@ Deepwater est un terminal de marché construit entièrement sur des sources publ
 
 ### L'en-tête
 
-La première ligne porte le logo Deepwater, les onglets principaux, une horloge, le **?** qui ouvre cette documentation et l'engrenage des options. La seconde liste les sous-onglets de l'onglet où vous êtes, avec à droite une description en une ligne de la page affichée.
+La première ligne porte le logo Deepwater, les onglets principaux, une horloge, l'icône de mise à jour, le **?** qui ouvre cette documentation et l'engrenage des options. La seconde liste les sous-onglets de l'onglet où vous êtes, avec à droite une description en une ligne de la page affichée.
 
 L'horloge donne votre jour, votre date et votre heure locales, et ajoute l'heure UTC quand la place le permet. Quand la fenêtre se resserre, l'en-tête renonce d'abord à l'heure UTC, puis à la date, puis au nom Deepwater, et rapproche les onglets pour qu'ils restent tous visibles.
 
@@ -61,6 +61,18 @@ Dix thèmes recolorent toute l'application. Chaque carte montre un aperçu de se
 | Glacier | Clair | Blanc glacier aux accents bleus |
 | Dune | Clair | Sable aux accents orange brûlé |
 | Sakura | Clair | Rose poudré aux accents rose vif |
+
+## Mises à jour
+
+Deepwater cherche lui-même les nouvelles versions : une fois au lancement, puis en restant connecté à un service de notification qui annonce chaque nouvelle publication, si bien qu'une version publiée pendant que l'app est ouverte apparaît en quelques secondes. Il ne vérifie jamais à intervalles réguliers. Les versions viennent des publications du projet sur GitHub, construites pour toutes les plateformes à la fois.
+
+Quand une version est disponible, l'icône de mise à jour de l'en-tête (une flèche vers un plateau, à gauche du **?**) passe à l'ambre avec un point. Un clic ouvre la fenêtre de mise à jour : la version que vous avez, la nouvelle, et ce qu'elle change. **Vérifier maintenant** relance la recherche à tout moment.
+
+Sur Mac, **Installer et redémarrer** télécharge la nouvelle version, la vérifie, la met à la place de celle qui tourne et la relance ; si Deepwater tourne depuis un dossier de compilation, la nouvelle version va dans Applications. Sous Windows, le même bouton télécharge l'installateur, qui se lance une fois Deepwater fermé : Windows demande votre autorisation, puis Deepwater redémarre. Un téléchargement continue si vous fermez la fenêtre, et l'icône en montre la progression.
+
+Une app d'iPhone ou d'iPad ne peut pas installer elle-même une nouvelle version. La fenêtre y indique qu'une version est disponible et **Ouvrir la page de la version** y mène, pour la réinstaller avec Sideloadly ou AltStore ; avec TestFlight, les mises à jour arrivent toutes seules.
+
+La recherche de mises à jour utilise deux sources listées dans l'onglet [Sources](help:sources), GitHub et ntfy.sh ; les couper là l'arrête.
 
 ## Lire les écrans
 

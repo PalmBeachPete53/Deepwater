@@ -19,6 +19,7 @@ public:
   // The documentation, on `chapter` (a main tab id or "start"; empty: the chapter of the tab shown), optionally at the
   // section titled `section`.
   void showHelp(const QString& chapter = {}, const QString& section = {});
+  void showUpdates();   // the header's update icon: app/UpdateDialog
   // Re-create every page (after a language change); the current page is re-opened.
   void rebuildPages();
   // The slow pages built and loaded in the background after launch (app::Preloadable); off for the audits, which

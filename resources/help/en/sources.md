@@ -72,6 +72,8 @@ Alpaca, Massive (ex-Polygon) and OANDA are listed as **API KEY** but have no fie
 | Banks' research pages | Links only, nothing downloaded | No |
 | Hugging Face Hub | Model search and downloads | Optional token (gated models) |
 | Discord, Slack, Telegram, your own webhooks | Nothing read: fired alerts are posted to the URL you gave | Your own URL |
+| GitHub (Deepwater's releases) | New versions of Deepwater: the update check and its download | No |
+| ntfy.sh | A message when a new version is published, so the update icon lights up at once | No |
 
 ## Sources graph
 

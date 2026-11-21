@@ -2,15 +2,11 @@ name: Windows
 
 # Builds the Windows 11 installer (.exe, NSIS) and a .zip of the same folder, then checks that the packed app starts on
 # its own and that the installer installs it. Artifacts: deepwater-windows (packages), smoke-windows (screenshot, log).
+# Run by the release workflow (release.yml, on a version tag) and by hand; not on every push to main, where the day's
+# work is built on macOS (2026-11-21: ci/windows was merged into main).
 on:
-  push:
-    branches: [main, ci/windows]
-    tags: ['v*']
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: windows-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   windows:

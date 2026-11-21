@@ -6,7 +6,7 @@ Deepwater is a market terminal built entirely on public sources. It brings toget
 
 ### The header
 
-The first row holds the Deepwater logo, the main tabs, a clock, the **?** that opens this documentation, and the gear that opens the options. The second row lists the sub-tabs of the tab you are in, with a one-line description of the current page on the right.
+The first row holds the Deepwater logo, the main tabs, a clock, the update icon, the **?** that opens this documentation, and the gear that opens the options. The second row lists the sub-tabs of the tab you are in, with a one-line description of the current page on the right.
 
 The clock shows your local day, date and time, and adds UTC when there is room. When the window gets narrow, the header gives up the UTC time first, then the date, then the Deepwater name, and tightens the tabs, so that every tab remains visible.
 
@@ -61,6 +61,18 @@ Ten themes recolour the whole application. Each card shows a preview of its colo
 | Glacier | Light | Ice white with blue accents |
 | Dune | Light | Sand with burnt-orange accents |
 | Sakura | Light | Blush pink with rose accents |
+
+## Updates
+
+Deepwater looks for a new version on its own: once at launch, then by staying connected to a notification service that announces each new release, so a version published while the app is open shows up within seconds. It never checks on a timer. The versions come from the project's releases on GitHub, built for every platform at once.
+
+When one is available, the update icon in the header (an arrow into a tray, left of the **?**) turns amber with a dot. A click opens the update window: the version you have, the new one, and what changed in it. **Check now** asks again at any time.
+
+On a Mac, **Install and restart** downloads the new version, checks it, puts it in place of the one you are running and starts it again; if Deepwater runs from a build folder, the new version goes into Applications instead. On Windows, the same button downloads the installer, which runs once Deepwater has closed: Windows asks for your permission, then Deepwater starts again. A download goes on if you close the window, and the icon shows its progress.
+
+An iPhone or iPad app cannot install a new version of itself. There, the window tells you a version is available and **Open the release page** leads to it, to install it again with Sideloadly or AltStore; through TestFlight, updates arrive by themselves.
+
+The update check uses two sources listed in the [Sources](help:sources) tab, GitHub and ntfy.sh; switching them off there stops it.
 
 ## Reading the screens
 
