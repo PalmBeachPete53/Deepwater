@@ -104,6 +104,8 @@ int main(int argc, char** argv) {
       w.showHelp(v.section('#', 0, 0), v.section('#', 1));
       if (!q.isEmpty())
         if (auto* h = w.findChild<HelpWindow*>()) if (auto* f = h->findChild<QLineEdit*>()) f->setText(q);
+      if (qEnvironmentVariableIsSet("DW_HELP_PANE"))
+        if (auto* h = w.findChild<HelpWindow*>()) QTimer::singleShot(500, h, [h] { h->openPane(qEnvironmentVariableIntValue("DW_HELP_PANE")); });
     });
   if (cli.isSet("goto"))
     QTimer::singleShot(cli.value("goto-at").toInt(), &w, [&w, id = cli.value("goto")] {

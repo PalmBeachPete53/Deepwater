@@ -70,6 +70,11 @@ target_compile_options(Deepwater PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,
 target_link_libraries(Deepwater PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Concurrent Qt6::Xml Qt6::Sql Qt6::OpenGL Qt6::OpenGLWidgets Qt6::WebSockets Qt6::HttpServer quickjs lzmadec miniz)
 if(IOS)
   target_link_libraries(Deepwater PRIVATE "-framework Foundation" "-framework UIKit" "-framework Vision" "-framework PDFKit" "-framework CoreGraphics")
+  # Qt 6.12.0's RHI compositor with the upstream fix for QTBUG-151881 (whole window copied on every repaint): Qt is
+  # static on iOS, so this file's definitions replace the library's (third_party/qt-patches/SOURCES.md)
+  find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
+  target_sources(Deepwater PRIVATE third_party/qt-patches/qbackingstoredefaultcompositor.cpp)
+  target_link_libraries(Deepwater PRIVATE Qt6::GuiPrivate)
 elseif(APPLE)
   target_link_libraries(Deepwater PRIVATE "-framework Foundation" "-framework AppKit" "-framework Vision" "-framework PDFKit" "-framework CoreGraphics" "-framework WebKit")
 endif()
@@ -92,7 +97,12 @@ qt_add_resources(Deepwater dw_pinets PREFIX "/pinets" BASE third_party/pinets FI
 if(IOS)
   # iPhone and iPad (1, 2); the window's minimum (960 x 540) fits an iPad in landscape
   set_target_properties(Deepwater PROPERTIES XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
-                                             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER com.deepwater-terminal.Deepwater)
+                                             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER com.deepwater-terminal.Deepwater
+                                             XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME AppIcon)
+  # the home screen icon: the Deepwater logo as a full square (iOS rounds it), made by tools/ios_icon from
+  # resources/icon/deepwater.svg; compiled by Xcode's asset catalog step (the Xcode generator, build-ios-xcode)
+  target_sources(Deepwater PRIVATE ios/Assets.xcassets)
+  set_source_files_properties(ios/Assets.xcassets PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 endif()
 set_target_properties(Deepwater PROPERTIES
   MACOSX_BUNDLE_GUI_IDENTIFIER com.deepwater-terminal.Deepwater

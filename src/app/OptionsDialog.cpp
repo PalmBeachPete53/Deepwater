@@ -2,90 +2,134 @@
 #include "core/I18n.h"
 #include "ui/Kit.h"
 #include "ui/Theme.h"
+#include "ui/Touch.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QCoreApplication>
+#include <QScrollArea>
+#include <QMainWindow>
+#include <QScrollBar>
+#include <cmath>
 
+namespace options {
 namespace {
-constexpr qreal kPad = 26;
+QString otr(const char* s) { return QCoreApplication::translate("options", s); }
 }
 
-OptionsDialog::OptionsDialog(QWidget* parent) : QDialog(parent) {
-  setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
-  setAttribute(Qt::WA_TranslucentBackground);
-  setModal(true);
-  setMouseTracking(true);
-  setFixedSize(sizeHint());
-  // the dialog itself follows a language change at once
-  connect(&i18n::Notifier::instance(), &i18n::Notifier::changed, this, [this] { update(); });
-  connect(&theme::Notifier::instance(), &theme::Notifier::changed, this, [this] { update(); });
+// The dialog's content, painted: title row, language, themes, footer. Lays itself out for its width (narrow: a phone).
+class Body : public QWidget {
+public:
+  explicit Body(QWidget* parent) : QWidget(parent) { setMouseTracking(true); }
+  int heightFor(int w) const { return layout(w).height; }
+protected:
+  void paintEvent(QPaintEvent*) override;
+  void mouseMoveEvent(QMouseEvent*) override;
+  void mousePressEvent(QMouseEvent*) override;
+  void mouseReleaseEvent(QMouseEvent*) override { m_dragging = false; }
+  void leaveEvent(QEvent*) override { if (m_hover != None) { m_hover = None; update(); } }
+private:
+  enum Hit { None, Close, LangEn, LangFr, ThemeFirst = 100 };
+  struct Area { QRectF r; int id; };
+  struct Layout {
+    bool narrow = false;
+    qreal pad = 26;
+    QRectF close, langHint, themeHint, footer;
+    qreal langLabelY = 0, themeLabelY = 0;
+    QList<Area> areas;
+    int height = 0;
+  };
+  Layout layout(int w) const;
+  int hitAt(const QPointF& p) const {
+    for (const auto& a : layout(width()).areas) if (a.r.contains(p)) return a.id;
+    return None;
+  }
+  int m_hover = None;
+  QPointF m_dragFrom; bool m_dragging = false;
+};
+
+Body::Layout Body::layout(int w) const {
+  Layout L;
+  L.narrow = w < 560;
+  L.pad = L.narrow ? 16 : 26;
+  const qreal pad = L.pad, inner = w - 2 * pad;
+  L.close = L.narrow ? QRectF(w - 46, 11, 36, 36) : QRectF(w - 44, 16, 26, 26);
+  L.areas << Area{L.close, Close};
+  const QFontMetricsF fh(theme::sans(12));
+  auto hintH = [&](const QString& s) { return std::ceil(fh.boundingRect(QRectF(0, 0, inner, 200), Qt::TextWordWrap, s).height()); };
+  // language
+  qreal y = 92;
+  L.langLabelY = y;
+  const qreal lh = std::max<qreal>(22, hintH(otr("Interface language. Numbers keep the 1,234.56 format.")));
+  L.langHint = QRectF(pad, y + 6, inner, lh);
+  y = L.langHint.bottom() + 6;
+  const qreal half = (inner - 10) / 2.0;
+  L.areas << Area{QRectF(pad, y, half, 46), LangEn} << Area{QRectF(pad + half + 10, y, half, 46), LangFr};
+  y += 46 + 38;
+  // theme
+  L.themeLabelY = y;
+  const qreal th = std::max<qreal>(22, hintH(otr("Colours of the whole application. Hover a theme for its description.")));
+  L.themeHint = QRectF(pad, y + 6, inner, th);
+  y = L.themeHint.bottom() + 6;
+  const qreal ch = L.narrow ? 58 : 54;
+  const auto& themes = theme::themes();
+  for (int i = 0; i < themes.size(); ++i)
+    L.areas << Area{QRectF(pad + (i % 2) * (half + 10), y + (i / 2) * (ch + 8), half, ch), ThemeFirst + i};
+  y += ((themes.size() + 1) / 2) * (ch + 8) - 8;
+  // footer
+  const QFontMetricsF ff(theme::mono(10, QFont::Normal, 1.0));
+  const qreal fh2 = std::ceil(ff.boundingRect(QRectF(0, 0, inner, 200), Qt::TextWordWrap, otr("Changes apply immediately and are saved.  Esc closes.")).height());
+  L.footer = QRectF(pad, y + 14, inner, std::max<qreal>(32, fh2));
+  L.height = int(L.footer.bottom() + 14);
+  return L;
 }
 
-QList<OptionsDialog::Area> OptionsDialog::areas() const {
-  QList<Area> out;
-  out << Area{QRectF(width() - 44, 16, 26, 26), Close};
-  const qreal y = 126, w = (width() - 2 * kPad - 10) / 2.0;
-  out << Area{QRectF(kPad, y, w, 46), LangEn} << Area{QRectF(kPad + w + 10, y, w, 46), LangFr};
-  const auto& th = theme::themes();
-  const qreal cw = (width() - 2 * kPad - 10) / 2.0, ch = 54, top = 244;
-  for (int i = 0; i < th.size(); ++i)
-    out << Area{QRectF(kPad + (i % 2) * (cw + 10), top + (i / 2) * (ch + 8), cw, ch), ThemeFirst + i};
-  return out;
-}
-int OptionsDialog::hitAt(const QPointF& p) const {
-  for (const auto& a : areas()) if (a.r.contains(p)) return a.id;
-  return None;
-}
-
-void OptionsDialog::paintEvent(QPaintEvent*) {
+void Body::paintEvent(QPaintEvent*) {
   QPainter p(this);
   p.setRenderHint(QPainter::Antialiasing);
   const auto& c = theme::pal();
-  const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-  p.setPen(QPen(c.borderHi, 1)); p.setBrush(theme::map("#0b0804"));
-  p.drawRoundedRect(box, 4, 4);
-  ui::drawBrackets(p, QRectF(rect()).adjusted(4, 4, -4, -4), c.accent, 12);
+  const Layout L = layout(width());
+  const qreal pad = L.pad;
 
   // title row
-  p.setPen(Qt::NoPen); p.setBrush(c.accent); p.drawEllipse(QPointF(kPad + 3, 31), 3, 3);
+  p.setPen(Qt::NoPen); p.setBrush(c.accent); p.drawEllipse(QPointF(pad + 3, 31), 3, 3);
   p.setFont(theme::mono(13, QFont::Bold, 3.0)); p.setPen(c.accentText);
-  p.drawText(QPointF(kPad + 14, 36), QCoreApplication::translate("options", "OPTIONS"));
-  // close ×
-  const QRectF xr = areas().first().r;
+  p.drawText(QPointF(pad + 14, 36), otr("OPTIONS"));
+  const QRectF xr = L.close;
   p.setPen(QPen(m_hover == Close ? c.text : c.textDim, 1.6, Qt::SolidLine, Qt::RoundCap));
   p.drawLine(xr.center() + QPointF(-6, -6), xr.center() + QPointF(6, 6));
   p.drawLine(xr.center() + QPointF(6, -6), xr.center() + QPointF(-6, 6));
-  p.fillRect(QRectF(kPad, 58, width() - 2 * kPad, 1), c.divider);
+  p.fillRect(QRectF(pad, 58, width() - 2 * pad, 1), c.divider);
 
-  auto section = [&](qreal y, const QString& label, const QString& hint) {
+  auto section = [&](qreal y, const QString& label, const QRectF& hintRect, const QString& hint) {
     p.setFont(theme::microLabel()); p.setPen(c.textMute);
-    p.drawText(QPointF(kPad, y), label);
+    p.drawText(QPointF(pad, y), label);
     p.setFont(theme::sans(12)); p.setPen(c.textDim);
-    p.drawText(QRectF(kPad, y + 6, width() - 2 * kPad, 22), Qt::AlignLeft | Qt::AlignVCenter, hint);
+    p.drawText(hintRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, hint);
   };
 
   // language
-  section(92, QCoreApplication::translate("options", "LANGUAGE"), QCoreApplication::translate("options", "Interface language. Numbers keep the 1,234.56 format."));
+  section(L.langLabelY, otr("LANGUAGE"), L.langHint, otr("Interface language. Numbers keep the 1,234.56 format."));
   const bool fr = i18n::current() == i18n::Lang::French;
-  for (const auto& a : areas()) {
+  for (const auto& a : L.areas) {
     if (a.id != LangEn && a.id != LangFr) continue;
     const bool on = (a.id == LangFr) == fr, hov = a.id == m_hover;
     p.setPen(QPen(on ? c.accent : hov ? c.borderHi : c.border, 1));
     p.setBrush(on ? c.accentDim : hov ? c.panelAlt : theme::map("#0e0a05"));
     p.drawRoundedRect(a.r.adjusted(.5, .5, -.5, -.5), 3, 3);
-    p.setFont(theme::mono(13, QFont::Bold, 1.5)); p.setPen(on ? c.accent : hov ? c.text : c.textDim);
-    p.drawText(a.r.adjusted(16, 0, 0, 0), Qt::AlignVCenter | Qt::AlignLeft, a.id == LangEn ? "ENGLISH" : "FRANÇAIS");
+    const qreal in = L.narrow ? 12 : 16;
+    p.setFont(theme::mono(13, QFont::Bold, L.narrow ? 1.0 : 1.5)); p.setPen(on ? c.accent : hov ? c.text : c.textDim);
+    p.drawText(a.r.adjusted(in, 0, 0, 0), Qt::AlignVCenter | Qt::AlignLeft, a.id == LangEn ? "ENGLISH" : "FRANÇAIS");
     p.setFont(theme::mono(10, QFont::Medium, 1.5)); p.setPen(on ? theme::alpha(c.accent, 170) : c.textMute);
-    p.drawText(a.r.adjusted(0, 0, -16, 0), Qt::AlignVCenter | Qt::AlignRight, a.id == LangEn ? "EN" : "FR");
+    p.drawText(a.r.adjusted(0, 0, -in, 0), Qt::AlignVCenter | Qt::AlignRight, a.id == LangEn ? "EN" : "FR");
   }
 
   // theme
-  section(210, QCoreApplication::translate("options", "THEME"), QCoreApplication::translate("options", "Colours of the whole application. Hover a theme for its description."));
+  section(L.themeLabelY, otr("THEME"), L.themeHint, otr("Colours of the whole application. Hover a theme for its description."));
   const auto& th = theme::themes();
   const QString cur = theme::currentId();
-  for (const auto& a : areas()) {
+  for (const auto& a : L.areas) {
     if (a.id < ThemeFirst) continue;
     const auto& info = th[a.id - ThemeFirst];
     const auto& r = info.roles;
@@ -95,50 +139,109 @@ void OptionsDialog::paintEvent(QPaintEvent*) {
     p.setBrush(r.background);
     p.drawRoundedRect(a.r.adjusted(.5, .5, -.5, -.5), 3, 3);
     const QColor sw[] = {r.panel, r.accent, r.up, r.down, r.text};
-    qreal x = a.r.left() + 12;
-    for (const QColor& col : sw) {
-      p.setPen(QPen(r.panelLine, 1)); p.setBrush(col);
-      p.drawRoundedRect(QRectF(x, a.r.top() + 12, 12, 12), 2, 2);
-      x += 15;
+    const QString name = QCoreApplication::translate("theme", info.name).toUpper();
+    const QString kind = info.id == "deepwater" ? otr("DEFAULT") : info.dark ? otr("DARK") : otr("LIGHT");
+    if (L.narrow) {
+      // a phone: the name on its own row, the swatches and the kind under it
+      p.setFont(theme::mono(12, QFont::Bold, 1.0)); p.setPen(r.accent);
+      p.drawText(QRectF(a.r.left() + 10, a.r.top() + 8, a.r.width() - 34, 20), Qt::AlignLeft | Qt::AlignVCenter,
+                 QFontMetricsF(p.font()).elidedText(name, Qt::ElideRight, a.r.width() - 34));
+      qreal x = a.r.left() + 10;
+      for (const QColor& col : sw) {
+        p.setPen(QPen(r.panelLine, 1)); p.setBrush(col);
+        p.drawRoundedRect(QRectF(x, a.r.top() + 34, 10, 10), 2, 2);
+        x += 13;
+      }
+      p.setFont(theme::mono(9, QFont::Medium, 1.0)); p.setPen(r.textDim);
+      p.drawText(QRectF(x + 4, a.r.top() + 30, a.r.right() - 8 - x - 4, 18), Qt::AlignRight | Qt::AlignVCenter, kind);
+    } else {
+      qreal x = a.r.left() + 12;
+      for (const QColor& col : sw) {
+        p.setPen(QPen(r.panelLine, 1)); p.setBrush(col);
+        p.drawRoundedRect(QRectF(x, a.r.top() + 12, 12, 12), 2, 2);
+        x += 15;
+      }
+      p.setFont(theme::mono(12, QFont::Bold, 1.5)); p.setPen(r.accent);
+      p.drawText(QPointF(x + 8, a.r.top() + 23), name);
+      p.setFont(theme::mono(9, QFont::Medium, 1.2)); p.setPen(r.textDim);
+      p.drawText(QRectF(a.r.left() + 12, a.r.top() + 30, a.r.width() - 24, 18), Qt::AlignLeft | Qt::AlignVCenter, kind);
     }
-    p.setFont(theme::mono(12, QFont::Bold, 1.5)); p.setPen(r.accent);
-    p.drawText(QPointF(x + 8, a.r.top() + 23), QCoreApplication::translate("theme", info.name).toUpper());
-    p.setFont(theme::mono(9, QFont::Medium, 1.2)); p.setPen(r.textDim);
-    const QString kind = info.id == "deepwater" ? QCoreApplication::translate("options", "DEFAULT")
-                         : info.dark ? QCoreApplication::translate("options", "DARK") : QCoreApplication::translate("options", "LIGHT");
-    p.drawText(QRectF(a.r.left() + 12, a.r.top() + 30, a.r.width() - 24, 18), Qt::AlignLeft | Qt::AlignVCenter, kind);
     if (on) {   // check mark
       p.setPen(QPen(r.accent, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.setBrush(Qt::NoBrush);
-      const QPointF o(a.r.right() - 20, a.r.center().y());
+      const QPointF o(a.r.right() - (L.narrow ? 14 : 20), L.narrow ? a.r.top() + 18 : a.r.center().y());
       p.drawPolyline(QPolygonF{o + QPointF(-6, 0), o + QPointF(-2, 4), o + QPointF(6, -5)});
     }
   }
 
   // footer
   p.setFont(theme::mono(10, QFont::Normal, 1.0)); p.setPen(c.textFaint);
-  p.drawText(QRectF(kPad, height() - 46, width() - 2 * kPad, 32), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
-             QCoreApplication::translate("options", "Changes apply immediately and are saved.  Esc closes."));
+  p.drawText(L.footer, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, otr("Changes apply immediately and are saved.  Esc closes."));
 }
 
-void OptionsDialog::mouseMoveEvent(QMouseEvent* e) {
-  if (m_dragging) { move(pos() + (e->globalPosition() - m_dragFrom).toPoint()); m_dragFrom = e->globalPosition(); return; }
+void Body::mouseMoveEvent(QMouseEvent* e) {
+  if (m_dragging) { window()->move(window()->pos() + (e->globalPosition() - m_dragFrom).toPoint()); m_dragFrom = e->globalPosition(); return; }
   const int h = hitAt(e->position());
   if (h != m_hover) {
     m_hover = h; setCursor(h == None ? Qt::ArrowCursor : Qt::PointingHandCursor); update();
     setToolTip(h >= ThemeFirst ? QCoreApplication::translate("theme", theme::themes()[h - ThemeFirst].description) : QString());
   }
 }
-void OptionsDialog::mousePressEvent(QMouseEvent* e) {
+void Body::mousePressEvent(QMouseEvent* e) {
   const int h = hitAt(e->position());
-  if (h == None && e->position().y() < 58) { m_dragging = true; m_dragFrom = e->globalPosition(); return; }   // drag by the title row
-  if (h == Close) { accept(); return; }
+  // drag the window by its title row (not on a phone: it fills the width there)
+  if (h == None && e->position().y() < 58 && !ui::touch::enabled()) { m_dragging = true; m_dragFrom = e->globalPosition(); return; }
+  if (h == Close) { if (auto* d = qobject_cast<QDialog*>(window())) d->accept(); return; }
   if (h == LangEn) i18n::setLanguage(i18n::Lang::English);
   else if (h == LangFr) i18n::setLanguage(i18n::Lang::French);
   else if (h >= ThemeFirst) theme::setCurrent(theme::themes()[h - ThemeFirst].id);
   update();
 }
-void OptionsDialog::mouseReleaseEvent(QMouseEvent*) { m_dragging = false; }
-void OptionsDialog::leaveEvent(QEvent*) { if (m_hover != None) { m_hover = None; update(); } }
+}  // namespace options
+
+OptionsDialog::OptionsDialog(QWidget* parent) : QDialog(parent) {
+  setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+  setAttribute(Qt::WA_TranslucentBackground);
+  setModal(true);
+  m_scroll = new QScrollArea(this);
+  m_scroll->setFrameShape(QFrame::NoFrame);
+  m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  m_scroll->setStyleSheet("QScrollArea { background: transparent; }");
+  m_scroll->viewport()->setAutoFillBackground(false);
+  m_body = new options::Body(m_scroll);
+  m_scroll->setWidget(m_body);
+  m_body->setAutoFillBackground(false);   // setWidget turns it on: the content is painted on the dialog's own fill
+  fit();
+  // the dialog itself follows a language change at once (a hint may wrap differently)
+  connect(&i18n::Notifier::instance(), &i18n::Notifier::changed, this, [this] { fit(); m_body->update(); });
+  connect(&theme::Notifier::instance(), &theme::Notifier::changed, this, [this] { update(); m_body->update(); });
+}
+
+void OptionsDialog::fit() {
+  // the main window's content (its central widget: clear of a phone's status bar and home bar), in screen coordinates
+  const QWidget* host = parentWidget() ? parentWidget()->window() : nullptr;
+  QRect area = host ? host->geometry() : QRect(0, 0, 640, 612);
+  if (auto* mw = qobject_cast<const QMainWindow*>(host); mw && mw->centralWidget())
+    area = QRect(mw->centralWidget()->mapToGlobal(QPoint(0, 0)), mw->centralWidget()->size());
+  const QSize avail = area.size();
+  const int w = std::min(640, avail.width() - (ui::compact(avail.width()) ? 16 : 48));
+  const int content = m_body->heightFor(w);
+  const int h = std::min(content, avail.height() - 16);
+  setFixedSize(w, h);
+  m_body->setFixedSize(w - (content > h ? 6 : 0), content);   // 6: the scroll bar, when the content scrolls
+  if (host) move(area.center() - QPoint(w / 2, h / 2));
+}
+
+void OptionsDialog::resizeEvent(QResizeEvent*) { m_scroll->setGeometry(rect()); }
+
+void OptionsDialog::paintEvent(QPaintEvent*) {
+  QPainter p(this);
+  p.setRenderHint(QPainter::Antialiasing);
+  const auto& c = theme::pal();
+  p.setPen(QPen(c.borderHi, 1)); p.setBrush(theme::map("#0b0804"));
+  p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
+  ui::drawBrackets(p, QRectF(rect()).adjusted(4, 4, -4, -4), c.accent, 12);
+}
+
 void OptionsDialog::keyPressEvent(QKeyEvent* e) {
   if (e->key() == Qt::Key_Escape) { accept(); return; }
   QDialog::keyPressEvent(e);

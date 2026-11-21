@@ -23,6 +23,8 @@
 #include <QTextList>
 #include <QTextTable>
 #include <QUrl>
+#include <QMainWindow>
+#include <QVariantAnimation>
 #include <QTimer>
 #include <QRegularExpression>
 #include <QShowEvent>
@@ -124,18 +126,68 @@ private:
 };
 }
 
+namespace help {
+// A side column: the chapters (search on top) or the sections. Beside the text on a wide window; on a narrow one, a
+// panel pulled over the text from its edge (overlay: its own fill and a rule on its inner edge).
+class Pane : public QWidget {
+public:
+  Pane(bool left, QWidget* parent) : QWidget(parent), m_left(left) {}
+  QString label, footer;
+  int labelY = 0;
+  bool overlay = false;
+protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter p(this);
+    const auto& c = theme::pal();
+    if (overlay) {
+      p.fillRect(rect(), theme::map("#0b0804"));
+      p.fillRect(m_left ? QRect(width() - 1, 0, 1, height()) : QRect(0, 0, 1, height()), c.borderHi);
+    }
+    p.setFont(theme::microLabel()); p.setPen(c.textMute);
+    p.drawText(QPointF(22, labelY), label);
+    if (!footer.isEmpty()) {
+      p.setFont(theme::mono(10, QFont::Normal, 0.8)); p.setPen(c.textFaint);
+      p.drawText(QRectF(22, height() - 50, width() - 40, 40), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, footer);
+    }
+  }
+  void mousePressEvent(QMouseEvent* e) override { e->accept(); }   // a tap on its empty part does not reach the text
+private:
+  bool m_left;
+};
+// Dims the text while a panel is pulled over it; a tap on it closes the panel.
+class Scrim : public QWidget {
+public:
+  using QWidget::QWidget;
+  std::function<void()> onTap;
+protected:
+  void paintEvent(QPaintEvent*) override { QPainter p(this); p.fillRect(rect(), QColor(0, 0, 0, 120)); }
+  void mousePressEvent(QMouseEvent*) override { if (onTap) onTap(); }
+};
+}
+
 HelpWindow::HelpWindow(QWidget* mainWindow) : QDialog(mainWindow), m_main(mainWindow) {
   setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
   setAttribute(Qt::WA_TranslucentBackground);
   setModal(false);
   setMouseTracking(true);
 
-  m_search = new QLineEdit(this);
+  m_text = new QTextBrowser(this);
+  m_scrim = new help::Scrim(this);
+  m_scrim->hide();
+  m_scrim->onTap = [this] { openPane(0); };
+  m_leftPane = new help::Pane(true, this);
+  m_rightPane = new help::Pane(false, this);
+  m_search = new QLineEdit(m_leftPane);
   m_search->setClearButtonEnabled(true);
   m_search->installEventFilter(this);
-  m_count = new QLabel(this);
-  m_chapterScroll = new QScrollArea(this);
-  m_tocScroll = new QScrollArea(this);
+  m_count = new QLabel(m_leftPane);
+  m_chapterScroll = new QScrollArea(m_leftPane);
+  m_tocScroll = new QScrollArea(m_rightPane);
+  m_paneAnim = new QVariantAnimation(this);
+  m_paneAnim->setDuration(180);
+  m_paneAnim->setEasingCurve(QEasingCurve::OutCubic);
+  connect(m_paneAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) { placePanes(v.toDouble()); });
+  connect(m_paneAnim, &QVariantAnimation::finished, this, [this] { if (m_paneT == 0) { m_leftPaneOpen = m_rightPaneOpen = false; placePanes(0); } });
   m_chapterList = new help::NavList(help::NavList::Chapters, m_chapterScroll);
   m_toc = new help::NavList(help::NavList::Sections, m_tocScroll);
   for (QScrollArea* s : {m_chapterScroll, m_tocScroll}) {
@@ -150,15 +202,15 @@ HelpWindow::HelpWindow(QWidget* mainWindow) : QDialog(mainWindow), m_main(mainWi
   // setWidget turns the content's background filling on: the lists are drawn on the window's own fill
   m_chapterList->setAutoFillBackground(false);
   m_toc->setAutoFillBackground(false);
-  m_text = new QTextBrowser(this);
   m_text->setOpenLinks(false);
   m_text->setFrameShape(QFrame::NoFrame);
   m_text->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_text->viewport()->setAutoFillBackground(false);
   m_text->setStyleSheet("QTextBrowser { background: transparent; border: 0; }");
 
-  connect(m_chapterList, &help::NavList::picked, this, [this](int i) { if (i >= 0 && i < m_chapters.size()) showChapter(m_chapters[i].id); });
-  connect(m_toc, &help::NavList::picked, this, [this](int pos) { scrollToPos(pos); });
+  // a pulled-out panel closes once its choice is made
+  connect(m_chapterList, &help::NavList::picked, this, [this](int i) { if (i >= 0 && i < m_chapters.size()) showChapter(m_chapters[i].id); openPane(0); });
+  connect(m_toc, &help::NavList::picked, this, [this](int pos) { scrollToPos(pos); openPane(0); });
   connect(m_text->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { syncTocToScroll(); });
   connect(m_text, &QTextBrowser::anchorClicked, this, [this](const QUrl& u) {
     if (u.scheme() == "help") showChapter(u.path().isEmpty() ? u.host() : u.path(), u.fragment(QUrl::FullyDecoded));
@@ -448,27 +500,88 @@ void HelpWindow::stepMatch(int dir) {
 
 void HelpWindow::fitToMain() {
   if (!m_main) return;
-  const QRect g = m_main->geometry();   // the main window's client area, in screen coordinates
+  // the main window's content, in screen coordinates: its central widget, which keeps clear of a phone's status bar
+  // and home bar (a top-level window there spans the whole screen, the safe area is left to its layout)
+  QRect g = m_main->geometry();
+  if (auto* mw = qobject_cast<QMainWindow*>(m_main.data()); mw && mw->centralWidget())
+    g = QRect(mw->centralWidget()->mapToGlobal(QPoint(0, 0)), mw->centralWidget()->size());
   const int m = ui::compact(g.width()) ? 0 : 28;
   setGeometry(g.adjusted(m, m, -m, -m));
 }
 
+// Wide: chapters | text | sections. Narrower than 980: the sections become a panel pulled from the right; on a phone
+// (ui::compact) the chapters too, from the left, each opened by its button in the title row.
+bool HelpWindow::leftIsPanel() const { return ui::compact(width()); }
+bool HelpWindow::rightIsPanel() const { return width() < 980; }
+int HelpWindow::panelWidth() const { return std::min(300, width() - 56); }
+
 void HelpWindow::relayout() {
-  const bool right = width() >= 980, left = width() >= 640;
-  const int lw = left ? kLeftW : 0, rw = right ? kRightW : 0;
-  m_search->setVisible(left); m_count->setVisible(left); m_chapterScroll->setVisible(left);
-  m_tocScroll->setVisible(right);
-  if (left) {
-    m_search->setGeometry(20, kTitleH + 16, lw - 36, 32);
-    m_count->setGeometry(22, kTitleH + 52, lw - 40, 16);
-    m_chapterScroll->setGeometry(6, kTitleH + 98, lw - 12, height() - kTitleH - 98 - 52);
-  }
-  if (right) m_tocScroll->setGeometry(width() - rw + 6, kTitleH + 48, rw - 16, height() - kTitleH - 48 - 16);
-  const int x0 = lw + 36, x1 = width() - rw - 20;
+  const bool lp = leftIsPanel(), rp = rightIsPanel();
+  const int H = height() - kTitleH - 1;
+  // the panes' insides, whatever their place
+  const int lw = lp ? panelWidth() : kLeftW, rw = rp ? panelWidth() : kRightW;
+  m_leftPane->resize(lw, H);
+  m_leftPane->labelY = 90;
+  m_leftPane->label = htr("CHAPTERS");
+  m_leftPane->footer = lp ? QString() : htr("F1 opens the page shown · Enter: next match · Esc closes");
+  m_search->setGeometry(20, 16, lw - 36, 32);
+  m_count->setGeometry(22, 52, lw - 40, 16);
+  m_chapterScroll->setGeometry(6, 98, lw - 12, H - 98 - (lp ? 12 : 52));
+  m_rightPane->resize(rw, H);
+  m_rightPane->labelY = 34;
+  m_rightPane->label = htr("IN THIS CHAPTER");
+  m_tocScroll->setGeometry(6, 48, rw - 16, H - 48 - 16);
+  m_leftPane->overlay = lp; m_rightPane->overlay = rp;
+  if (!lp) m_leftPaneOpen = false;
+  if (!rp) m_rightPaneOpen = false;
+  placePanes(m_paneT);
+  // the text: between the columns that are columns
+  const int pad = ui::compact(width()) ? 16 : 36;
+  // x1: where the text (and its 12 px scroll bar) ends; a phone keeps the same 16 px margin on both sides
+  const int x0 = (lp ? 0 : kLeftW) + pad, x1 = width() - (rp ? 0 : kRightW) - (ui::compact(width()) ? 16 + 12 : 20);
   const int w = qMin(kTextMaxW, x1 - x0);
-  m_text->setGeometry(x0 + (x1 - x0 - w) / 2, kTitleH + 22, w + 12, height() - kTitleH - 22 - 12);   // +12: the scroll bar
+  m_text->setGeometry(x0 + (x1 - x0 - w) / 2, kTitleH + (ui::compact(width()) ? 10 : 22), w + 12,
+                      height() - kTitleH - (ui::compact(width()) ? 10 : 22) - 12);   // +12: the scroll bar
+  m_scrim->setGeometry(0, kTitleH + 1, width(), H);
   update();
 }
+
+// t: 0 closed … 1 open, for the panel that is opening or closing (the columns stay in place)
+void HelpWindow::placePanes(double t) {
+  m_paneT = t;
+  const int y = kTitleH + 1;
+  if (leftIsPanel()) {
+    const int w = m_leftPane->width();
+    m_leftPane->move(m_leftPaneOpen ? int(-w + w * t) : -w, y);
+    m_leftPane->setVisible(m_leftPaneOpen && t > 0);
+  } else { m_leftPane->move(0, y); m_leftPane->show(); }
+  if (rightIsPanel()) {
+    const int w = m_rightPane->width();
+    m_rightPane->move(m_rightPaneOpen ? int(width() - w * t) : width(), y);
+    m_rightPane->setVisible(m_rightPaneOpen && t > 0);
+  } else { m_rightPane->move(width() - m_rightPane->width(), y); m_rightPane->show(); }
+  m_scrim->setVisible((m_leftPaneOpen || m_rightPaneOpen) && t > 0);
+  m_scrim->raise(); m_leftPane->raise(); m_rightPane->raise();
+}
+
+// 1: the chapters, 2: the sections, 0: close the one open
+void HelpWindow::openPane(int which) {
+  if (which == 1 && !leftIsPanel()) return;
+  if (which == 2 && !rightIsPanel()) return;
+  const bool wasOpen = m_leftPaneOpen || m_rightPaneOpen;
+  if (which == 0) {
+    if (!wasOpen) return;
+    m_paneAnim->stop(); m_paneAnim->setStartValue(m_paneT); m_paneAnim->setEndValue(0.0); m_paneAnim->start();
+    return;
+  }
+  m_paneAnim->stop();
+  m_leftPaneOpen = which == 1; m_rightPaneOpen = which == 2;
+  if (which == 2) syncTocToScroll();
+  m_paneAnim->setStartValue(wasOpen ? m_paneT : 0.0); m_paneAnim->setEndValue(1.0); m_paneAnim->start();
+}
+
+QRectF HelpWindow::chaptersButton() const { return leftIsPanel() ? QRectF(10, 13, 34, 32) : QRectF(); }
+QRectF HelpWindow::sectionsButton() const { return rightIsPanel() ? QRectF(closeRect().left() - 42, 13, 34, 32) : QRectF(); }
 
 void HelpWindow::resizeEvent(QResizeEvent*) {
   // the text re-wraps at the new width: the block at the top of the view (or a section asked for) stays there
@@ -480,7 +593,7 @@ void HelpWindow::resizeEvent(QResizeEvent*) {
 }
 void HelpWindow::showEvent(QShowEvent* e) { fitToMain(); QDialog::showEvent(e); }
 
-QRectF HelpWindow::closeRect() const { return QRectF(width() - 44, 16, 26, 26); }
+QRectF HelpWindow::closeRect() const { return ui::compact(width()) ? QRectF(width() - 46, 11, 36, 36) : QRectF(width() - 44, 16, 26, 26); }
 
 void HelpWindow::paintEvent(QPaintEvent*) {
   QPainter p(this);
@@ -491,19 +604,44 @@ void HelpWindow::paintEvent(QPaintEvent*) {
   p.drawRoundedRect(box, 4, 4);
   ui::drawBrackets(p, QRectF(rect()).adjusted(4, 4, -4, -4), c.accent, 12);
 
-  // title: ● DOCUMENTATION  ›  CHAPTER
-  p.setPen(Qt::NoPen); p.setBrush(c.accent); p.drawEllipse(QPointF(26 + 3, 31), 3, 3);
-  const QFont tf = theme::mono(13, QFont::Bold, 3.0);
-  p.setFont(tf); p.setPen(c.accentText);
-  const QString title = htr("DOCUMENTATION");
-  p.drawText(QPointF(40, 36), title);
+  // title: ● DOCUMENTATION  ›  CHAPTER (a phone: the chapter's name only, between the two panel buttons)
   const int i = chapterIndex(m_current);
-  if (i >= 0) {
-    qreal x = 40 + QFontMetricsF(tf).horizontalAdvance(title) + 14;
-    p.setPen(c.textMute); p.drawText(QPointF(x, 36), "›");
-    x += 22;
-    p.setFont(theme::mono(12, QFont::Bold, 2.0)); p.setPen(c.textDim);
-    p.drawText(QPointF(x, 36), QFontMetricsF(p.font()).elidedText(m_chapters[i].title.toUpper(), Qt::ElideRight, width() - x - 70));
+  const QRectF cb = chaptersButton(), sb = sectionsButton();
+  auto drawButton = [&](const QRectF& r, bool open, bool lines) {
+    if (r.isNull()) return;
+    if (open) { p.setPen(Qt::NoPen); p.setBrush(c.accentDim); p.drawRoundedRect(r, 3, 3); }
+    p.setPen(QPen(open ? c.accent : c.textDim, 1.8, Qt::SolidLine, Qt::RoundCap));
+    const QPointF m = r.center();
+    if (lines) for (int k = -1; k <= 1; ++k) p.drawLine(m + QPointF(-8, k * 5.5), m + QPointF(8, k * 5.5));   // ☰ chapters
+    else for (int k = -1; k <= 1; ++k) {                                                                         // sections: a list
+      p.drawPoint(m + QPointF(-7, k * 5.5));
+      p.drawLine(m + QPointF(-3, k * 5.5), m + QPointF(k == 0 ? 6 : 8, k * 5.5));
+    }
+  };
+  drawButton(cb, m_leftPaneOpen, true);
+  drawButton(sb, m_rightPaneOpen, false);
+  if (ui::compact(width())) {
+    if (i >= 0) {
+      const qreal x = cb.right() + 10, room = (sb.isNull() ? closeRect().left() : sb.left()) - 10 - x;
+      p.setFont(theme::mono(13, QFont::Bold, 2.0)); p.setPen(c.accentText);
+      p.drawText(QRectF(x, 0, room, kTitleH), Qt::AlignVCenter | Qt::AlignLeft,
+                 QFontMetricsF(p.font()).elidedText(m_chapters[i].title.toUpper(), Qt::ElideRight, room));
+    }
+  } else {
+    const qreal x0 = cb.isNull() ? 26 : cb.right() + 10;
+    p.setPen(Qt::NoPen); p.setBrush(c.accent); p.drawEllipse(QPointF(x0 + 3, 31), 3, 3);
+    const QFont tf = theme::mono(13, QFont::Bold, 3.0);
+    p.setFont(tf); p.setPen(c.accentText);
+    const QString title = htr("DOCUMENTATION");
+    p.drawText(QPointF(x0 + 14, 36), title);
+    if (i >= 0) {
+      qreal x = x0 + 14 + QFontMetricsF(tf).horizontalAdvance(title) + 14;
+      p.setPen(c.textMute); p.drawText(QPointF(x, 36), "›");
+      x += 22;
+      p.setFont(theme::mono(12, QFont::Bold, 2.0)); p.setPen(c.textDim);
+      const qreal right = (sb.isNull() ? closeRect().left() : sb.left()) - 12;
+      p.drawText(QPointF(x, 36), QFontMetricsF(p.font()).elidedText(m_chapters[i].title.toUpper(), Qt::ElideRight, right - x));
+    }
   }
   const QRectF xr = closeRect();
   p.setPen(QPen(m_hoverClose ? c.text : c.textDim, 1.6, Qt::SolidLine, Qt::RoundCap));
@@ -511,24 +649,16 @@ void HelpWindow::paintEvent(QPaintEvent*) {
   p.drawLine(xr.center() + QPointF(6, -6), xr.center() + QPointF(-6, 6));
   p.fillRect(QRectF(16, kTitleH, width() - 32, 1), c.divider);
 
-  const bool right = width() >= 980, left = width() >= 640;
-  if (left) {
-    p.fillRect(QRectF(kLeftW, kTitleH + 1, 1, height() - kTitleH - 16), c.divider);
-    p.setFont(theme::microLabel()); p.setPen(c.textMute);
-    p.drawText(QPointF(22, kTitleH + 90), htr("CHAPTERS"));
-    p.setFont(theme::mono(10, QFont::Normal, 0.8)); p.setPen(c.textFaint);
-    p.drawText(QRectF(22, height() - 50, kLeftW - 40, 40), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
-               htr("F1 opens the page shown · Enter: next match · Esc closes"));
-  }
-  if (right) {
-    p.fillRect(QRectF(width() - kRightW, kTitleH + 1, 1, height() - kTitleH - 16), c.divider);
-    p.setFont(theme::microLabel()); p.setPen(c.textMute);
-    p.drawText(QPointF(width() - kRightW + 22, kTitleH + 34), htr("IN THIS CHAPTER"));
-  }
+  // the rules beside the columns (a pulled panel draws its own edge)
+  if (!leftIsPanel()) p.fillRect(QRectF(kLeftW, kTitleH + 1, 1, height() - kTitleH - 16), c.divider);
+  if (!rightIsPanel()) p.fillRect(QRectF(width() - kRightW, kTitleH + 1, 1, height() - kTitleH - 16), c.divider);
 }
 
 void HelpWindow::mousePressEvent(QMouseEvent* e) {
   if (closeRect().contains(e->position())) { hide(); return; }
+  if (chaptersButton().contains(e->position())) { openPane(m_leftPaneOpen ? 0 : 1); update(); return; }
+  if (sectionsButton().contains(e->position())) { openPane(m_rightPaneOpen ? 0 : 2); update(); return; }
+  if (ui::touch::enabled()) return;   // a phone: the window fills the screen, nothing to drag
   if (e->position().y() < kTitleH) { m_dragging = true; m_dragFrom = e->globalPosition(); }
 }
 void HelpWindow::mouseMoveEvent(QMouseEvent* e) {
@@ -541,7 +671,7 @@ void HelpWindow::leaveEvent(QEvent*) { if (m_hoverClose) { m_hoverClose = false;
 
 void HelpWindow::keyPressEvent(QKeyEvent* e) {
   if (e->matches(QKeySequence::Find)) { m_search->setFocus(); m_search->selectAll(); return; }
-  if (e->key() == Qt::Key_Escape) { hide(); return; }
+  if (e->key() == Qt::Key_Escape) { if (m_leftPaneOpen || m_rightPaneOpen) openPane(0); else hide(); return; }
   QDialog::keyPressEvent(e);
 }
 

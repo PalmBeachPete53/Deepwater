@@ -178,8 +178,7 @@ void MainWindow::showOptions() {
   static QPointer<OptionsDialog> dlg;
   if (dlg) { dlg->raise(); dlg->activateWindow(); return; }
   dlg = new OptionsDialog(this);
-  dlg->setAttribute(Qt::WA_DeleteOnClose);
-  dlg->move(geometry().center() - QPoint(dlg->width() / 2, dlg->height() / 2));
+  dlg->setAttribute(Qt::WA_DeleteOnClose);   // it sizes and centres itself on the window's content (OptionsDialog::fit)
   dlg->show();
 }
 
